@@ -321,7 +321,11 @@ mod tests {
         })).unwrap();
         assert_eq!(accepted["status"], "updated");
         assert_eq!(accepted["drawing"]["dimensions"][0]["value_mm"], 180.0);
-        assert_eq!(accepted["drawing"]["label_positions"]["overall_x"], json!([99,-22]));
+        // Coordinates are parsed as f64 when the previous user layout is
+        // normalised. Compare the measured values, not the JSON int/float tags.
+        let label = &accepted["drawing"]["label_positions"]["overall_x"];
+        assert_eq!(label[0].as_f64(), Some(99.0));
+        assert_eq!(label[1].as_f64(), Some(-22.0));
     }
     #[test]
     fn malformed_previous_drawing_and_out_of_bounds_labels_are_refused() {
