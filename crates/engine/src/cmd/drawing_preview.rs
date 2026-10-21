@@ -24,6 +24,40 @@ fn mm(n: f64) -> f64 {
     (n * 1_000.0).round() / 1_000.0
 }
 
+// A limited, geometrically scaled SVG view for the same verified XY envelope.
+// Width/height use physical millimetres. Geometry is not a true occlusion/HLR
+// projection; the drawing contract states the supported subset explicitly.
+fn svg_preview(min: &[f64], max: &[f64], cylinders: &[[f64; 3]], labels: &Value) -> String {
+    let w = mm(max[0] - min[0]);
+    let h = mm(max[1] - min[1]);
+    let view_w = w + 48.0;
+    let view_h = h + 48.0;
+    let start_x = 20.0;
+    let start_y = 20.0;
+    let map = |pt: &[f64]| (start_x + pt[0] - min[0], start_y + max[1] - pt[1]);
+    let length = labels.get("overall_x").and_then(|v| coords(v, 2)).unwrap_or_else(|| vec![mm((min[0] + max[0]) / 2.0), mm(min[1] - 12.0)]);
+    let width = labels.get("overall_y").and_then(|v| coords(v, 2)).unwrap_or_else(|| vec![mm(min[0] - 12.0), mm((min[1] + max[1]) / 2.0)]);
+    let (lx, ly) = map(&length);
+    let (wx, wy) = map(&width);
+    let mut svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {view_w} {view_h}\" width=\"{view_w}mm\" height=\"{view_h}mm\"><title>SolidCraft experimental XY top-view drawing</title><g stroke=\"#12283c\" stroke-width=\"0.3\" fill=\"none\"><rect x=\"{start_x}\" y=\"{start_y}\" width=\"{w}\" height=\"{h}\"/>"
+    );
+    for c in cylinders {
+        let (cx, cy) = map(&c[0..2]);
+        svg.push_str(&format!("<circle cx=\"{cx}\" cy=\"{cy}\" r=\"{}\"/>", c[2] / 2.0));
+    }
+    svg.push_str(&format!(
+        "<path stroke=\"#65748b\" stroke-width=\"0.15\" d=\"M {start_x} {} V {} M {} {} V {} M {} {start_y} H {} M {} {} H {}\"/>",
+        start_y + h, ly + 2.0, start_x + w, start_y + h, ly + 2.0,
+        start_x, wx - 2.0, start_y + h, wx - 2.0
+    ));
+    svg.push_str("</g>");
+    svg.push_str(&format!(
+        "<g fill=\"#12283c\" font-family=\"sans-serif\" font-size=\"4\" text-anchor=\"middle\"><text x=\"{lx}\" y=\"{ly}\">{w:.3} mm</text><text x=\"{wx}\" y=\"{wy}\">{h:.3} mm</text></g></svg>"
+    ));
+    svg
+}
+
 fn label_positions(old: Option<&Value>, current: &Value) -> Result<Value> {
     let mut positions = current.clone();
     if let Some(old) = old {
@@ -157,6 +191,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
             {"id":"overall_x","kind":"horizontal","value_mm":dimensions[0]},
             {"id":"overall_y","kind":"vertical","value_mm":dimensions[1]}
         ],
+        "svg": svg_preview(&min, &max, &holes, &layout),
         "label_positions": layout,
         "warnings": if !holes.is_empty() {
             vec!["Cylinder circles are provisional. Bore dimension/callout identity is not yet linked to a stable model source; do not reattach callouts automatically"]
