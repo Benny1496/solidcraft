@@ -100,17 +100,29 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("parametric-edits", include_str!("browser_parameters_test.js")),
         ("mixed-bores", include_str!("browser_bores_test.js")),
         ("primitive-cylinders", include_str!("browser_primitives_test.js")),
+        ("parametric-holes", include_str!("browser_parametric_holes_test.js")),
+        ("sketch-dimensions", include_str!("browser_sketch_dimensions_test.js")),
+        ("timeline-face-names", include_str!("browser_feature_edit_test.js")),
+        ("fillet-chamfer", include_str!("browser_edge_treatments_test.js")),
+        ("manufacturing-holes", include_str!("browser_hole_styles_test.js")),
     ];
     let mut failures = Vec::new();
+    let mut passed = 0;
     for (name, script) in scenarios {
+        let started = Instant::now();
+        println!("web-api-test {name}: START");
         match cdp.eval(script) {
-            Ok(report) => println!("web-api-test {name}: PASS {report}"),
+            Ok(report) => {
+                passed += 1;
+                println!("web-api-test {name}: PASS ({:.2}s) {report}", started.elapsed().as_secs_f64());
+            }
             Err(error) => {
-                println!("web-api-test {name}: FAIL {error}");
+                println!("web-api-test {name}: FAIL ({:.2}s) {error}", started.elapsed().as_secs_f64());
                 failures.push(format!("{name}: {error}"));
             }
         }
     }
+    println!("web-api-test CAD suite: {passed}/{} optional scenarios passed", scenarios.len());
     if !failures.is_empty() {
         return Err(format!("{} CAD scenarios failed: {}", failures.len(), failures.join("; ")));
     }
