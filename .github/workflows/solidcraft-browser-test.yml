@@ -46,10 +46,11 @@ jobs:
         run: trunk build --release --public-url ./
       - name: Run SolidCraft browser command API smoke test
         run: cargo xtask web-api-test --site dist/web
-      - name: Save tested web app for inspection
-        if: success()
+      - name: Save built web app even when a CAD test fails
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: solidcraft-web-tested
           path: dist/web/
+          if-no-files-found: ignore
           retention-days: 3
