@@ -400,4 +400,40 @@ mod tests {
         assert!(!source_matches(&baseline,&moved_origin));
     }
 
+    #[test]
+    fn saved_drawing_survives_solidcraft_file_roundtrip_and_detects_later_edit() {
+        let path = std::env::temp_dir().join(format!(
+            "solidcraft-drawing-snapshot-{}.solidcraft", std::process::id()
+        ));
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length":90,"width":45,"height":8,
+            "body_name":"StoredPlate","name":"Stock"})).unwrap();
+        let mut drawing = preview(&mut s, &json!({"body":"StoredPlate"})).unwrap()["drawing"].clone();
+        drawing["label_positions"]["overall_x"] = json!([45,-21]);
+        s.execute("document.metadata.set", &json!({
+            "key":"org.solidcraft.experimental_drawing", "value":drawing
+        })).unwrap();
+        s.execute("file.save_as", &json!({"path":path,"format":"container"})).unwrap();
+        let mut opened = Session::default();
+        opened.execute("doc.open", &json!({"path":path})).unwrap();
+        let preserved = opened.doc.metadata.get("org.solidcraft.experimental_drawing")
+            .expect("the saved .solidcraft file must contain the drawing snapshot").clone();
+        assert_eq!(preserved["dimensions"][0]["value_mm"], 90.0);
+        assert_eq!(preserved["label_positions"]["overall_x"], json!([45,-21]));
+        let still_current = preview(&mut opened, &json!({
+            "body":"StoredPlate","previous":preserved
+        })).unwrap();
+        assert_eq!(still_current["status"], "current");
+        opened.execute("timeline.edit", &json!({
+            "feature":"Stock","set":{"length":"110"}
+        })).unwrap();
+        let stale = preview(&mut opened, &json!({
+            "body":"StoredPlate","previous":preserved
+        })).unwrap();
+        assert_eq!(stale["status"], "stale");
+        assert_eq!(stale["drawing"]["dimensions"][0]["value_mm"], 90.0);
+        assert_eq!(stale["proposed"]["dimensions"][0]["value_mm"], 110.0);
+        let _ = std::fs::remove_file(path);
+    }
+
 }
