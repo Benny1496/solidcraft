@@ -59,3 +59,13 @@ No changes are applied automatically. After the operator confirms, call `drawing
 `xtask/src/browser_drawing_preview_test.js` is run with the existing compiled SolidCraft browser application by `cargo xtask web-api-test --site dist/web`.
 
 The test creates a 150 x 80 x 10 mm plate with four Ø8 holes; verifies the SVG/geometry/dimensions; changes the 3D length to 180 mm and a linked bore to X165; requires explicit confirmation; verifies the original snapshot and manually placed overall-dimension labels survive; and ensures that drawing commands do not mutate the CAD timeline. Do not claim success until the new workflow run has passed.
+
+## Experimental Rust/egui drawing window (fork branch only)
+
+The preview now has a first on-screen Rust UI connected to **INSPECT → DRAWING**. A user can select a body, create a versioned provisional drawing snapshot inside the model metadata (`org.solidcraft.experimental_drawing`), view the rectangle/bore geometry with dimension lines, and drag the two overall-dimension labels. The sketch snapshot survives design save/open using the existing metadata mechanism; it is **not** yet a first-class drawing sheet.
+
+Opening the panel re-reads the saved snapshot and checks the current model via `drawing.preview`. A stale drawing opens an explicit German confirmation window with **Zeichnung aktualisieren** and **Alte Zeichnung beibehalten**. Accept updates the stored snapshot only after explicit confirmation; keeping the old version leaves it unchanged and suppressed for the current model revision. The UI rechecks the status after later revisions. Changing dimensions while the window remains open is monitored through the engine revision.
+
+The browser suite additionally tests saving the snapshot in document metadata, changing a parameter, detecting stale status, accepting and re-storing the proposed geometry, and preserving a moved dimension-label position.
+
+This UI is **unverified until a GitHub Action builds the new code**. The workflow currently checks browser command semantics, not human-screen interaction or screenshots. A future GUI scenario must exercise opening the panel, clicking both dialog choices, and dragging the label. Do not mistake this bounding-box XY pilot view for full technical drawing standards, persistent native sheet entities, or certified bore dimension associations.
