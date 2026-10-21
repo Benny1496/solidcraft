@@ -50,6 +50,10 @@ pub fn open(app: &mut SolveApp) {
         .map(str::to_string)
         .or_else(|| names.first().cloned())
         .unwrap_or_default();
+    // A saved sheet can refer to a body that has since been removed. Start
+    // with a fresh preview for a surviving body instead of repeatedly passing
+    // an incompatible stale snapshot back to drawing.preview.
+    let previous = previous.filter(|v| v["body"].as_str() == Some(body.as_str()));
     let mut state = State {
         open: true,
         body,
