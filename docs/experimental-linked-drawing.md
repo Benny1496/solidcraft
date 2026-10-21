@@ -104,3 +104,13 @@ Following successful workflow #13 (WebAssembly build, browser CAD suite and 2/2 
 The entire batch is added to the **existing manual** `.github/workflows/solidcraft-browser-test.yml`. As before, there is **no automatic scheduled/push run** and no modification to upstream. A new manual GitHub Actions run must prove the tests pass. If it fails, read the individual scenario or Rust test name and correct the actual cause; do not count unexecuted or failed tests as successful.
 
 **Note on HA status documentation:** The latest accessible account of `/share/GitHub SolidCraft/PROJEKTSTATUS.md` is still the earlier verified content including failed run #11 and its correction. The Home Assistant connector denied access on the subsequent recheck. GitHub's documentation provides the current reliable change history until the user authorizes access again. Do not claim the HA copy is synchronized without rereading it.
+
+## GitHub Actions run #14 — partial failure isolated and fixed (21 October 2026)
+
+- [Run #14](https://github.com/Benny1496/solidcraft/actions/runs/39669359298) (commit `5f7be21b23127f1c151a7c87b085a33a1923e122`) finished **failure**.
+- WebAssembly web build: **PASS**. Browser API smoke and original four-hole plate: **PASS**. All **15/15 named browser CAD scenarios**: **PASS**. All **6/6 actual egui drawing window UI interaction tests**: **PASS**.
+- Of **6 native Rust engine drawing-preview tests**, **5 PASS**, **1 FAIL** (`cmd::drawing_preview::tests::drawing_stays_current_until_model_changes_then_requires_confirmation`). The real .solidcraft file save/reopen test **passed**.
+- Precise cause of the failure: the native test used direct JSON equality to compare the normalized f64 coordinates `[99.0,-22.0]` against literal integer JSON coordinates `[99,-22]`; mathematically identical but different `serde_json::Number` variants. It was a test assertion error, not a CAD geometry/behavior failure.
+- Fixed on branch in commit `5b22551c3ea404cd42e80226d12885fe3277992f`: now assert `as_f64() == Some(99.0)` and `as_f64() == Some(-22.0)`.
+- **Not yet confirmed by a fresh CI run.** Trigger a **new manual workflow** on `feature/browser-automation` (expected run #15); do not click "rerun" on #14 since that would test the old commit.
+- HA `/share/GitHub SolidCraft/PROJEKTSTATUS.md` remains unverified because the Home Assistant connector declined access on the last attempt. Keep this GitHub note as the verified source until access is restored.
