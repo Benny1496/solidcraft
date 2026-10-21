@@ -27,6 +27,10 @@
         'the bounded preview labels its envelope');
     check(first.geometry.cylinders.length===4,
         'the drawing reports four real bores');
+    check(typeof first.svg==='string' && first.svg.startsWith('<svg ') &&
+          (first.svg.match(/<circle /g)||[]).length===4 &&
+          first.svg.includes('150.000 mm'),
+          'one-to-one physical SVG drawing includes 4 hole circles and dimensions');
     near(first.dimensions[0].value_mm,150,.01,'drawing X dimension');
     near(first.dimensions[1].value_mm,80,.01,'drawing Y dimension');
     for (const [x,y] of centres)
@@ -68,6 +72,8 @@
         'explicit user confirmation updates the drawing');
     near(accepted.drawing.dimensions[0].value_mm,180,.01,
         'accepted drawing X dimension');
+    check(accepted.drawing.svg.includes('180.000 mm'),
+          'confirmed update renders new dimension in SVG view');
     check(accepted.drawing.label_positions.overall_y[0]===-23,
         'manually positioned Y dimension survives confirmation');
 
