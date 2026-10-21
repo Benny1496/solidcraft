@@ -73,7 +73,7 @@
     // Inspect the actual B-rep faces rather than trusting the positions supplied
     // to solid.hole. The geometry query has no modifying side effects.
     const topology = await app.execute('model.faces', {body: 'Testplatte'});
-    check(Array.isArray(topology.faces), 'model.faces returns the body's faces');
+    check(Array.isArray(topology.faces), 'model.faces returns the B-rep faces');
     const cylindricalFaces = topology.faces.filter(face => face.cylinder);
     check(cylindricalFaces.length >= 4,
           'four holes must expose at least four cylindrical B-rep faces');
