@@ -46,10 +46,12 @@ fn svg_preview(min: &[f64], max: &[f64], cylinders: &[[f64; 3]], labels: &Value)
         let (cx, cy) = map(&c[0..2]);
         svg.push_str(&format!("<circle cx=\"{cx}\" cy=\"{cy}\" r=\"{}\"/>", c[2] / 2.0));
     }
+    let bottom = start_y + h;
+    let right = start_x + w;
+    let dim_y = ly + 2.0;
+    let dim_x = wx - 2.0;
     svg.push_str(&format!(
-        "<path stroke=\"#65748b\" stroke-width=\"0.15\" d=\"M {start_x} {} V {} M {} {} V {} M {} {start_y} H {} M {} {} H {}\"/>",
-        start_y + h, ly + 2.0, start_x + w, start_y + h, ly + 2.0,
-        start_x, wx - 2.0, start_y + h, wx - 2.0
+        "<path stroke=\"#65748b\" stroke-width=\"0.15\" d=\"M {start_x} {bottom} V {dim_y} M {right} {bottom} V {dim_y} M {start_x} {start_y} H {dim_x} M {start_x} {bottom} H {dim_x}\"/>"
     ));
     svg.push_str("</g>");
     svg.push_str(&format!(
