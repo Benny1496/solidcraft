@@ -69,3 +69,26 @@ Opening the panel re-reads the saved snapshot and checks the current model via `
 The browser suite additionally tests saving the snapshot in document metadata, changing a parameter, detecting stale status, accepting and re-storing the proposed geometry, and preserving a moved dimension-label position.
 
 This UI is **unverified until a GitHub Action builds the new code**. The workflow currently checks browser command semantics, not human-screen interaction or screenshots. A future GUI scenario must exercise opening the panel, clicking both dialog choices, and dragging the label. Do not mistake this bounding-box XY pilot view for full technical drawing standards, persistent native sheet entities, or certified bore dimension associations.
+
+## First automated on-screen interaction tests (pending CI validation)
+
+The existing `crates/ui-egui/src/scenario.rs` harness renders the **actual egui application** in an offscreen context and drives controls as a human would. Tests are now embedded in `crates/ui-egui/src/drawing_ui.rs`:
+
+1. Start the on-screen Drawing window via the `drawing.preview` command, click the **Zeichnung im Modell speichern** button, modify the 3D parameter, verify the German popup appears, click **Alte Zeichnung beibehalten**, verify the old number is preserved, reopen, click **Zeichnung aktualisieren**, and check the new number is saved and no warning remains.
+2. Save a drawing, drag the real overall X dimension's screen-space interaction target, and verify its stored label coordinates change while the physical model remains unchanged.
+
+A CI step has been added to the manually triggered SolidCraft Browser Smoke workflow:
+
+```sh
+cargo test -p solidcraft-ui-egui drawing_ui::tests --lib -- --nocapture
+```
+
+This runs alongside the pre-existing Rust-to-WebAssembly build and browser API tests. **These newly added GUI tests have not yet passed in CI**; run a new manual workflow, inspect the result and fix any failures before claiming the on-screen interaction is verified.
+
+A pointer-movement bug identified during review was also corrected: the drag handler applies the *per-frame* pointer delta, not the cumulative delta from the beginning of the drag. The test harness now receives a stable named interaction target for the overall dimensions. Opening a stored sheet whose source body was deleted now selects a fresh, available body instead of sending a mismatched snapshot back to the preview command.
+
+## Evidence reconciliation at 21 October 2026
+
+The authoritative last verified GitHub run is [#12](https://github.com/Benny1496/solidcraft/actions/runs/39656227739): `success`, browser API and plate checks pass, all ten optional CAD scenarios pass, including model-linked drawing freshness and stored metadata. Earlier run [#11](https://github.com/Benny1496/solidcraft/actions/runs/39655360907) failed Rust UI compilation and was corrected before successful #12.
+
+The separate Home Assistant project-status file could not be re-read at this stage because its connector permission was rejected. The latest **confirmed** update to that file was the note on failed run #11 and its compiler fix; run #12 and subsequent on-screen UI test additions have **not** been confirmed to be present there. This GitHub document therefore records the reconciliation facts pending an authorized recheck, without claiming the HA copy is already synchronized.
