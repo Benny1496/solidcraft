@@ -106,6 +106,7 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("fillet-chamfer", include_str!("browser_edge_treatments_test.js")),
         ("manufacturing-holes", include_str!("browser_hole_styles_test.js")),
     ];
+    let scenario_count = scenarios.len();
     let mut failures = Vec::new();
     let mut passed = 0;
     for (name, script) in scenarios {
@@ -122,7 +123,7 @@ pub fn run_api(site: &str) -> Result<(), String> {
             }
         }
     }
-    println!("web-api-test CAD suite: {passed}/{} optional scenarios passed", scenarios.len());
+    println!("web-api-test CAD suite: {passed}/{scenario_count} scenarios passed");
     if !failures.is_empty() {
         return Err(format!("{} CAD scenarios failed: {}", failures.len(), failures.join("; ")));
     }
