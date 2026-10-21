@@ -843,6 +843,10 @@ impl SolveApp {
     /// Start a command the way a toolbar click does: interactive tools and dialogs for commands
     /// that have them, otherwise run it with defaults.
     pub fn start(&mut self, id: &str) {
+        if id == "drawing.preview" {
+            drawing_ui::open(self);
+            return;
+        }
         if id == "ui.palette" {
             shortcut_box::open(self, None);
             return;
