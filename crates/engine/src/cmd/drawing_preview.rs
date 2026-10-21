@@ -13,6 +13,8 @@ const CMD: &str = "drawing.preview";
 
 pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new(CMD, "Preview Drawing", preview)
     .noundo()
+    .at("INSPECT", "DRAWING")
+    .icon("inspect")
     .params("body: name; previous?: a prior drawing from this command; accept?: bool. Returns provisional top-view rectangle and vertical cylinders. When geometry changes, returns stale/confirmation_required without modifying previous; accept:true returns an updated drawing with preserved label positions. No persisted sheet, full silhouette or dialog.")];
 
 fn coords(value: &Value, n: usize) -> Option<Vec<f64>> {
