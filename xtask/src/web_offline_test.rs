@@ -94,9 +94,9 @@ pub fn run_api(site: &str) -> Result<(), String> {
     // One compiled WebAssembly build, several independent browser CAD scenarios.
     // The DXF test runs against the plate. The other tests each start a new design.
     let scenarios = [
-        ("orthographic-dxf", include_str!("browser_dxf_test.js")),
         ("parametric-edits", include_str!("browser_parameters_test.js")),
         ("mixed-bores", include_str!("browser_bores_test.js")),
+        ("minimal-dxf", include_str!("browser_dxf_test.js")),
     ];
     let mut failures = Vec::new();
     for (name, script) in scenarios {
