@@ -325,3 +325,94 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     state.open=window_open;
     app.drawing_ui=state;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::KEY;
+    use crate::scenario::{Harness, handle_at};
+    use serde_json::json;
+
+    fn drawing_harness() -> Harness {
+        let mut h = Harness::new();
+        h.app.home.open = false;
+        h.app.run("parameters.add", json!({"name":"PanelLength","expression":"90 mm"})).unwrap();
+        h.app.run("solid.box", json!({
+            "length":"PanelLength", "width":45, "height":8,
+            "body_name":"DrawingPlate", "name":"Stock"
+        })).unwrap();
+        h.frames(3);
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        assert!(h.app.drawing_ui.open, "INSPECT / DRAWING opens the real egui window");
+        assert!(h.widget("Zeichnung im Modell speichern").is_some(), "save action is visible");
+        h
+    }
+
+    fn saved_length(h: &Harness) -> f64 {
+        h.app.session.doc.metadata.get(KEY).unwrap()["dimensions"][0]["value_mm"]
+            .as_f64().unwrap()
+    }
+
+    #[test]
+    fn real_drawing_window_keeps_or_updates_model_changes_by_click() {
+        let mut h = drawing_harness();
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        assert_eq!(saved_length(&h), 90.0);
+        assert!(h.app.drawing_ui.proposed.is_none());
+
+        h.app.run("parameters.change", json!({
+            "name":"PanelLength", "expression":"115 mm"
+        })).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some(),
+            "actual German stale-model dialog appears after a model edit");
+        assert!(h.widget("Alte Zeichnung beibehalten").is_some(),
+            "user can explicitly decline an update");
+        assert_eq!(saved_length(&h), 90.0, "old drawing remains unchanged until user confirms");
+
+        h.step(&json!({"widget":"Alte Zeichnung beibehalten"})).unwrap();
+        h.frames(2);
+        assert_eq!(saved_length(&h), 90.0,
+            "declining does not modify stored dimensions");
+        assert!(h.widget("Zeichnung aktualisieren").is_none(),
+            "the declined popup does not immediately reappear in the same revision");
+
+        // Reopening explicitly rechecks the source and asks again.
+        h.app.drawing_ui.open = false;
+        h.frames(2);
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some(),
+            "reopening an outdated drawing offers an update");
+        h.step(&json!({"widget":"Zeichnung aktualisieren"})).unwrap();
+        h.frames(3);
+        assert_eq!(saved_length(&h), 115.0);
+        assert!(h.app.drawing_ui.proposed.is_none());
+        assert!(h.widget("Zeichnung aktualisieren").is_none(),
+            "there is no warning after accepting and saving");
+    }
+
+    #[test]
+    fn drag_overall_dimension_in_real_egui_window_saves_new_label_coordinates() {
+        let mut h = drawing_harness();
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.frames(3);
+        let old = h.app.session.doc.metadata.get(KEY).unwrap()
+            ["label_positions"]["overall_x"].clone();
+        let at = handle_at("drawing:label:overall_x")
+            .expect("the overall X dimension has a real mouse target");
+        let reply = h.call("ui.drag", json!({
+            "x0":at.x, "y0":at.y, "x1":at.x+36.0, "y1":at.y-12.0, "steps":12
+        }));
+        assert_eq!(reply["ok"], true, "{reply}");
+        h.frames(3);
+        let new = &h.app.session.doc.metadata.get(KEY).unwrap()
+            ["label_positions"]["overall_x"];
+        assert_ne!(*new, old,
+            "dragging a measure text must persist an actually changed position");
+        assert!(new[0].as_f64().unwrap() > old[0].as_f64().unwrap(),
+            "moving label right increases its X coordinate");
+        assert_eq!(saved_length(&h), 90.0, "moving only a label never changes the part");
+        assert!(h.app.drawing_ui.proposed.is_none());
+    }
+}
