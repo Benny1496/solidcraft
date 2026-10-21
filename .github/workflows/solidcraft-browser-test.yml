@@ -34,8 +34,13 @@ jobs:
           curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz" \
             | tar -xz -C "$HOME/.local/bin" trunk
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Check CAD browser test JavaScript syntax
-        run: node --check xtask/src/browser_plate_test.js
+      - name: Check all CAD browser scenarios for JavaScript syntax
+        shell: bash
+        run: |
+          for script in xtask/src/browser_*_test.js; do
+            echo "Checking $script"
+            node --check "$script"
+          done
       - name: Build SolidCraft web app
         working-directory: apps/solidcraft-web
         run: trunk build --release --public-url ./
