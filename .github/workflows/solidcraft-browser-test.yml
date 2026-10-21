@@ -1,0 +1,48 @@
+# SolidCraft fork-only experiment: manually build the browser app and run its built-in API test.
+# This workflow intentionally has no push, pull_request, or schedule trigger.
+# GitHub's "Run workflow" button becomes available when the workflow exists on the default branch.
+name: SolidCraft Browser Smoke (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-browser-smoke
+  cancel-in-progress: true
+
+jobs:
+  browser-test:
+    name: Build WebAssembly and test browser API
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out SolidCraft source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up stable Rust and WebAssembly
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install pinned Trunk
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$HOME/.local/bin" trunk
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build SolidCraft web app
+        working-directory: apps/solidcraft-web
+        run: trunk build --release --public-url ./
+      - name: Run SolidCraft browser command API smoke test
+        run: cargo xtask web-api-test --site dist/web
+      - name: Save tested web app for inspection
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-web-tested
+          path: dist/web/
+          retention-days: 3
