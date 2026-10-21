@@ -267,7 +267,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 request_layout_save=true;
             }
             if editable && drawing["label_positions"] != state.snapshot.as_ref().map(|d| &d["label_positions"]).unwrap_or(&Value::Null) {
-                state.snapshot=Some(drawing);
+                state.snapshot=Some(drawing.clone());
                 state.layout_changed=true;
             }
             ui.label(RichText::new("Außenmaßtexte können mit der Maus verschoben werden. Bohrungsmaße sind noch nicht assoziativ.").small().color(t.text_dim));
