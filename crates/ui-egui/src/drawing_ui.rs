@@ -412,7 +412,7 @@ mod tests {
         h.frames(3);
         let new = &h.app.session.doc.metadata.get(KEY).unwrap()
             ["label_positions"]["overall_x"];
-        assert_ne!(*new, old,
+        assert_ne!(new, &old,
             "dragging a measure text must persist an actually changed position");
         assert!(new[0].as_f64().unwrap() > old[0].as_f64().unwrap(),
             "moving label right increases its X coordinate");
