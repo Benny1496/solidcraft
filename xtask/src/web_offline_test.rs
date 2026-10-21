@@ -107,6 +107,11 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("manufacturing-holes", include_str!("browser_hole_styles_test.js")),
         ("linked-drawing-preview", include_str!("browser_drawing_preview_test.js")),
         ("persisted-drawing", include_str!("browser_drawing_persist_test.js")),
+        ("drawing-revision-matrix", include_str!("browser_drawing_revision_matrix_test.js")),
+        ("drawing-bore-matrix", include_str!("browser_drawing_bore_matrix_test.js")),
+        ("drawing-bad-inputs", include_str!("browser_drawing_bad_inputs_test.js")),
+        ("drawing-snapshot-undo", include_str!("browser_drawing_snapshot_undo_test.js")),
+        ("drawing-batch-bodies", include_str!("browser_drawing_batch_bodies_test.js")),
     ];
     let scenario_count = scenarios.len();
     let mut failures = Vec::new();
