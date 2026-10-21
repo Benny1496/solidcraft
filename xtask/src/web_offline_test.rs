@@ -105,6 +105,7 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("timeline-face-names", include_str!("browser_feature_edit_test.js")),
         ("fillet-chamfer", include_str!("browser_edge_treatments_test.js")),
         ("manufacturing-holes", include_str!("browser_hole_styles_test.js")),
+        ("linked-drawing-preview", include_str!("browser_drawing_preview_test.js")),
     ];
     let scenario_count = scenarios.len();
     let mut failures = Vec::new();
