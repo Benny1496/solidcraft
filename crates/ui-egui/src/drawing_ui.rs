@@ -419,4 +419,83 @@ mod tests {
         assert_eq!(saved_length(&h), 90.0, "moving only a label never changes the part");
         assert!(h.app.drawing_ui.proposed.is_none());
     }
+    #[test]
+    fn undo_and_redo_model_length_toggle_drawing_warning_correctly() {
+        let mut h = drawing_harness();
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.app.run("parameters.change", json!({"name":"PanelLength","expression":"120 mm"})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some());
+        assert_eq!(saved_length(&h), 90.0);
+        h.app.run("edit.undo", json!({})).unwrap();
+        h.frames(3);
+        assert_eq!(saved_length(&h), 90.0);
+        assert!(h.widget("Zeichnung aktualisieren").is_none(),
+            "undo back to the stored geometry must dismiss the stale notice");
+        h.app.run("edit.redo", json!({})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some(),
+            "redo of a geometric edit must warn again");
+        assert_eq!(saved_length(&h), 90.0);
+        h.step(&json!({"widget":"Zeichnung aktualisieren"})).unwrap();
+        assert_eq!(saved_length(&h), 120.0);
+    }
+
+    #[test]
+    fn moving_y_dimension_preserves_placement_after_closing_and_reopening() {
+        let mut h = drawing_harness();
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.frames(3);
+        let initial = h.app.session.doc.metadata.get(KEY).unwrap()["label_positions"]["overall_y"].clone();
+        let at = handle_at("drawing:label:overall_y").expect("Y dimension must expose a drag handle");
+        let reply = h.call("ui.drag", json!({
+            "x0":at.x,"y0":at.y,"x1":at.x-30.0,"y1":at.y+16.0,"steps":12
+        }));
+        assert_eq!(reply["ok"], true, "{reply}");
+        h.frames(4);
+        let moved = h.app.session.doc.metadata.get(KEY).unwrap()["label_positions"]["overall_y"].clone();
+        assert_ne!(moved, initial);
+        assert!(moved[0].as_f64().unwrap() < initial[0].as_f64().unwrap(),
+            "dragging left must decrease stored X coordinate");
+        h.app.drawing_ui.open = false;
+        h.frames(3);
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        let reopened = h.app.session.doc.metadata.get(KEY).unwrap()["label_positions"]["overall_y"].clone();
+        assert_eq!(reopened, moved, "the position survives closing and reopening");
+        assert_eq!(saved_length(&h), 90.0);
+        assert!(h.widget("Zeichnung aktualisieren").is_none());
+    }
+
+    #[test]
+    fn empty_design_shows_an_error_but_still_allows_a_future_drawing() {
+        let mut h = Harness::new();
+        h.app.home.open = false;
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        assert!(h.app.drawing_ui.open);
+        assert!(h.widget("Kein 3D-Körper vorhanden.").is_some(),
+            "empty designs must show a user-friendly explanation");
+        h.app.run("solid.box", json!({"length":50,"width":35,"height":4,
+            "body_name":"FreshStock"})).unwrap();
+        h.frames(2);
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung im Modell speichern").is_some(),
+            "the drawing can be created once a valid part exists");
+    }
+
+    #[test]
+    fn new_design_clears_the_transient_drawing_window_and_saved_snapshot() {
+        let mut h = drawing_harness();
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        assert!(h.app.session.doc.metadata.get(KEY).is_some());
+        h.app.run("file.new", json!({"name":"Another design"})).unwrap();
+        h.frames(3);
+        assert!(!h.app.drawing_ui.open,
+            "the old drawing window must not remain open for another document");
+        assert!(h.app.session.doc.metadata.get(KEY).is_none(),
+            "a brand-new design must not inherit an old sheet");
+    }
+
 }
