@@ -24,6 +24,33 @@ fn mm(n: f64) -> f64 {
     (n * 1_000.0).round() / 1_000.0
 }
 
+/// Parse the measured source into numeric values. Browser JSON.stringify turns
+/// Rust's 150.0 into 150; comparing serde_json::Value would then report a
+/// false difference because JSON integer and float number variants differ.
+fn source_numbers(v: &Value) -> Option<(Vec<f64>, Vec<f64>, Vec<[f64; 3]>)> {
+    let lower = coords(v.get("lower_xy_mm")?, 2)?;
+    let size = coords(v.get("size_mm")?, 3)?;
+    let circles = v.get("cylinders_xy_diameter_mm")?.as_array()?;
+    if circles.len() > 64 || size.iter().any(|x| *x <= 0.0) {
+        return None;
+    }
+    let holes = circles
+        .iter()
+        .map(|circle| {
+            let v = coords(circle, 3)?;
+            (v[2] > 0.0).then_some([v[0], v[1], v[2]])
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((lower, size, holes))
+}
+
+fn source_matches(old: &Value, current: &Value) -> bool {
+    match (source_numbers(old), source_numbers(current)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
 // A limited, geometrically scaled SVG view for the same verified XY envelope.
 // Width/height use physical millimetres. Geometry is not a true occlusion/HLR
 // projection; the drawing contract states the supported subset explicitly.
@@ -170,7 +197,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => {
             if v.get("format").and_then(Value::as_str) != Some("solidcraft-drawing-preview/1")
                 || v.get("body").and_then(Value::as_str) != Some(name)
-                || !v.get("source").is_some_and(Value::is_object)
+                || !v.get("source").is_some_and(|source| source_numbers(source).is_some())
             {
                 return Err(bad(CMD, "previous drawing has wrong format, body or source"));
             }
@@ -203,7 +230,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
     });
 
     if let Some(previous) = prev {
-        let stale = previous.get("source") != drawing.get("source");
+        let stale = !source_matches(&previous["source"], &drawing["source"]);
         if stale && !accept {
             return Ok(json!({
                 "status":"stale",
@@ -220,4 +247,78 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
         }));
     }
     Ok(json!({"status":"created","requires_confirmation":false,"drawing":drawing}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{preview, source_matches};
+    use crate::Session;
+    use serde_json::json;
+
+    #[test]
+    fn javascript_numeric_json_roundtrip_does_not_stale_a_drawing() {
+        let original = json!({
+            "lower_xy_mm": [0.0, 0.0],
+            "size_mm": [150.0, 80.0, 10.0],
+            "cylinders_xy_diameter_mm": [[15.0, 15.0, 8.0], [135.0, 15.0, 8.0]]
+        });
+        // Matches JSON.stringify in the browser: integral floats lose their
+        // decimal dot and serde_json parses them as integer variants.
+        let browser = json!({
+            "lower_xy_mm": [0, 0],
+            "size_mm": [150, 80, 10],
+            "cylinders_xy_diameter_mm": [[15, 15, 8], [135, 15, 8]]
+        });
+        assert_ne!(original, browser);
+        assert!(source_matches(&original, &browser));
+        assert!(!source_matches(&original, &json!({
+            "lower_xy_mm": [0, 0],
+            "size_mm": [180, 80, 10],
+            "cylinders_xy_diameter_mm": [[15, 15, 8], [165, 15, 8]]
+        })));
+    }
+
+    #[test]
+    fn drawing_stays_current_until_model_changes_then_requires_confirmation() {
+        let mut session = Session::default();
+        session.execute("solid.box", &json!({
+            "length": 150, "width": 80, "height": 10,
+            "body_name": "DrawingPlate", "name": "Stock"
+        })).unwrap();
+        let first = preview(&mut session, &json!({"body":"DrawingPlate"})).unwrap();
+        assert_eq!(first["status"], "created");
+        assert_eq!(first["drawing"]["dimensions"][0]["value_mm"], 150.0);
+        let old = first["drawing"].clone();
+        // Replace numeric JSON variants like the browser's JSON.stringify.
+        let previous = json!({
+            "format": old["format"],
+            "body": old["body"],
+            "source": {
+                "lower_xy_mm": [0,0],
+                "size_mm": [150,80,10],
+                "cylinders_xy_diameter_mm": []
+            },
+            "label_positions": {"overall_x":[99,-22],"overall_y":[-23,40]}
+        });
+        let unchanged = preview(&mut session, &json!({
+            "body":"DrawingPlate", "previous":previous
+        })).unwrap();
+        assert_eq!(unchanged["status"], "current");
+        session.execute("timeline.edit", &json!({
+            "feature":"Stock", "set":{"length":"180"}
+        })).unwrap();
+        let stale = preview(&mut session, &json!({
+            "body":"DrawingPlate", "previous":previous
+        })).unwrap();
+        assert_eq!(stale["status"], "stale");
+        assert_eq!(stale["requires_confirmation"], true);
+        assert_eq!(stale["drawing"]["source"]["size_mm"][0], 150);
+        assert_eq!(stale["proposed"]["dimensions"][0]["value_mm"], 180.0);
+        let accepted = preview(&mut session, &json!({
+            "body":"DrawingPlate","previous":previous,"accept":true
+        })).unwrap();
+        assert_eq!(accepted["status"], "updated");
+        assert_eq!(accepted["drawing"]["dimensions"][0]["value_mm"], 180.0);
+        assert_eq!(accepted["drawing"]["label_positions"]["overall_x"], json!([99,-22]));
+    }
 }
