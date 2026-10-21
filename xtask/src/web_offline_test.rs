@@ -89,6 +89,8 @@ pub fn run_api(site: &str) -> Result<(), String> {
     wait_for(&mut cdp, "!!window.solidcraft && !document.getElementById('solidcraft_loading')", "the browser API is ready", |v| v == true)?;
     let result = cdp.eval(API_TEST)?;
     println!("web-api-test: {result}");
+    let plate = cdp.eval(include_str!("browser_plate_test.js"))?;
+    println!("web-api-test plate: {plate}");
     Ok(())
 }
 
