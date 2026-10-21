@@ -10,7 +10,7 @@
    {name:'BoreB',position:['BoreLength - BoreInset',12,12],diameter:8,xy:[108,12,8]},
    {name:'BoreC',position:[25,65,12],diameter:10,xy:[25,65,10]}
  ];
- for(const b of inputs)await app.execute('solid.hole',b);
+ for(const b of inputs)await app.execute('solid.hole',{name:b.name,position:b.position,diameter:b.diameter});
  const base=await app.execute('drawing.preview',{body:'BorePlate'});
  assert(base.status==='created','drawing created');
  assert(base.drawing.geometry.cylinders.length===3,'three distinct cylindrical openings');
