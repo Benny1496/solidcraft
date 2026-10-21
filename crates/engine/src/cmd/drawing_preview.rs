@@ -323,4 +323,81 @@ mod tests {
         assert_eq!(accepted["drawing"]["dimensions"][0]["value_mm"], 180.0);
         assert_eq!(accepted["drawing"]["label_positions"]["overall_x"], json!([99,-22]));
     }
+    #[test]
+    fn malformed_previous_drawing_and_out_of_bounds_labels_are_refused() {
+        let mut session = Session::default();
+        session.execute("solid.box", &json!({"length":100,"width":40,"height":8,
+            "body_name":"SafePlate"})).unwrap();
+        let previous = preview(&mut session, &json!({"body":"SafePlate"})).unwrap()["drawing"].clone();
+        for params in [
+            json!({"body":"SafePlate","accept":true}),
+            json!({"body":"SafePlate","accept":"yes"}),
+            json!({"body":"SafePlate","previous":{"format":"wrong","body":"SafePlate",
+                "source":previous["source"]}}),
+            json!({"body":"SafePlate","previous":{
+                "format":"solidcraft-drawing-preview/1", "body":"Other",
+                "source":previous["source"]}}),
+            json!({"body":"SafePlate","previous":{
+                "format":"solidcraft-drawing-preview/1", "body":"SafePlate",
+                "source":{"lower_xy_mm":[0,0],"size_mm":[100,"invalid",8],
+                          "cylinders_xy_diameter_mm":[]}}}),
+            json!({"body":"SafePlate","previous":{
+                "format":"solidcraft-drawing-preview/1","body":"SafePlate",
+                "source":previous["source"],
+                "label_positions":{"overall_x":[1e20,-12]}}})
+        ] {
+            assert!(preview(&mut session, &params).is_err(),
+                "invalid snapshots must be refused: {params}");
+        }
+        let after = preview(&mut session, &json!({
+            "body":"SafePlate","previous":previous
+        })).unwrap();
+        assert_eq!(after["status"], "current");
+    }
+
+    #[test]
+    fn drawing_source_change_checks_geometry_not_label_coordinates() {
+        let mut session = Session::default();
+        session.execute("solid.box", &json!({"length":65,"width":25,"height":5,
+            "body_name":"LayoutPlate"})).unwrap();
+        let created = preview(&mut session, &json!({"body":"LayoutPlate"})).unwrap();
+        let mut old = created["drawing"].clone();
+        old["label_positions"]["overall_x"] = json!([49,-27]);
+        old["label_positions"]["overall_y"] = json!([-18,12]);
+        let result = preview(&mut session, &json!({
+            "body":"LayoutPlate","previous":old
+        })).unwrap();
+        assert_eq!(result["status"], "current",
+            "moving dimension text is not a change to the 3D body");
+        assert_eq!(result["drawing"]["label_positions"]["overall_x"],json!([49.0,-27.0]));
+        assert_eq!(result["drawing"]["label_positions"]["overall_y"],json!([-18.0,12.0]));
+        assert_eq!(result["drawing"]["dimensions"][0]["value_mm"],65.0);
+        assert_eq!(result["drawing"]["dimensions"][1]["value_mm"],25.0);
+        assert!(result["drawing"]["svg"].as_str().unwrap().contains("65.000 mm"));
+    }
+
+    #[test]
+    fn broken_numeric_geometry_signatures_never_report_current() {
+        let baseline = json!({"lower_xy_mm":[0,0],"size_mm":[80,40,5],
+            "cylinders_xy_diameter_mm":[[8,8,4],[72,32,4]]});
+        let malformed = [
+            json!({"lower_xy_mm":[0,0],"size_mm":[80,40,5]}),
+            json!({"lower_xy_mm":[0,0],"size_mm":[0,40,5],
+                "cylinders_xy_diameter_mm":[[8,8,4],[72,32,4]]}),
+            json!({"lower_xy_mm":[0,0],"size_mm":[80,40,5],
+                "cylinders_xy_diameter_mm":[[8,8,4],[72,32,0]]}),
+            json!({"lower_xy_mm":[0,0],"size_mm":[80,40,5],
+                "cylinders_xy_diameter_mm":[["x",8,4],[72,32,4]]})
+        ];
+        for bad in malformed {
+            assert!(!source_matches(&baseline,&bad), "bad geometry source cannot be current: {bad}");
+        }
+        let moved_hole = json!({"lower_xy_mm":[0,0],"size_mm":[80,40,5],
+            "cylinders_xy_diameter_mm":[[9,8,4],[72,32,4]]});
+        assert!(!source_matches(&baseline,&moved_hole));
+        let moved_origin = json!({"lower_xy_mm":[1,0],"size_mm":[80,40,5],
+            "cylinders_xy_diameter_mm":[[8,8,4],[72,32,4]]});
+        assert!(!source_matches(&baseline,&moved_origin));
+    }
+
 }
