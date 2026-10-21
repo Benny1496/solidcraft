@@ -48,6 +48,8 @@ jobs:
         run: cargo xtask web-api-test --site dist/web
       - name: Test drawing window mouse interactions in real egui harness
         run: cargo test -p solidcraft-ui-egui drawing_ui::tests --lib -- --nocapture
+      - name: Test drawing geometry signatures and invalid snapshots in Rust engine
+        run: cargo test -p solidcraft-engine drawing_preview --lib -- --nocapture
       - name: Save built web app even when a CAD test fails
         if: always()
         uses: actions/upload-artifact@v4
