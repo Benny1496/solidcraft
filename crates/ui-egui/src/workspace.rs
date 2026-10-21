@@ -149,6 +149,7 @@ pub const SECTIONS: &[Section] = &[
     Section { tab: "INSERT", panel: "LINKS", promoted: 2, ids: &["component.update_links", "component.break_link"] },
     Section { tab: "INSPECT", panel: "MEASURE", promoted: 3, ids: &["inspect.measure", "inspect.center_of_mass", "component.properties"] },
     Section { tab: "INSPECT", panel: "SECTION", promoted: 1, ids: &["inspect.section"] },
+    Section { tab: "INSPECT", panel: "DRAWING", promoted: 1, ids: &["drawing.preview"] },
     Section {
         tab: "INSPECT",
         panel: "CHECK",
