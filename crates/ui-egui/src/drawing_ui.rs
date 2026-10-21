@@ -141,10 +141,14 @@ fn draw_label(
 ) -> bool {
     let hit = Rect::from_center_size(at, vec2(102.0, 25.0));
     let response = ui.interact(hit, ui.id().with(("drawing_label", id)), if editable { Sense::drag() } else { Sense::hover() });
+    crate::scenario::publish_target(&format!("drawing:label:{id}"), hit);
     if editable && response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
-    let d = response.drag_delta();
+    // egui's response.drag_delta() is cumulative from drag start; adding that
+    // to the current position every frame would exaggerate the movement.
+    // Apply only the latest pointer movement while the label is being dragged.
+    let d = if response.dragged() { ui.input(|i| i.pointer.delta()) } else { egui::Vec2::ZERO };
     if editable && (d.x != 0.0 || d.y != 0.0)
         && let Some([x, y]) = point(drawing, id)
     {
