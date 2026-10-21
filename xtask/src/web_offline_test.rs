@@ -91,6 +91,26 @@ pub fn run_api(site: &str) -> Result<(), String> {
     println!("web-api-test: {result}");
     let plate = cdp.eval(include_str!("browser_plate_test.js"))?;
     println!("web-api-test plate: {plate}");
+    // One compiled WebAssembly build, several independent browser CAD scenarios.
+    // The DXF test runs against the plate. The other tests each start a new design.
+    let scenarios = [
+        ("orthographic-dxf", include_str!("browser_dxf_test.js")),
+        ("parametric-edits", include_str!("browser_parameters_test.js")),
+        ("mixed-bores", include_str!("browser_bores_test.js")),
+    ];
+    let mut failures = Vec::new();
+    for (name, script) in scenarios {
+        match cdp.eval(script) {
+            Ok(report) => println!("web-api-test {name}: PASS {report}"),
+            Err(error) => {
+                println!("web-api-test {name}: FAIL {error}");
+                failures.push(format!("{name}: {error}"));
+            }
+        }
+    }
+    if !failures.is_empty() {
+        return Err(format!("{} CAD scenarios failed: {}", failures.len(), failures.join("; ")));
+    }
     Ok(())
 }
 
