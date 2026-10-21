@@ -70,9 +70,65 @@
               0.001, 'final upper boundary, axis ' + axis);
     }
 
+    // Inspect the actual B-rep faces rather than trusting the positions supplied
+    // to solid.hole. The geometry query has no modifying side effects.
+    const topology = await app.execute('model.faces', {body: 'Testplatte'});
+    check(Array.isArray(topology.faces), 'model.faces returns the body's faces');
+    const cylindricalFaces = topology.faces.filter(face => face.cylinder);
+    check(cylindricalFaces.length >= 4,
+          'four holes must expose at least four cylindrical B-rep faces');
+
+    const realBores = [];
+    for (const face of cylindricalFaces) {
+        const c = face.cylinder;
+        check(Array.isArray(c.origin) && c.origin.length === 3 &&
+              Array.isArray(c.axis) && c.axis.length === 3 &&
+              c.origin.every(Number.isFinite) && c.axis.every(Number.isFinite) &&
+              Number.isFinite(c.radius),
+              'cylindrical face must report finite origin, axis and radius');
+        // Through-holes in an XY plate have axes parallel to Z; either sign is valid.
+        const axisLength = Math.hypot(...c.axis);
+        check(axisLength > 0, 'cylinder axis must not be zero');
+        check(Math.abs(c.axis[2] / axisLength) > 0.995,
+              'drilled holes must be perpendicular to the plate');
+        // Some kernels subdivide a cylindrical wall into several B-rep faces.
+        // De-duplicate their common axes rather than relying on face counts.
+        const matching = realBores.find(bore =>
+            Math.hypot(bore.x - c.origin[0], bore.y - c.origin[1]) < 0.15);
+        if (matching) {
+            close(c.radius, matching.radius, 0.05, 'split cylindrical face radius');
+            matching.faces += 1;
+        } else {
+            realBores.push({x: c.origin[0], y: c.origin[1], radius: c.radius, faces: 1});
+        }
+    }
+
+    check(realBores.length === 4,
+          'B-rep contains exactly four distinct bore axes, got ' + realBores.length);
+    const measuredCentres = [];
+    for (const [x, y] of positions) {
+        const candidates = realBores.filter(bore => Math.hypot(bore.x - x, bore.y - y) < 0.15);
+        check(candidates.length === 1, 'exactly one drilled bore at (' + x + ', ' + y + ')');
+        const bore = candidates[0];
+        close(bore.x, x, 0.15, 'measured bore X');
+        close(bore.y, y, 0.15, 'measured bore Y');
+        close(2 * bore.radius, diameter, 0.1, 'measured bore diameter');
+        measuredCentres.push([bore.x, bore.y]);
+    }
+    const spacingX = Math.max(...measuredCentres.map(p => p[0])) -
+                     Math.min(...measuredCentres.map(p => p[0]));
+    const spacingY = Math.max(...measuredCentres.map(p => p[1])) -
+                     Math.min(...measuredCentres.map(p => p[1]));
+    close(spacingX, 120, 0.15, 'measured horizontal hole spacing');
+    close(spacingY, 50, 0.15, 'measured vertical hole spacing');
+
     return {
         test: '150 x 80 x 10 mm plate, four through-holes of diameter 8 mm',
         hole_centres_mm: positions,
+        real_bore_centres_mm: measuredCentres,
+        real_bore_diameters_mm: realBores.map(bore => 2 * bore.radius),
+        actual_hole_spacing_mm: [spacingX, spacingY],
+        cylindrical_faces: cylindricalFaces.length,
         hole_spacing_mm: [length - 2 * edgeOffset, width - 2 * edgeOffset],
         expected_volume_mm3: plateVolume - 4 * removedPerHole,
         measured_volume_mm3: final.bodies[0].volume_mm3,
