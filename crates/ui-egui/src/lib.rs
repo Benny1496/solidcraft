@@ -55,6 +55,7 @@ pub mod edit_clipboard;
 mod font_literals_tests;
 pub mod fonts;
 pub mod frame;
+pub mod drawing_ui;
 pub mod frame_rate;
 pub mod gizmo;
 pub mod gpu;
@@ -368,6 +369,7 @@ pub struct SolveApp {
     saving: Option<save_job::Saving>,
     pub viewport: viewport::ViewportState,
     pub render_workspace: render_workspace::State,
+    pub drawing_ui: drawing_ui::State,
     pub tool: Option<tools::Tool>,
     pub dialog: Option<dialogs::Dialog>,
     /// The Change Parameters window, when open.
@@ -531,6 +533,7 @@ impl SolveApp {
             saving: None,
             viewport: viewport::ViewportState::default(),
             render_workspace,
+            drawing_ui: drawing_ui::State::default(),
             tool: None,
             dialog: None,
             params: None,
@@ -804,6 +807,7 @@ impl SolveApp {
                     self.dialog = None;
                     self.tool = None;
                     self.preview.reset();
+                    self.drawing_ui = drawing_ui::State::default();
                     self.cam = Camera::default();
                     self.fit_view();
                 }
@@ -1648,6 +1652,7 @@ impl SolveApp {
         params_dialog::show(self, ui.ctx());
         design_properties::show(self, ui.ctx());
         bom_panel::show(self, ui.ctx());
+        drawing_ui::show(self, ui.ctx());
         material_card_review::show(self, ui.ctx());
         recovery_ui::show(self, ui.ctx());
         stand_up::show(self, ui.ctx());
