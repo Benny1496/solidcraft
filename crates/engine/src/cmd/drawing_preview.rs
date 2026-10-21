@@ -79,7 +79,6 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "too many faces for drawing preview"));
     }
     let mut holes: Vec<[f64; 3]> = Vec::new();
-    let mut uncertain_references = false;
     for face in faces {
         let Some(cylinder) = face.get("cylinder") else { continue };
         let origin = coords(&cylinder["origin"], 3).ok_or_else(|| bad(CMD, "invalid cylinder origin"))?;
@@ -100,9 +99,6 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
             || y - radius < min[1] - 0.02 || y + radius > max[1] + 0.02
         {
             return Err(bad(CMD, "cylinder is not contained by the XY envelope"));
-        }
-        if face.get("exact").and_then(Value::as_bool) != Some(true) {
-            uncertain_references = true;
         }
         if !holes.iter().any(|h| (h[0] - x).abs() < 0.01 && (h[1] - y).abs() < 0.01
             && (h[2] - diameter).abs() < 0.01)
@@ -128,9 +124,9 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
     let cy = mm((min[1] + max[1]) / 2.0);
     default_labels.insert("overall_x".into(), json!([cx, mm(min[1] - 12.0)]));
     default_labels.insert("overall_y".into(), json!([mm(min[0] - 12.0), cy]));
-    for (i, bore) in holes.iter().enumerate() {
-        default_labels.insert(format!("cylinder_{}", i + 1), json!([bore[0] + 8.0, bore[1] + 8.0]));
-    }
+    // Bore positions are geometry-derived and may be reordered by an edit.
+    // Do not store positional bore callout ids: that could silently link a
+    // manually placed dimension to the wrong hole after a topology change.
     let current_labels = Value::Object(default_labels);
 
     let prev = match old {
@@ -162,8 +158,8 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
             {"id":"overall_y","kind":"vertical","value_mm":dimensions[1]}
         ],
         "label_positions": layout,
-        "warnings": if uncertain_references {
-            vec!["Cylinder face identity is not certified; avoid automatic reattachment of bore dimensions"]
+        "warnings": if !holes.is_empty() {
+            vec!["Cylinder circles are provisional. Bore dimension/callout identity is not yet linked to a stable model source; do not reattach callouts automatically"]
         } else {
             Vec::new()
         }
