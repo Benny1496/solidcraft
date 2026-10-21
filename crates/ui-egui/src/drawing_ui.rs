@@ -266,7 +266,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 state.layout_changed=true;
                 request_layout_save=true;
             }
-            if editable && drawing["label_positions"] != state.snapshot.as_ref().map(|d| &d["label_positions"]).unwrap_or(&Value::Null) {
+            if editable && drawing.get("label_positions") != state.snapshot.as_ref().and_then(|d| d.get("label_positions")) {
                 state.snapshot=Some(drawing.clone());
                 state.layout_changed=true;
             }
