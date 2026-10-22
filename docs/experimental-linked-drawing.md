@@ -167,3 +167,15 @@ All added scripts are included in the existing browser suite; the Rust GUI/engin
 - The GitHub Actions workflow now collects each independent **JavaScript syntax, WebAssembly build, browser API/CAD, egui GUI, drawing engine** test group with `continue-on-error: true`, and intentionally runs later suites with `if: !cancelled()`. Browser CAD checks run only if the WebAssembly build succeeded. A final `GITHUB_STEP_SUMMARY` table presents all five statuses and a final step **fails the overall GitHub run** if **any** group failed or was skipped. This preserves all errors without producing false green workflow status.
 - The consolidated suite for the next manual run: **19 named browser scenarios + reference plate + 9 GUI + 8 engine = 37 test cases**, plus API smoke. The next run has **not been started or validated** as part of this documentation update.
 - Changes are limited to `Benny1496/solidcraft` branch `feature/browser-automation`. No modification to upstream or the user's local computer. HA project status remains unsynchronized, since previous read/write connector requests were refused.
+
+## Verified green run #18: 38/38 independent browser/UI/engine checks (22 October 2026)
+
+[Manual GitHub Actions run #18](https://github.com/Benny1496/solidcraft/actions/runs/39724896543) executed on `feature/browser-automation` at commit `9314e521a4134074ba9fb3f0821aba2a4718c20b`, completed **SUCCESS** at `2026-10-22 05:35:26 UTC`:
+- Browser API smoke and reference four-hole plate: **2/2 PASS**.
+- Named browser CAD tests: **19/19 PASS**, including all new 3D-derived cylinder Ø/X/Y measurement cases.
+- Real egui window tests: **9/9 PASS**, including regressions for X/Y dragged dimension labels and the new legacy saved drawing case.
+- Rust engine drawing tests: **8/8 PASS**, including drawing save/reopen, geometry signature validation, stale confirmation and 3D-derived measurements.
+- **38/38 total independent checks passed** (21 browser checks + 9 GUI + 8 engine). WebAssembly build and JavaScript syntax tests passed. All five CI report groups completed successfully; the concluding aggregated summary step reported **0 nonpassing test groups**.
+- New permanent GitHub workflow behavior is **confirmed**: all independent checks use non-fail-fast evaluation and produce a consolidated GitHub Actions Step Summary with a final failing status only if any check failed/skipped. The previous run #17 exercised actual fail-and-continue.
+- Scope caveat: cylinder labels in the preview are provisional and lack stable persistent per-hole association. Accurate projected outer shape, selectable persistent drawing dimensions, angle/radius and GD&T, multiple orthographic views and a formal title block remain to implement.
+- The user-selected project documentation under Home Assistant is still **not verified updated**, due to previously denied connector access; GitHub documentation tracks validated progress instead.
