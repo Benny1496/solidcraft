@@ -308,7 +308,7 @@ fn render_cylinder_measurements(
                             ("y_from_bottom","Y setzen")
                         ] {
                             let already = drawing["annotations"].as_array().is_some_and(|list|
-                                list.iter().any(|a| a["face_name"].as_str() == Some(face)
+                                list.iter().any(|a| a["face_name"].as_str() == Some(face.as_str())
                                     && a["kind"].as_str() == Some(kind)));
                             if !already && ui.button(caption).clicked() {
                                 request = Some((face.to_string(),kind.to_string()));
@@ -406,10 +406,10 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 state.layout_changed=true;
             }
             if editable {
-                if let Some(face) = &state.selected_face {
+                if let Some(face) = state.selected_face.clone() {
                     let selected= drawing["geometry"]["cylinder_dimensions"].as_array()
                         .and_then(|list| list.iter().find(|d|
-                            d["eligible_face_name"].as_str() == Some(face)));
+                            d["eligible_face_name"].as_str() == Some(face.as_str())));
                     if let Some(selected)=selected {
                         ui.separator();
                         ui.label(RichText::new("Im 2D-Bild ausgewählte 3D-Fläche").strong());
