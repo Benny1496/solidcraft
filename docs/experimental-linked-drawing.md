@@ -114,3 +114,15 @@ The entire batch is added to the **existing manual** `.github/workflows/solidcra
 - Fixed on branch in commit `5b22551c3ea404cd42e80226d12885fe3277992f`: now assert `as_f64() == Some(99.0)` and `as_f64() == Some(-22.0)`.
 - **Not yet confirmed by a fresh CI run.** Trigger a **new manual workflow** on `feature/browser-automation` (expected run #15); do not click "rerun" on #14 since that would test the old commit.
 - HA `/share/GitHub SolidCraft/PROJEKTSTATUS.md` remains unverified because the Home Assistant connector declined access on the last attempt. Keep this GitHub note as the verified source until access is restored.
+
+## Verified success: GitHub Actions run #15 (21 October 2026)
+
+- [Run #15](https://github.com/Benny1496/solidcraft/actions/runs/39675912802), SHA `b1121e47f8164d7c074e0a2e357e7c063337c5a5`, completed **success** (21:48:12 UTC). GitHub branch: `feature/browser-automation`.
+- WebAssembly production build **PASS**; browser command-API smoke **PASS**; reference 150 × 80 × 10 mm four-hole plate **PASS**.
+- **15/15 named browser CAD scenarios PASS**, including all five recently added matrices: multi-axis edits and undo/redo, three bore diameters with dependent positions, twelve rejected invalid requests, stored metadata undo/redo, and four plate sizes with 0/2/4/6 bores.
+- **6/6 actual egui drawing window user-interaction tests PASS**, covering acceptance/rejection dialog, X and Y dimension label dragging, undo/redo warnings, empty design, switching to a new design.
+- **6/6 native engine drawing tests PASS**, including actual `.solidcraft` disk save/reopen and stale detection, provenance signature checks, and the corrected numerical label-coordinate assertion.
+- **28 explicitly counted test cases plus the browser command-API smoke** all pass; count is 15 named scenarios + reference plate + 6 GUI + 6 engine. The browser app and scripts passed CI compilation/syntax.
+- One non-fatal warning concerns GitHub's Node.js-20 deprecation of `actions/upload-artifact@v4`, unrelated to SolidCraft's drawing behavior.
+- This success confirms the experimental XY bounding-box drawing and its current behavior. It **does not** yet supply exact projected outer contours, native dimension references to individual holes, a professional drawing sheet, title block, precision tolerancing, or validated DXF exports.
+- HA project status file `/share/GitHub SolidCraft/PROJEKTSTATUS.md` was not updated/reverified because the last request was denied by the connector. The GitHub documentation records the current verified state until access is explicitly reauthorized.
