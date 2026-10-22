@@ -419,3 +419,38 @@ legacy/malformed snapshots), two egui window tests and four Rust tests.
 Planned #24 is **88 checks: 42 browser + 19 egui + 27 Rust** in the
 same manual, non-fail-fast workflow; only a successful future run
 can validate those counts and the new functionality.
+
+
+## Run #24 failure corrected and run #25 expanded regression suite (22 October 2026)
+
+Official [run #24](https://github.com/Benny1496/solidcraft/actions/runs/39779700382)
+on code `0e9c828d39c94dffbb280c9267ba8cb3b9590c74` completed
+**failure**, despite successful WASM build, JS syntax, GUI **19/19** and
+engine **27/27**: browser **41/42**. The sole failing check was the older
+`drawing-dim-offset` assertion expecting the retired
+`bbox_envelope_and_measured_cylinders_only` accuracy string after the
+new upper-edge candidate overlay updated the documented accuracy to
+`bbox_envelope_with_unclassified_upper_edge_samples`. All six #24
+upper-contour scenarios were PASS. The run was correctly reported red.
+
+The legacy browser assertion is now updated to check the new *explicitly
+unclassified* accuracy, still-rectangular bounding envelope, upper
+B-rep paths and warning against claiming certified silhouettes.
+**No production-code change is needed for this regression.**
+
+Added eight independent browser scenarios: negative/transformed XY
+coordinates; four-size contour matrix; rounded-fillet undo/redo;
+same-bounds chamfer preserving moved dimensions; saved metadata;
+JSON numeric-signature roundtrip; chamfer plus two bore rims; and
+two separate bodies. Added two real egui cases: saved contour reopen
+without false warning, and user-declined same-bounds chamfer prompting
+again on reopen. Added two Rust engine cases for actual contour-only
+chamfer/undo and number-type-insensitive contour signatures.
+
+Proposed next run **#25** has **100 independent checks**: **50 browser**
+(48 CAD scenarios + API smoke + four-hole plate), **21 egui**, **29 Rust**.
+The existing 88 are still included. The new run must be triggered
+manually on `feature/browser-automation`; tests must not be reported
+as passed until its GitHub Actions log verifies success. General
+hidden-line removal, certified silhouette and DXF export remain
+outside this experimental scope.

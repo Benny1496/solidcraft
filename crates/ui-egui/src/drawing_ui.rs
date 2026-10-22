@@ -588,6 +588,52 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_saved_upper_contour_reopens_without_warning() {
+        let mut h = drawing_harness();
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        let saved = h.app.session.doc.metadata.get(KEY).unwrap().clone();
+        assert_eq!(saved["geometry"]["top_edge_candidates"].as_array().unwrap().len(),4);
+        h.app.drawing_ui.open = false;
+        h.frames(2);
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        assert!(h.app.drawing_ui.open);
+        assert!(h.widget("Zeichnung aktualisieren").is_none(),
+            "unchanged real 3D contour must not create a false revision popup");
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap(),&saved);
+    }
+
+    #[test]
+    fn declining_contour_only_edit_preserves_sheet_until_reopening() {
+        let mut h = drawing_harness();
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        let saved = h.app.session.doc.metadata.get(KEY).unwrap().clone();
+        let edges=h.app.run("model.edges",json!({"body":"DrawingPlate"})).unwrap();
+        let corner=edges["edges"].as_array().unwrap().iter().find(|e| {
+            e["length"].as_f64().is_some_and(|l|(l-8.0).abs()<0.01) &&
+            e["mid"][0].as_f64().is_some_and(|x|x.abs()<0.01) &&
+            e["mid"][1].as_f64().is_some_and(|y|y.abs()<0.01)
+        }).unwrap();
+        h.app.run("solid.chamfer",json!({
+            "edges":[corner["mid"].clone()],"distance":2.5,"name":"ContourOnly"
+        })).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some());
+        h.step(&json!({"widget":"Alte Zeichnung beibehalten"})).unwrap();
+        h.frames(2);
+        assert!(h.widget("Zeichnung aktualisieren").is_none(),
+            "declining a contour-only revision must suppress repeated prompts");
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap(),&saved);
+        h.app.drawing_ui.open = false;
+        h.frames(2);
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some(),
+            "reopening a stale contour must allow deliberate acceptance");
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap(),&saved);
+    }
+
+    #[test]
     fn real_gui_displays_sampled_top_edge_paths_from_3d() {
         let mut h=drawing_harness();
         let draft=h.app.drawing_ui.draft.as_ref().unwrap();

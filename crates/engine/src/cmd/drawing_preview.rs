@@ -675,6 +675,43 @@ mod tests {
 
 
     #[test]
+    fn actual_chamfer_contour_requires_confirmation_even_with_unchanged_outer_dimensions() {
+        let mut s=Session::default();
+        s.execute("solid.box",&json!({"length":65,"width":40,"height":10,"body_name":"Panel"})).unwrap();
+        let first=preview(&mut s,&json!({"body":"Panel"})).unwrap()["drawing"].clone();
+        let edges=s.execute("model.edges",&json!({"body":"Panel"})).unwrap();
+        let vertical=edges["edges"].as_array().unwrap().iter().find(|e| {
+            e["length"].as_f64().is_some_and(|l|(l-10.0).abs()<0.01) &&
+            e["mid"][0].as_f64().is_some_and(|x|x.abs()<0.01) &&
+            e["mid"][1].as_f64().is_some_and(|y|y.abs()<0.01)
+        }).unwrap();
+        s.execute("solid.chamfer",&json!({"edges":[vertical["mid"].clone()],
+            "distance":2.5,"name":"Corner"})).unwrap();
+        let next=preview(&mut s,&json!({"body":"Panel","previous":first.clone()})).unwrap();
+        assert_eq!(next["status"],"stale");
+        assert_eq!(next["drawing"],first);
+        assert_eq!(next["proposed"]["dimensions"],first["dimensions"]);
+        assert_ne!(next["proposed"]["geometry"]["top_edge_candidates"],
+                   first["geometry"]["top_edge_candidates"]);
+        s.execute("edit.undo",&json!({})).unwrap();
+        assert_eq!(preview(&mut s,&json!({"body":"Panel","previous":first})).unwrap()["status"],"current");
+    }
+
+    #[test]
+    fn upper_contour_signature_uses_numeric_values_not_json_number_variants() {
+        let mut s=Session::default();
+        s.execute("solid.box",&json!({"length":80,"width":45,"height":6,"body_name":"Panel"})).unwrap();
+        let first=preview(&mut s,&json!({"body":"Panel"})).unwrap()["drawing"].clone();
+        let mut prev=first["source"].clone();
+        let v=prev["top_edge_paths_xy_mm"][0][0][0].as_f64().unwrap();
+        assert_eq!(v.fract(),0.0,"box top edge endpoints use integral millimetres");
+        prev["top_edge_paths_xy_mm"][0][0][0]=json!(v as i64);
+        assert!(source_matches(&prev,&first["source"]));
+        prev["top_edge_paths_xy_mm"][0][0][0]=json!(v+0.5);
+        assert!(!source_matches(&prev,&first["source"]));
+    }
+
+    #[test]
     fn sampled_upper_edges_of_box_are_four_real_lines() {
         let mut s=Session::default();
         s.execute("solid.box",&json!({"length":70,"width":40,"height":9,"body_name":"Panel"})).unwrap();

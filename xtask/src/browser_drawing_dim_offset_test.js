@@ -22,7 +22,13 @@
  near(p.y_from_bottom_mm,11,'first offset Y from bottom');
  near(q.x_from_left_mm,77,'second X');
  near(q.y_from_bottom_mm,46,'second Y');
- ok(d.accuracy==='bbox_envelope_and_measured_cylinders_only',
-   'preview declares geometry accuracy limit');
+ ok(d.accuracy==='bbox_envelope_with_unclassified_upper_edge_samples',
+   'preview explicitly declares sampled unclassified upper-edge candidates');
+ ok(d.geometry.outline.type==='rectangle_envelope',
+   'outer dimensions still use the bounded rectangle envelope');
+ ok(d.geometry.top_edge_candidates.length>=4,
+   'translated stock upper edges are now included');
+ ok(d.warnings.some(w=>w.includes('NOT a certified manufacturing silhouette')),
+   'preview does not claim a certified manufactured outline');
  return {test:'XY coordinates relative to shifted physical edges, mixed diameters',result:'passed'};
 })()
