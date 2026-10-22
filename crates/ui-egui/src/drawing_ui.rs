@@ -220,6 +220,37 @@ fn render_plate(ui: &mut egui::Ui, drawing: &mut Value, editable: bool) -> bool 
     stopped
 }
 
+/// Show measured Ø and edge offsets, but intentionally without a persistent
+/// bore identifier. This is a read-only measured-geometry table, not an
+/// associative manufacturing callout selection.
+fn render_cylinder_measurements(ui: &mut egui::Ui, drawing: &Value) {
+    let Some(values) = drawing["geometry"]["cylinder_dimensions"].as_array() else { return };
+    if values.is_empty() { return; }
+    ui.separator();
+    ui.label(RichText::new("Aus 3D gemessene Zylindermaße (vorläufig)").strong());
+    ui.label(RichText::new("X ab linker Hüllrahmenkante, Y ab unterer Hüllrahmenkante. Zylinder sind noch nicht als Bohrungen zertifiziert; keine dauerhafte Maßreferenz.").small());
+    egui::ScrollArea::vertical().max_height(145.0).show(ui, |ui| {
+        egui::Grid::new("drawing_measured_cylinders").striped(true).show(ui, |ui| {
+            for title in ["Nr.", "Durchmesser", "X", "Y"] {
+                ui.strong(title);
+            }
+            ui.end_row();
+            for (i, item) in values.iter().enumerate() {
+                let (Some(d),Some(x),Some(y)) = (
+                    item["diameter_mm"].as_f64(),
+                    item["x_from_left_mm"].as_f64(),
+                    item["y_from_bottom_mm"].as_f64(),
+                ) else { continue };
+                ui.label((i+1).to_string());
+                ui.label(format!("Ø {d:.2} mm"));
+                ui.label(format!("{x:.2} mm"));
+                ui.label(format!("{y:.2} mm"));
+                ui.end_row();
+            }
+        });
+    });
+}
+
 /// Render a visible window and a separate explicit stale-model confirmation.
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let mut state=std::mem::take(&mut app.drawing_ui);
@@ -278,7 +309,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 state.snapshot=Some(drawing.clone());
                 state.layout_changed=true;
             }
-            ui.label(RichText::new("Außenmaßtexte können mit der Maus verschoben werden. Bohrungsmaße sind noch nicht assoziativ.").small().color(t.text_dim));
+            render_cylinder_measurements(ui, &drawing);
+            ui.label(RichText::new("Außenmaßtexte sind verschiebbar. Ø- und X/Y-Zylindermaße werden aus der 3D-Geometrie gemessen, aber noch nicht als sichere Fertigungsmaße referenziert.").small().color(t.text_dim));
             ui.horizontal(|ui| {
                 if state.snapshot.is_none() {
                     if ui.button("Zeichnung im Modell speichern").clicked() {
