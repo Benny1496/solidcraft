@@ -176,6 +176,8 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("upstream-pair-deletion", include_str!("browser_drawing_upstream_pair_deletion_test.js")),
         ("upstream-pair-undo", include_str!("browser_drawing_upstream_pair_undo_test.js")),
         ("upstream-pair-storage", include_str!("browser_drawing_upstream_pair_storage_test.js")),
+        ("w23-m2-exact-acceptance", include_str!("browser_drawing_m2_acceptance_test.js")),
+        ("w23-identity-replacement", include_str!("browser_drawing_reference_replacement_test.js")),
     ];
     let scenario_count = scenarios.len();
     let mut passed = 0;
