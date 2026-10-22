@@ -455,4 +455,63 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    #[test]
+    fn diameter_and_xy_offsets_come_from_measured_3d_cylinders() {
+        let mut session=Session::default();
+        session.execute("solid.box",&json!({
+            "length":110,"width":70,"height":8,
+            "corner":[-30,-20,0],"body_name":"OffsetPlate"
+        })).unwrap();
+        session.execute("solid.hole",&json!({
+            "name":"Drill6","position":[-18,-8,8],"diameter":6
+        })).unwrap();
+        session.execute("solid.hole",&json!({
+            "name":"Drill10","position":[50,40,8],"diameter":10
+        })).unwrap();
+        let drawing=preview(&mut session,&json!({"body":"OffsetPlate"})).unwrap();
+        let dims=drawing["drawing"]["geometry"]["cylinder_dimensions"].as_array().unwrap();
+        assert_eq!(dims.len(),2);
+        assert_eq!(drawing["drawing"]["dimensions"][0]["value_mm"].as_f64(),Some(110.0));
+        assert_eq!(drawing["drawing"]["dimensions"][1]["value_mm"].as_f64(),Some(70.0));
+        let first=dims.iter().find(|d| d["diameter_mm"].as_f64()==Some(6.0)).unwrap();
+        assert_eq!(first["x_from_left_mm"].as_f64(),Some(12.0));
+        assert_eq!(first["y_from_bottom_mm"].as_f64(),Some(12.0));
+        assert_eq!(first["reference_status"],"unverified");
+        let second=dims.iter().find(|d| d["diameter_mm"].as_f64()==Some(10.0)).unwrap();
+        assert_eq!(second["x_from_left_mm"].as_f64(),Some(80.0));
+        assert_eq!(second["y_from_bottom_mm"].as_f64(),Some(60.0));
+        assert_eq!(second["reference_status"],"unverified");
+    }
+
+    #[test]
+    fn cylinder_measurements_update_only_in_proposed_drawing_until_confirmation() {
+        let mut session=Session::default();
+        session.execute("solid.box",&json!({
+            "length":95,"width":50,"height":8,"body_name":"Plate"
+        })).unwrap();
+        session.execute("solid.hole",&json!({
+            "name":"Drill","position":[14,20,8],"diameter":8
+        })).unwrap();
+        let first=preview(&mut session,&json!({"body":"Plate"})).unwrap();
+        let old=first["drawing"].clone();
+        assert_eq!(old["geometry"]["cylinder_dimensions"].as_array().unwrap().len(),1);
+        session.execute("solid.hole",&json!({
+            "name":"SecondDrill","position":[72,32,8],"diameter":10
+        })).unwrap();
+        let pending=preview(&mut session,&json!({
+            "body":"Plate","previous":old
+        })).unwrap();
+        assert_eq!(pending["status"],"stale");
+        assert_eq!(pending["drawing"]["geometry"]["cylinder_dimensions"].as_array().unwrap().len(),1);
+        assert_eq!(pending["proposed"]["geometry"]["cylinder_dimensions"].as_array().unwrap().len(),2);
+        let accepted=preview(&mut session,&json!({
+            "body":"Plate","previous":old,"accept":true
+        })).unwrap();
+        assert_eq!(accepted["status"],"updated");
+        assert_eq!(accepted["drawing"]["geometry"]["cylinder_dimensions"].as_array().unwrap().len(),2);
+        assert_eq!(preview(&mut session,&json!({
+            "body":"Plate","previous":accepted["drawing"]
+        })).unwrap()["status"],"current");
+    }
+
 }
