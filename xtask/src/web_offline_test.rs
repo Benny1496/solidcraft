@@ -139,6 +139,10 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("linked-face-dimensions", include_str!("browser_drawing_linked_dimensions_test.js")),
         ("linked-face-removed", include_str!("browser_drawing_linked_missing_test.js")),
         ("linked-face-rejections", include_str!("browser_drawing_linked_rejections_test.js")),
+        ("drawing-click-many", include_str!("browser_drawing_click_stress_test.js")),
+        ("drawing-click-layout", include_str!("browser_drawing_click_layout_test.js")),
+        ("drawing-click-invalid", include_str!("browser_drawing_click_invalid_test.js")),
+        ("drawing-click-translated", include_str!("browser_drawing_click_translated_test.js")),
     ];
     let scenario_count = scenarios.len();
     let mut passed = 0;
