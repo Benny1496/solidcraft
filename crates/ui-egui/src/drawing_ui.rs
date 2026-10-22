@@ -308,7 +308,7 @@ fn render_cylinder_measurements(
                             ("y_from_bottom","Y setzen")
                         ] {
                             let already = drawing["annotations"].as_array().is_some_and(|list|
-                                list.iter().any(|a| a["face_name"].as_str() == Some(face.as_str())
+                                list.iter().any(|a| a["face_name"].as_str() == Some(face)
                                     && a["kind"].as_str() == Some(kind)));
                             if !already && ui.button(caption).clicked() {
                                 request = Some((face.to_string(),kind.to_string()));
@@ -422,7 +422,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                                 ("y_from_bottom","Y aus Auswahl"),
                             ] {
                                 let exists=drawing["annotations"].as_array().is_some_and(|list|
-                                    list.iter().any(|a| a["face_name"].as_str() == Some(face)
+                                    list.iter().any(|a| a["face_name"].as_str() == Some(face.as_str())
                                         && a["kind"].as_str() == Some(kind)));
                                 if exists {ui.add_enabled(false,egui::Button::new(format!("{caption} ✓")));}
                                 else if ui.button(caption).clicked() {
