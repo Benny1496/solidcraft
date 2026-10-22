@@ -11,11 +11,17 @@ use crate::{Result, Session};
 
 const CMD: &str = "drawing.preview";
 
-pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new(CMD, "Preview Drawing", preview)
-    .noundo()
-    .at("INSPECT", "DRAWING")
-    .icon("inspect")
-    .params("body: name; previous?: a prior drawing from this command; accept?: bool. Returns provisional top-view rectangle and vertical cylinders. When geometry changes, returns stale/confirmation_required without modifying previous; accept:true returns an updated drawing with preserved label positions. Also reports read-only provisional cylinder diameters and XY offsets from bounding edges. No persistent hole identifiers or native drawing sheet.")];
+pub static COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new(CMD, "Preview Drawing", preview)
+        .noundo()
+        .at("INSPECT", "DRAWING")
+        .icon("inspect")
+        .params("body: name; previous?: a prior drawing from this command; accept?: bool. Provisional XY drawing with 3D-derived cylinders, external dimensions, and user-selected annotations linked by verified exact face names. Stale edits require explicit confirmation. Missing references stay unresolved."),
+    CommandSpec::new("drawing.annotation.add", "Add Verified Drawing Dimension", annotation_add)
+        .noundo()
+        .icon("measure")
+        .params("body, previous: a current drawing, face_name: exact verified 3D cylindrical face, kind: diameter|x_from_left|y_from_bottom; position_mm?: [x,y]. Returns annotated read-only drawing; save with document.metadata.set. Rejects stale/unverified/ambiguous references."),
+];
 
 fn coords(value: &Value, n: usize) -> Option<Vec<f64>> {
     let arr = value.as_array().filter(|a| a.len() == n)?;
@@ -56,15 +62,133 @@ fn source_matches(old: &Value, current: &Value) -> bool {
 /// Read-only measurements derived from actual B-rep cylinder surfaces and
 /// the body's XY bounding rectangle. Entries have no persistent hole id:
 /// without certified feature provenance reordering must never move a callout.
-fn provisional_cylinder_dimensions(holes: &[[f64; 3]], min: &[f64]) -> Vec<Value> {
-    holes.iter().map(|h| json!({
-        "kind": "vertical_cylinder",
-        "reference_status": "unverified",
-        "center_mm": [h[0], h[1]],
-        "diameter_mm": h[2],
-        "x_from_left_mm": mm(h[0] - min[0]),
-        "y_from_bottom_mm": mm(h[1] - min[1])
-    })).collect()
+fn provisional_cylinder_dimensions(holes: &[[f64; 3]], min: &[f64], faces: &[Vec<String>]) -> Vec<Value> {
+    holes.iter().enumerate().map(|(i,h)| {
+        // A face name is eligible only if history explicitly verified it, and
+        // it refers to this cylinder group alone (never the next sorted hole).
+        let eligible = faces[i].iter().find(|name|
+            !faces.iter().enumerate().any(|(j,other)| j != i && other.contains(name))
+        ).cloned();
+        json!({
+            "kind": "vertical_cylinder",
+            "reference_status": "unverified",
+            "eligible_face_name": eligible,
+            "face_name_candidates": faces[i],
+            "center_mm": [h[0], h[1]],
+            "diameter_mm": h[2],
+            "x_from_left_mm": mm(h[0] - min[0]),
+            "y_from_bottom_mm": mm(h[1] - min[1])
+        })
+    }).collect()
+}
+
+fn annotation_value(d: &Value, kind: &str) -> Option<f64> {
+    let key = match kind {
+        "diameter" => "diameter_mm",
+        "x_from_left" => "x_from_left_mm",
+        "y_from_bottom" => "y_from_bottom_mm",
+        _ => return None,
+    };
+    d[key].as_f64().filter(|n| n.is_finite())
+}
+
+/// Resolve only against uniquely named, history-verified cylindrical faces.
+/// Unresolvable old dimensions survive with their identity and manual layout,
+/// but without an authoritative new value.
+fn resolve_annotations(previous: Option<&Value>, cylinders: &[Value]) -> Result<Vec<Value>> {
+    let Some(old) = previous else { return Ok(Vec::new()) };
+    let entries = old.as_array().filter(|a| a.len() <= 64)
+        .ok_or_else(|| bad(CMD, "annotations must contain at most 64 entries"))?;
+    let mut ids = std::collections::HashSet::new();
+    let mut pair = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for a in entries {
+        let id = a["id"].as_str().filter(|s| s.starts_with("linked_cyl_") && s.len() <= 80
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            .ok_or_else(|| bad(CMD, "invalid annotation id"))?;
+        let face = a["face_name"].as_str().filter(|s| !s.is_empty() && s.len() <= 1024)
+            .ok_or_else(|| bad(CMD, "invalid annotation face"))?;
+        let kind = a["kind"].as_str().filter(|k|
+            matches!(*k, "diameter" | "x_from_left" | "y_from_bottom"))
+            .ok_or_else(|| bad(CMD, "invalid annotation kind"))?;
+        if !ids.insert(id.to_string()) || !pair.insert((face.to_string(),kind.to_string())) {
+            return Err(bad(CMD, "duplicate drawing annotation"));
+        }
+        let matches: Vec<&Value> = cylinders.iter().filter(|d|
+            d["eligible_face_name"].as_str() == Some(face)).collect();
+        let resolved = matches.len() == 1;
+        let original = a["value_mm"].as_f64().filter(|v| v.is_finite());
+        let value = if resolved { annotation_value(matches[0],kind) } else { None };
+        let center = if resolved { matches[0]["center_mm"].clone() }
+            else { a.get("center_mm").cloned().unwrap_or(Value::Null) };
+        out.push(json!({
+            "id":id, "face_name":face, "kind":kind,
+            "reference_status":if value.is_some() {"resolved"} else {"missing_reference"},
+            "center_mm":center,
+            "value_mm":value,
+            "last_value_mm":value.or(original)
+        }));
+    }
+    Ok(out)
+}
+
+/// A human/user-chosen dimension never silently attaches to a cylinder by
+/// list index or XY proximity. The face name must be uniquely certified.
+fn annotation_add(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "drawing.annotation.add";
+    let name = str_(p,"body").ok_or_else(|| bad(cmd,"body is required"))?;
+    let old = p.get("previous").ok_or_else(|| bad(cmd,"previous drawing required"))?;
+    let face = str_(p,"face_name").filter(|x| !x.is_empty() && x.len() <= 1024)
+        .ok_or_else(|| bad(cmd,"face_name required"))?;
+    let kind = str_(p,"kind").filter(|k|
+        matches!(*k,"diameter"|"x_from_left"|"y_from_bottom"))
+        .ok_or_else(|| bad(cmd,"kind must be diameter, x_from_left, or y_from_bottom"))?;
+    let current = preview(s,&json!({"body":name,"previous":old}))?;
+    if current["status"] != "current" {
+        return Err(bad(cmd,"drawing is stale: confirm original 3D change before adding dimensions"));
+    }
+    let matches: Vec<&Value> = current["drawing"]["geometry"]["cylinder_dimensions"]
+        .as_array().into_iter().flatten().filter(|d|
+            d["eligible_face_name"].as_str() == Some(face)).collect();
+    if matches.len() != 1 {
+        return Err(bad(cmd,"cylindrical face is not unique and history-verified"));
+    }
+    let saved = &current["drawing"];
+    if saved["annotations"].as_array().is_some_and(|list| list.iter().any(|a|
+        a["face_name"].as_str() == Some(face) && a["kind"].as_str() == Some(kind))) {
+        return Err(bad(cmd,"dimension is already annotated"));
+    }
+    let mut annotated = saved.clone();
+    let list = annotated["annotations"].as_array_mut()
+        .ok_or_else(|| bad(cmd,"invalid drawing annotations"))?;
+    if list.len() >= 64 { return Err(bad(cmd,"too many dimensions")); }
+    let mut counter = 1;
+    let id = loop {
+        let candidate=format!("linked_cyl_{counter}");
+        if !list.iter().any(|a| a["id"].as_str()==Some(&candidate)) { break candidate; }
+        counter+=1;
+        if counter>128 { return Err(bad(cmd,"annotation ids exhausted")); }
+    };
+    let d=matches[0];
+    let location = match p.get("position_mm") {
+        Some(v) => coords(v,2).filter(|a| a.iter().all(|x| x.abs() <= 1_000_000.0))
+            .ok_or_else(|| bad(cmd,"invalid annotation position"))?,
+        None => {
+            let center = coords(&d["center_mm"],2)
+                .ok_or_else(|| bad(cmd,"invalid cylinder centre"))?;
+            vec![center[0]+12.0,center[1]+12.0]
+        },
+    };
+    list.push(json!({
+        "id":id,"face_name":face,"kind":kind,"value_mm":annotation_value(d,kind),
+        "center_mm":d["center_mm"],"reference_status":"resolved"
+    }));
+    annotated["label_positions"][&id]=json!(location);
+    let rechecked=preview(s,&json!({"body":name,"previous":annotated}))?;
+    if rechecked["status"] != "current" {
+        return Err(bad(cmd,"model changed before annotation could be saved"));
+    }
+    Ok(json!({"status":"annotated","drawing":rechecked["drawing"],"annotation_id":id}))
 }
 
 // A limited, geometrically scaled SVG view for the same verified XY envelope.
