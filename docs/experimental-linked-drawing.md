@@ -378,3 +378,12 @@ plus 2 baseline), 17 egui and 23 Rust = **76 checks**. Do not record them as
 successful before running and inspecting a fresh manual GitHub Actions workflow
 on \`feature/browser-automation\`. The old browser DXF test remains isolated
 because it previously stalled CDP.
+
+## GitHub Actions run #23: B-rep edge projection matrix PASSED (22 October 2026)
+
+- [Manual run #23](https://github.com/Benny1496/solidcraft/actions/runs/39767894612) on `feature/browser-automation`, code SHA `00c4d9e00bf05799e3a3d3463698fea682b2afa6`. Completed **success** on 22 October 2026 at 11:50:16 UTC (13:50:16 CEST). Job `119787810296`. Entire job log and individual test result lines verified.
+- All **76/76 checks passed**, with no failed test groups: browser **36/36** (34 named CAD scenarios plus API and the four-hole plate), real egui **17/17**, Rust engine **23/23**; **0 failed, 0 ignored** in Rust/egui test subsets. JavaScript checks, release WebAssembly build and artifact upload also succeeded.
+- All six new browser B-rep edge scenarios passed individually: `drawing-edges-box` (4 unique XY lines, no timeline change), `drawing-edges-edit` (parametric edit plus undo/redo), `drawing-edges-chamfer` (5 projected segments with an actual diagonal chamfer), `drawing-edges-bores` (curved hole edges not misrepresented as straight line chords), `drawing-edges-matrix` (20×12, 75×40, 150×80, 210×55 mm plates; projected perimeters 64, 230, 460 and 530 mm), `drawing-edges-safety` (4 invalid requests refused, existing 2D revision retained).
+- Five new Rust tests passed in the 23/23 engine total, confirming straight projections, repeatability, ignored vertical-only projections, model edits/undo, invalid inputs and existing linked-drawing isolation.
+- The newly demonstrated `drawing.projected_edges` API reports conservative **unclassified straight B-rep candidates only**. This is NOT yet a silhouette/hidden-line-removal engine, nor does it display true contours in the 2D egui drawing window or handle actual curved arcs and pockets as printable outlines. `drawing.preview` intentionally keeps the existing rectangle-based view and safely linked dimensions unchanged.
+- Next proposed increment (not yet implemented or tested): correct XY contour identification, true arc curves and visibility classification, then integrate a properly marked contour into the 2D GUI while preserving prior saved-document format, 3D update confirmation and 76 regression checks. Keep DXF timeouts isolated.
