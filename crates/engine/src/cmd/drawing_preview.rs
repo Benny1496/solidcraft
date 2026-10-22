@@ -420,7 +420,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
 mod tests {
     use super::{preview, source_matches};
     use crate::Session;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     #[test]
     fn javascript_numeric_json_roundtrip_does_not_stale_a_drawing() {
@@ -662,6 +662,79 @@ mod tests {
         assert_eq!(preview(&mut session,&json!({
             "body":"Plate","previous":accepted["drawing"]
         })).unwrap()["status"],"current");
+    }
+
+    #[test]
+    fn exact_face_annotations_recompute_after_change_and_preserve_user_identity() {
+        let first = json!([
+            {"eligible_face_name":"F42:side", "center_mm":[10,20],
+             "diameter_mm":8, "x_from_left_mm":10, "y_from_bottom_mm":20}
+        ]);
+        let previous = json!([
+            {"id":"linked_cyl_1","face_name":"F42:side","kind":"diameter",
+             "reference_status":"resolved","value_mm":8,"center_mm":[10,20]},
+            {"id":"linked_cyl_2","face_name":"F42:side","kind":"x_from_left",
+             "reference_status":"resolved","value_mm":10,"center_mm":[10,20]}
+        ]);
+        let original = super::resolve_annotations(Some(&previous),first.as_array().unwrap()).unwrap();
+        assert_eq!(original[0]["value_mm"].as_f64(), Some(8.0));
+        assert_eq!(original[1]["value_mm"].as_f64(),Some(10.0));
+        let edited = json!([
+            {"eligible_face_name":"F42:side","center_mm":[14,20],
+             "diameter_mm":12,"x_from_left_mm":14,"y_from_bottom_mm":20},
+            {"eligible_face_name":"F100:side","center_mm":[80,50],
+             "diameter_mm":6,"x_from_left_mm":80,"y_from_bottom_mm":50}
+        ]);
+        let again=super::resolve_annotations(Some(&previous),edited.as_array().unwrap()).unwrap();
+        assert_eq!(again[0]["id"],"linked_cyl_1");
+        assert_eq!(again[0]["face_name"],"F42:side");
+        assert_eq!(again[0]["reference_status"],"resolved");
+        assert_eq!(again[0]["value_mm"].as_f64(),Some(12.0));
+        assert_eq!(again[1]["value_mm"].as_f64(),Some(14.0));
+    }
+
+    #[test]
+    fn removed_or_ambiguous_3d_faces_are_never_silently_relinked() {
+        let old = json!([{"id":"linked_cyl_1","face_name":"F7:bore",
+            "kind":"diameter","reference_status":"resolved","value_mm":8,"center_mm":[15,15]}]);
+        let unrelated = json!([{"eligible_face_name":"F99:bore",
+            "center_mm":[15,15],"diameter_mm":8,"x_from_left_mm":15,"y_from_bottom_mm":15}]);
+        let missing=super::resolve_annotations(Some(&old),unrelated.as_array().unwrap()).unwrap();
+        assert_eq!(missing[0]["reference_status"],"missing_reference");
+        assert!(missing[0]["value_mm"].is_null(),"stale value is not certified as current");
+        assert_eq!(missing[0]["last_value_mm"].as_f64(),Some(8.0));
+        let twice=json!([
+            {"eligible_face_name":"F7:bore","center_mm":[15,15],
+             "diameter_mm":8,"x_from_left_mm":15,"y_from_bottom_mm":15},
+            {"eligible_face_name":"F7:bore","center_mm":[70,15],
+             "diameter_mm":8,"x_from_left_mm":70,"y_from_bottom_mm":15}
+        ]);
+        let ambiguous=super::resolve_annotations(Some(&old),twice.as_array().unwrap()).unwrap();
+        assert_eq!(ambiguous[0]["reference_status"],"missing_reference");
+    }
+
+    #[test]
+    fn malformed_duplicate_and_oversized_annotations_are_rejected() {
+        let good=json!([{"id":"linked_cyl_1","face_name":"F5:side",
+            "kind":"diameter","value_mm":8,"center_mm":[10,10]}]);
+        let refs=json!([{"eligible_face_name":"F5:side","center_mm":[10,10],
+            "diameter_mm":8,"x_from_left_mm":10,"y_from_bottom_mm":10}]);
+        for broken in [
+            json!([good[0],good[0]]),
+            json!([{"id":"bad<id>","face_name":"F5:side","kind":"diameter"}]),
+            json!([{"id":"linked_cyl_1","face_name":"F5:side","kind":"unsupported"}]),
+            json!([{"id":"linked_cyl_1","face_name":"","kind":"diameter"}]),
+            json!([{"id":"linked_cyl_1","face_name":"F5:side","kind":"diameter"},
+                   {"id":"linked_cyl_2","face_name":"F5:side","kind":"diameter"}])
+        ] {
+            assert!(super::resolve_annotations(Some(&broken),refs.as_array().unwrap()).is_err(),
+                "malformed dimension must be rejected {broken}");
+        }
+        let oversized = Value::Array((0..65).map(|i| json!({
+            "id":format!("linked_cyl_{}",i),"face_name":format!("F{i}"),
+            "kind":"diameter"
+        })).collect());
+        assert!(super::resolve_annotations(Some(&oversized),refs.as_array().unwrap()).is_err());
     }
 
 }
