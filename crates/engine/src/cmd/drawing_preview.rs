@@ -67,7 +67,7 @@ fn provisional_cylinder_dimensions(holes: &[[f64; 3]], min: &[f64], faces: &[Vec
         // A face name is eligible only if history explicitly verified it, and
         // it refers to this cylinder group alone (never the next sorted hole).
         let eligible = faces[i].iter().find(|name|
-            !faces.iter().enumerate().any(|(j,other)| j != i && other.contains(name))
+            !faces.iter().enumerate().any(|(j,other)| j != i && other.iter().any(|n| n == *name))
         ).cloned();
         json!({
             "kind": "vertical_cylinder",
