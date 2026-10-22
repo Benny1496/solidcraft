@@ -53,6 +53,38 @@ The standard distributed SolidCraft release does not automatically
 include fork development-branch changes. The full native drawing workspace
 and production-quality sheets/exports remain to be implemented.
 
+## Regression: replacement bore after Undo (W23 identity)
+
+Test #28 reached **63/64 browser CAD checks** and exposed a genuine history
+identity risk: undoing the most recently created bore restored the document's
+older `next_id` counter. Creating a geometrically identical replacement then
+reused its feature id and exact cylindrical face name. The test stopped at the
+recycled face name, before independently establishing whether the saved
+annotation was wrongly treated as resolved.
+
+The experimental fix preserves the feature-id allocation high-water mark
+across `edit.undo` / `edit.redo` in `crates/engine/src/cmd/edit.rs`.
+Redo still restores the historical feature and its original id. Creating a
+new feature after Undo instead receives a fresh id, even if the replacement
+hole has the same XY position and diameter.
+
+Regression coverage:
+
+- `w23-identity-replacement` (browser CAD integration test) checks 3D
+  cylinder geometry, exact face-name distinction, deferred update, a
+  historical missing-reference diameter and centre-distance, the unaffected
+  second bore, retained paper-space label positions and accepted updates.
+- `undo_then_replacement_hole_gets_fresh_feature_and_face_identity` (native
+  Rust engine unit test) checks the same critical identity transition,
+  explicit Undo/Redo and serialization of the id allocator.
+
+**Status:** the fix and additional regression test are committed on the
+private experimental fork branch only; they require a new full GitHub Actions
+run for validation. Do not claim this proves a production-ready Drawing
+reference system: the agreed upstream plan keeps Drawing reference ownership
+under #4892, while #3890 has now selected **separate drawing files**
+instead of the experimental in-document metadata snapshot.
+
 ## First use
 
 Create or open a 3D plate and run this command through the browser/CLI/engine command API:
