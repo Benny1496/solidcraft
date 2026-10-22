@@ -259,3 +259,33 @@ Native egui cases: clicking an unsaved then a saved real bore, selecting and pla
 All four new JavaScript source files were **syntax-checked statically**, the scenario registration and workflow continuation rules checked in-source. **The new Rust code and real browser/GUI tests still require a new manual GitHub Actions run**; do not describe them as already passing.
 
 The private project/chat handoff remains stored outside GitHub; only technical implementation and CI status are recorded here.
+
+
+## GitHub Actions run #20: 56/60 checks, four GUI click-target failures (22 October 2026)
+
+**This is the verified result for the implementation in commit `12b707a0c32b5c3d7f8c32427196f3fe77e15e3e` on `feature/browser-automation`:** [GitHub Actions #20](https://github.com/Benny1496/solidcraft/actions/runs/39744835825), `completed / failure`, 22 Oct 2026 08:47:53 UTC. The non-fail-fast workflow successfully ran **all** independent suites despite the GUI regression.
+
+| Test group | Confirmed outcome |
+| --- | --- |
+| JavaScript syntax and production WASM build | **PASS** |
+| Browser API smoke + reference plate + named CAD scenarios | **29/29 PASS** (27/27 named) |
+| Real egui drawing-window interaction tests | **11/15 PASS; 4 FAIL** |
+| Native Rust drawing-core tests | **16/16 PASS** |
+| GitHub consolidated end-of-job summary | **FAIL**, exactly one non-passing suite |
+| **Total independently checked** | **56/60 PASS** |
+
+The four **new** egui tests fail before they can verify the intended 2D selection behavior, each with the same locator error:
+`"drawing:cylinder:0" is not on screen: {"error":"not on screen: \"drawing:cylinder:0\"","ok":false}`
+(and index `1` for the multi-hole test).
+
+Test names:
+- `clicking_2d_cylinder_selects_verified_face_and_adds_diameter_dimension` — `drawing_ui.rs:838`
+- `direct_2d_selection_can_be_cleared_and_is_not_saved_as_drawing_metadata` — `drawing_ui.rs:946`
+- `direct_2d_selection_chooses_exact_hole_not_neighbor_and_three_dimension_types` — `drawing_ui.rs:875`
+- `unsaved_or_stale_drawing_cannot_select_a_new_2d_dimension` — `drawing_ui.rs:912`
+
+**Highly likely root cause, verify before editing:** The new tests pass the handle name as a **raw string**, e.g. `h.step(&json!({"click":"drawing:cylinder:0"}))`. But `Harness::at` in `crates/ui-egui/src/scenario.rs` treats arrays as physical XY pairs and forwards nonarray values to `ui.at`, whose documented handle locator is a **structured object**, `{"handle":"drawing:cylinder:0"}`. The preview already publishes each target with `scenario::publish_target("drawing:cylinder:N",rect)`, and the initial test confirms `handle_at("drawing:cylinder:0").is_some()`. Thus the failure is consistent with an incorrectly shaped locator in the tests, **not proof that cylinder hit targets are absent**. Resolve by replacing the four new click steps with the structured handle syntax or with explicit `handle_at(...)` coordinates as used by passing drag tests; verify every occurrence (including `drawing:cylinder:1`). If they still fail, inspect `ui.at`, mouse interaction rect geometry, clipping and egui overlays. **No code fix has been made for this failure in the current handoff.**
+
+Scope/caveats: The compiled WASM and Rust core pass, and 11 previous GUI tests pass. However the actual mouse-driven direct-cylinder-selection workflow is **not yet validated**, until those four tests pass. Preserve all 60 checks and the final red status for any remaining failure. A **new manual GitHub Actions run** is required after the code correction; a rerun of the old SHA is not sufficient for validating new code.
+
+**Next conversation handoff:** Private `Chatlauf.md` and `PROJEKTSTATUS.md` live exclusively in the user-authorized Home Assistant folder `/share/GitHub SolidCraft/`; neither is stored in public GitHub. The user requested documentation/transfer first and a new chat afterward. Major architectural modifications require prior user confirmation.
