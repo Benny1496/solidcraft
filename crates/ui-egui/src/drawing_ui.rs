@@ -602,4 +602,46 @@ mod tests {
             ["geometry"]["cylinder_dimensions"].as_array().unwrap().len(),2);
     }
 
+    #[test]
+    fn older_saved_drawing_displays_new_measurements_without_losing_dragged_labels() {
+        let mut h = drawing_harness();
+        h.app.run("solid.hole", json!({
+            "name":"OlderFileDrill", "position":[18,14,8], "diameter":6
+        })).unwrap();
+        h.frames(3);
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        let before = h.app.session.doc.metadata.get(KEY).unwrap()
+            ["label_positions"]["overall_x"].clone();
+        let mut older = h.app.session.doc.metadata.get(KEY).unwrap().clone();
+        older["geometry"].as_object_mut().unwrap()
+            .remove("cylinder_dimensions");
+        h.app.run("document.metadata.set", json!({
+            "key":KEY,"value":older
+        })).unwrap();
+        h.app.drawing_ui.open = false;
+        h.frames(3);
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Ø 6.00 mm").is_some(),
+            "an older stored drawing shows newly recomputed read-only dimensions");
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["label_positions"]["overall_x"],before,
+            "reopening a prior-format snapshot retains its previous manual placement");
+        assert!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["geometry"]["cylinder_dimensions"].is_null(),
+            "merely displaying a current older snapshot must not rewrite stored data");
+        let at = handle_at("drawing:label:overall_x")
+            .expect("older saved drawings still have a draggable X dimension");
+        let reply = h.call("ui.drag", json!({
+            "x0":at.x,"y0":at.y,"x1":at.x+30.0,"y1":at.y-9.0,"steps":12
+        }));
+        assert_eq!(reply["ok"],true,"{reply}");
+        h.frames(3);
+        let revised=h.app.session.doc.metadata.get(KEY).unwrap();
+        assert_ne!(revised["label_positions"]["overall_x"],before,
+            "dragging the migrated old drawing must still persist new coordinates");
+        assert!(revised["geometry"]["cylinder_dimensions"].is_array(),
+            "saving the dragged drawing safely upgrades its measured 3D geometry table");
+    }
+
 }
