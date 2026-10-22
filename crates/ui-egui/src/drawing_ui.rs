@@ -294,6 +294,58 @@ fn render_plate(ui: &mut egui::Ui, drawing: &mut Value, editable: bool, selected
     stopped
 }
 
+/// Two extra orthographic reference panels inside the same native Drawing
+/// window. The source is the saved 3D geometry snapshot, not live geometry
+/// mixed into a stale drawing awaiting user confirmation.
+fn render_reference_views(ui: &mut egui::Ui, drawing: &Value) {
+    let t=Tokens::get();
+    let Some(views)=drawing["geometry"]["reference_views"].as_object() else {return};
+    ui.separator();
+    ui.label(RichText::new("3D-verknüpfte Referenzansichten (vorläufig)").strong());
+    ui.label(RichText::new("Die Linien stammen von äußeren 3D-Kantenebenen. Verdeckte Linien, vollständige Silhouetten und Fertigungsansichten werden noch nicht sicher berechnet.").small().color(t.text_dim));
+    ui.horizontal(|ui|{
+        for (key,title) in [
+            ("front","Vorderansicht (XZ, Y min) · vorläufig"),
+            ("right","Seitenansicht (YZ, X max) · vorläufig")
+        ] {
+            let Some(view)=views.get(key) else {continue};
+            ui.vertical(|ui|{
+                ui.label(title);
+                let (rect,_)=ui.allocate_exact_size(vec2(295.0,150.0),Sense::hover());
+                ui.painter().rect_filled(rect,4.0,t.panel);
+                ui.painter().rect_stroke(rect,4.0,Stroke::new(1.0,t.border),StrokeKind::Inside);
+                let (Some(min),Some(max))=(
+                    xy(&view["bounds"]["min_xy_mm"]),
+                    xy(&view["bounds"]["max_xy_mm"])
+                ) else {return};
+                let (w,h)=(max[0]-min[0],max[1]-min[1]);
+                if w<=0.0 || h<=0.0 {return;}
+                let scale=((rect.width()-32.0)/w).min((rect.height()-35.0)/h).max(0.001);
+                let centre=rect.center();
+                let map=|p:[f32;2]| pos2(
+                    centre.x+(p[0]-(min[0]+max[0])*0.5)*scale,
+                    centre.y-(p[1]-(min[1]+max[1])*0.5)*scale
+                );
+                ui.painter().rect_stroke(Rect::from_min_max(
+                    map([min[0],max[1]]),map([max[0],min[1]])),0.0,
+                    Stroke::new(0.8,t.text_dim),StrokeKind::Inside);
+                if let Some(paths)=view["paths"].as_array() {
+                    for path in paths {
+                        let Some(raw)=path["points_xy_mm"].as_array() else {continue};
+                        let points:Vec<Pos2>=raw.iter().filter_map(xy).map(map).collect();
+                        if points.len()>=2 && points.len()<=1024 {
+                            ui.painter().add(egui::Shape::line(points,Stroke::new(1.7,t.accent)));
+                        }
+                    }
+                }
+                ui.painter().text(pos2(rect.center().x,rect.bottom()-8.0),
+                    Align2::CENTER_CENTER,format!("{w:.2} × {h:.2} mm"),
+                    FontId::proportional(11.0),t.text_dim);
+            });
+        }
+    });
+}
+
 /// Show measured cylinder Ø and XY offsets. Users may select dimensions
 /// only when a cylindrical face has a verified, unambiguous historical name.
 fn render_cylinder_measurements(
@@ -384,7 +436,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 refresh(app,&mut state);
             }
         });
-        ui.label(RichText::new("Experimentelle Draufsicht: Außenkontur als Rechteck-Hüllrahmen, keine vollständige Fertigungsprojektion.").small().color(t.text_dim));
+        ui.label(RichText::new("Experimentelle Draufsicht plus Vorder-/Seitenansicht aus 3D-Kanten; keine vollständige Fertigungsprojektion.").small().color(t.text_dim));
         ui.separator();
 
         if let Some(err) = &state.error {
@@ -423,6 +475,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 state.layout_changed=true;
                 request_layout_save=true;
             }
+            render_reference_views(ui,&drawing);
             if editable && drawing.get("label_positions") != state.snapshot.as_ref().and_then(|d| d.get("label_positions")) {
                 state.snapshot=Some(drawing.clone());
                 state.layout_changed=true;
@@ -585,6 +638,38 @@ mod tests {
     fn saved_length(h: &Harness) -> f64 {
         h.app.session.doc.metadata.get(KEY).unwrap()["dimensions"][0]["value_mm"]
             .as_f64().unwrap()
+    }
+
+    #[test]
+    fn native_drawing_window_contains_front_and_right_reference_views() {
+        let h=drawing_harness();
+        let draft=h.app.drawing_ui.draft.as_ref().unwrap();
+        assert_eq!(draft["geometry"]["reference_views"]["front"]["bounds"]
+            ["max_xy_mm"],json!([90,8]));
+        assert_eq!(draft["geometry"]["reference_views"]["right"]["bounds"]
+            ["max_xy_mm"],json!([45,8]));
+        assert!(h.widget("Vorderansicht (XZ, Y min) · vorläufig").is_some());
+        assert!(h.widget("Seitenansicht (YZ, X max) · vorläufig").is_some());
+    }
+
+    #[test]
+    fn deferred_model_update_keeps_saved_front_and_side_views() {
+        let mut h=drawing_harness();
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        let original=h.app.session.doc.metadata.get(KEY).unwrap().clone();
+        h.app.run("parameters.change",json!({
+            "name":"PanelLength","expression":"120 mm"
+        })).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some());
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap(),&original);
+        assert_eq!(h.app.drawing_ui.proposed.as_ref().unwrap()
+            ["geometry"]["reference_views"]["front"]["bounds"]["max_xy_mm"],
+            json!([120,8]));
+        h.step(&json!({"widget":"Zeichnung aktualisieren"})).unwrap();
+        h.frames(3);
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["geometry"]["reference_views"]["front"]["bounds"]["max_xy_mm"],json!([120,8]));
     }
 
     #[test]

@@ -68,6 +68,11 @@ fn source_matches(old: &Value, current: &Value) -> bool {
         Some(a) => current.get("top_edge_paths_xy_mm").is_some_and(|b|
             matches!((path_sample_numbers(a),path_sample_numbers(b)),
                 (Some(x),Some(y)) if x==y)),
+    } && match old.get("orthographic_edge_paths") {
+        // Saved records predating the side-panel preview stay compatible.
+        None => true,
+        Some(a) => current.get("orthographic_edge_paths")
+            .is_some_and(|b|reference_source_matches(a,b)),
     }
 }
 
@@ -344,9 +349,11 @@ fn projected_edges(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
-/// Experimental sampled curves on the topmost horizontal level. These are
-/// NOT certified visible silhouettes or classified pocket/outer loops.
-fn upper_edge_paths(s: &Session, name: &str, top_z: f64) -> Vec<Value> {
+/// Experimental sampled B-rep edges completely on one extreme plane.
+/// Axis 2 at z_max = top XY; axis 1 at y_min = front XZ;
+/// axis 0 at x_max = right YZ. No occlusion / hidden-line classification.
+fn extreme_plane_paths(s: &Session, name: &str, normal_axis: usize,
+    plane_mm: f64, axes: [usize; 2]) -> Vec<Value> {
     let world = s.world_state();
     let Some(b) = world.bodies.iter().find(|b| b.name == name) else { return Vec::new() };
     let tol = (b.body.size() * 0.001).clamp(0.01,0.15);
@@ -356,10 +363,14 @@ fn upper_edge_paths(s: &Session, name: &str, top_z: f64) -> Vec<Value> {
     let mut total = 0usize;
     for edge in edges {
         if !(2..=1024).contains(&edge.points.len()) { continue; }
-        if !edge.points.iter().all(|p| p.is_finite() && (p.z-top_z).abs()<0.03) {continue;}
+        if !edge.points.iter().all(|p| {
+            let xyz=[p.x,p.y,p.z];
+            p.is_finite() && (xyz[normal_axis]-plane_mm).abs()<0.03
+        }) {continue;}
         let mut xy: Vec<[f64;2]> = Vec::new();
         for p in &edge.points {
-            let v=[mm(p.x),mm(p.y)];
+            let xyz=[p.x,p.y,p.z];
+            let v=[mm(xyz[axes[0]]),mm(xyz[axes[1]])];
             if xy.last()!=Some(&v) { xy.push(v); }
         }
         if xy.len()<2 { continue; }
@@ -382,6 +393,49 @@ fn upper_edge_paths(s: &Session, name: &str, top_z: f64) -> Vec<Value> {
     }
     out.sort_by(|a,b|a["points_xy_mm"].to_string().cmp(&b["points_xy_mm"].to_string()));
     out
+}
+
+fn upper_edge_paths(s: &Session, name: &str, top_z: f64) -> Vec<Value> {
+    extreme_plane_paths(s,name,2,top_z,[0,1])
+}
+
+/// Read-only model-derived candidate paths in orthogonal reference panels.
+/// These are not a complete front/right silhouette: internal and occluded
+/// geometry is deliberately not guessed from the bounding envelope.
+fn reference_views(s: &Session, name: &str, min: &[f64], max: &[f64]) -> Value {
+    let front=extreme_plane_paths(s,name,1,min[1],[0,2]);
+    let right=extreme_plane_paths(s,name,0,max[0],[1,2]);
+    json!({
+        "accuracy":"unclassified_extreme_plane_brep_candidates_only",
+        "front":{"projection":"xz_from_negative_y","plane_mm":mm(min[1]),
+            "bounds":{"min_xy_mm":[mm(min[0]),mm(min[2])],
+                      "max_xy_mm":[mm(max[0]),mm(max[2])]},
+            "paths":front},
+        "right":{"projection":"yz_from_positive_x","plane_mm":mm(max[0]),
+            "bounds":{"min_xy_mm":[mm(min[1]),mm(min[2])],
+                      "max_xy_mm":[mm(max[1]),mm(max[2])]},
+            "paths":right}
+    })
+}
+
+fn reference_paths_source(views: &Value) -> Value {
+    json!({
+        "front":views["front"]["paths"].as_array()
+            .map(|paths|paths.iter().map(|p|p["points_xy_mm"].clone()).collect::<Vec<_>>())
+            .unwrap_or_default(),
+        "right":views["right"]["paths"].as_array()
+            .map(|paths|paths.iter().map(|p|p["points_xy_mm"].clone()).collect::<Vec<_>>())
+            .unwrap_or_default()
+    })
+}
+
+fn reference_source_matches(previous: &Value, current: &Value) -> bool {
+    ["front","right"].iter().all(|view| {
+        matches!((
+            path_sample_numbers(&previous[*view]),
+            path_sample_numbers(&current[*view])
+        ),(Some(a),Some(b)) if a==b)
+    })
 }
 
 /// Compare numeric path coordinates, not JSON int/float number variants.
@@ -577,6 +631,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
     let holes: Vec<[f64; 3]> = holes.into_iter().map(|h| h.0).collect();
     let measured_cylinders = provisional_cylinder_dimensions(&holes,&min,&eligible_faces);
     let top_paths = upper_edge_paths(s, name, max[2]);
+    let orthographic = reference_views(s,name,&min,&max);
 
     // This is deliberately geometry-based rather than only the user's command
     // parameters: the measured 3D body is the authority for freshness.
@@ -585,6 +640,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
         "size_mm": dimensions,
         "cylinders_xy_diameter_mm": holes,
         "top_edge_paths_xy_mm": top_paths.iter().map(|p|p["points_xy_mm"].clone()).collect::<Vec<_>>(),
+        "orthographic_edge_paths": reference_paths_source(&orthographic),
     });
     let mut default_labels = serde_json::Map::new();
     let cx = mm((min[0] + max[0]) / 2.0);
@@ -631,6 +687,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
             "cylinders": holes.iter().map(|h| json!({"center_mm":[h[0],h[1]],"diameter_mm":h[2]})).collect::<Vec<_>>(),
             "cylinder_dimensions": measured_cylinders,
             "top_edge_candidates": top_paths.clone(),
+            "reference_views": orthographic,
         },
         "dimensions": [
             {"id":"overall_x","kind":"horizontal","value_mm":dimensions[0]},
@@ -639,7 +696,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
         "svg": svg_preview(&min, &max, &holes, &top_paths, &layout, &annotated),
         "annotations": annotated,
         "label_positions": layout,
-        "warnings": ["Upper-level edge paths are sampled B-rep candidates, NOT a certified manufacturing silhouette, pocket classification or hidden-line result. The rectangle is a bounding envelope; existing linked dimensions retain verified face names."]
+        "warnings": ["Top, front and right views contain only sampled B-rep edge candidates on extreme planes, NOT complete visible/hidden silhouettes or a certified manufacturing projection. All rectangles are bounding envelopes; linked dimensions retain verified source face names."]
     });
 
     if let Some(previous) = prev {
@@ -673,6 +730,67 @@ mod tests {
     use serde_json::{Value, json};
 
 
+
+    #[test]
+    fn three_view_reference_planes_of_box_use_real_3d_edges() {
+        let mut s=Session::default();
+        s.execute("solid.box",&json!({"length":90,"width":45,"height":8,
+            "body_name":"Plate"})).unwrap();
+        let d=preview(&mut s,&json!({"body":"Plate"})).unwrap()["drawing"].clone();
+        assert_eq!(d["geometry"]["top_edge_candidates"].as_array().unwrap().len(),4);
+        let views=&d["geometry"]["reference_views"];
+        assert_eq!(views["front"]["bounds"]["max_xy_mm"],json!([90,8]));
+        assert_eq!(views["right"]["bounds"]["max_xy_mm"],json!([45,8]));
+        assert_eq!(views["front"]["paths"].as_array().unwrap().len(),4);
+        assert_eq!(views["right"]["paths"].as_array().unwrap().len(),4);
+        assert_eq!(views["accuracy"],"unclassified_extreme_plane_brep_candidates_only");
+    }
+
+    #[test]
+    fn reference_panels_track_height_changes_with_undo_and_confirmation() {
+        let mut s=Session::default();
+        s.execute("parameters.add",&json!({"name":"Thickness","expression":"8 mm"})).unwrap();
+        s.execute("solid.box",&json!({"length":80,"width":40,"height":"Thickness",
+            "body_name":"Plate"})).unwrap();
+        let first=preview(&mut s,&json!({"body":"Plate"})).unwrap()["drawing"].clone();
+        s.execute("parameters.change",&json!({"name":"Thickness","expression":"12 mm"})).unwrap();
+        let pending=preview(&mut s,&json!({"body":"Plate","previous":first.clone()})).unwrap();
+        assert_eq!(pending["status"],"stale");
+        assert_eq!(pending["drawing"],first);
+        assert_eq!(pending["proposed"]["geometry"]["reference_views"]["front"]
+            ["bounds"]["max_xy_mm"],json!([80,12]));
+        s.execute("edit.undo",&json!({})).unwrap();
+        assert_eq!(preview(&mut s,&json!({"body":"Plate","previous":first}))
+            .unwrap()["status"],"current");
+    }
+
+    #[test]
+    fn old_drawing_without_reference_view_signature_is_compatible() {
+        let mut s=Session::default();
+        s.execute("solid.box",&json!({"length":50,"width":36,"height":7,
+            "body_name":"Plate"})).unwrap();
+        let mut old=preview(&mut s,&json!({"body":"Plate"})).unwrap()["drawing"].clone();
+        old["source"].as_object_mut().unwrap().remove("orthographic_edge_paths");
+        old["geometry"].as_object_mut().unwrap().remove("reference_views");
+        assert_eq!(preview(&mut s,&json!({"body":"Plate","previous":old}))
+            .unwrap()["status"],"current");
+    }
+
+    #[test]
+    fn changed_reference_source_and_invalid_path_are_never_current() {
+        let mut s=Session::default();
+        s.execute("solid.box",&json!({"length":64,"width":42,"height":9,
+            "body_name":"Plate"})).unwrap();
+        let d=preview(&mut s,&json!({"body":"Plate"})).unwrap()["drawing"].clone();
+        let mut mutated=d.clone();
+        mutated["source"]["orthographic_edge_paths"]["front"][0][0][0]=json!(0.5);
+        assert_eq!(preview(&mut s,&json!({"body":"Plate","previous":mutated}))
+            .unwrap()["status"],"stale");
+        let mut bad=d;
+        bad["source"]["orthographic_edge_paths"]["right"]=json!([[[0,0],["broken",9]]]);
+        assert_eq!(preview(&mut s,&json!({"body":"Plate","previous":bad}))
+            .unwrap()["status"],"stale");
+    }
 
     #[test]
     fn actual_chamfer_contour_requires_confirmation_even_with_unchanged_outer_dimensions() {

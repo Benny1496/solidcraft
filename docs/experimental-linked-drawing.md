@@ -546,3 +546,41 @@ upstream issue (HTTP 403 `Resource not accessible by integration`).
 Consequently **no upstream contact has been posted yet**; the owner must
 paste the prepared comment using their own logged-in GitHub account or grant
 an appropriate permission path separately. No upstream PR or merge has been made.
+
+## Test #26 development: native three-panel orthographic reference preview (22 October 2026)
+
+For a genuinely more useful in-app workflow, the existing egui
+`2D-Zeichnung (Testversion)` now shows **three related views**, without a
+new external program: the original manually dimensionable XY top view,
+a read-only *front XZ* reference panel and a read-only *right YZ*
+reference panel. The two new panels are derived from sampled **real
+B-rep edges lying on the frontmost (`Y=min`) and rightmost (`X=max`)
+extreme planes**, with measured physical bounding sizes. Each panel
+explicitly labels its projection, coordinates and uncertified accuracy.
+
+`drawing.preview` exposes `geometry.reference_views.front/right`,
+each with `projection`, `plane_mm`, `bounds` and `paths`; the
+separate numeric signature `source.orthographic_edge_paths` ensures
+changes to these planar edge candidates are not silently treated as
+current. Original drawings created before this field continue to work.
+Read-only panels display the **stored previous snapshot** while the
+original model is stale; they show new 3D geometry only after a user
+confirms an update. The linked top annotations and the metadata format
+remain unchanged. No released SolidCraft executable is implied.
+
+**Accuracy and limitations:** these are extreme-plane edge candidates,
+*not* visibility-classified complete orthographic drawings. In
+particular, no hidden-line removal, tangent silhouettes, behind-face
+hole outlines, sections or side-view dimensions are claimed. The
+top-panel rectangle and both reference rectangles are bounding
+envelopes, not verified manufacturing contours. Upstream RFC #860
+and W17 view definitions remain authoritative for future integration.
+
+All previously green **100 checks** remain in the unchanged manual
+GitHub workflow. **8 additional browser** scenarios (box, translated
+stock, changed length, changed thickness and undo, bores, legacy
+snapshot, persisted dimensions, chamfer), **2 real egui** tests and
+**4 Rust** tests have been added. Planned **#26: 114 checks**
+(58 browser, 23 GUI, 33 engine) — *not yet compiled or run in GitHub
+Actions*. A passed workflow is required before calling these
+additions successful.

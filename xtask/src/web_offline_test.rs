@@ -164,6 +164,14 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("drawing-contour-json", include_str!("browser_drawing_contour_json_test.js")),
         ("drawing-contour-bore-combo", include_str!("browser_drawing_contour_bore_combo_test.js")),
         ("drawing-contour-bodies", include_str!("browser_drawing_contour_bodies_test.js")),
+        ("drawing-triview-box", include_str!("browser_drawing_triview_box_test.js")),
+        ("drawing-triview-offset", include_str!("browser_drawing_triview_offset_test.js")),
+        ("drawing-triview-length", include_str!("browser_drawing_triview_length_test.js")),
+        ("drawing-triview-height", include_str!("browser_drawing_triview_height_test.js")),
+        ("drawing-triview-bores", include_str!("browser_drawing_triview_bores_test.js")),
+        ("drawing-triview-legacy", include_str!("browser_drawing_triview_legacy_test.js")),
+        ("drawing-triview-metadata", include_str!("browser_drawing_triview_metadata_test.js")),
+        ("drawing-triview-chamfer", include_str!("browser_drawing_triview_chamfer_test.js")),
     ];
     let scenario_count = scenarios.len();
     let mut passed = 0;
