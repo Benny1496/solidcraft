@@ -2,6 +2,57 @@
 
 This is a development-only first slice for testing model-linked 2D manufacturing drawing behavior. It is **not** a Drawing workspace, a persisted sheet, a standards-certified projection, an HLR engine, or a replacement for the published drawing roadmap (#860). All work is isolated on the fork's `feature/browser-automation` branch.
 
+## Primary product goal: native, upstream-ready 2D manufacturing drawings
+
+**This is the governing objective of this experimental work**, not merely
+increasing test counts or shipping a stand-alone preview. Build a usable,
+professional **2D technical drawing workspace inside the existing SolidCraft
+application and architecture** so that the fork maintainer can demonstrate it
+to the original SolidCraft developer and propose it for inclusion upstream.
+It must also be practically useful to the contributor and other end users.
+The contributor wants to present the first working implementation to the
+developer as early as feasible, without trading away reliability.
+
+**Integration requirement — non-negotiable for the proposed deliverable:**
+- Implement inside the normal SolidCraft repository, engine/model, egui
+  interface, file/project workflows and commands; do not create a separate
+  CAD application, external companion, or mandatory independently launched
+  service.
+- Keep changes isolated and reviewable in \`Benny1496/solidcraft\` on
+  \`feature/browser-automation\`. Do not change upstream or fork \`main\`
+  without an explicit separate decision. Aim for a conventional upstream
+  pull request with tests, docs, and a reproducible build. Do not assume the
+  original maintainer has accepted it or that zero upstream changes will
+  be required; architecture and code review decide that.
+- Model geometry is the source of truth. Build credible orthographic
+  projections (top/front/side), actual outlines and holes, reliable manually
+  placed dimensions, a persistent drawing/sheet, and practical print/PDF
+  output. Add real curves, visible/hidden edge treatment, and eventually
+  sections, tolerances, scales and title blocks without misleading geometry.
+- Changing the 3D body must mark its saved linked drawing as stale, including
+  when the drawing window was closed. On reopening show an explicit
+  **accept or decline** update dialog. Declining preserves the previous
+  drawing; accepting updates referenced geometry and measurements without
+  silently relinking to wrong faces or losing user-arranged dimensions.
+- Give the maintainer a compelling **working, user-testable end-to-end demo**,
+  not only command results: create a simple 3D plate with bores/fillets,
+  open its 2D workspace, switch views, place dimensions, save/reopen,
+  edit 3D, handle the confirmation dialog, and export a useful drawing.
+  Demonstrate with screenshots, clear documentation, reproducible steps,
+  regression evidence and a reviewable, native-code change set.
+
+**Prioritization rule:** finish this first reliable, integrated vertical
+slice as quickly as technically reasonable, and expand coverage around
+actual user workflows. Do not defer a usable GUI indefinitely in favor of
+ever larger numerical test matrices. Never claim a finished manufacturing
+drawing or upstream acceptance before it is demonstrated and verified.
+
+**Current boundary (22 October 2026):** the linked XY preview remains
+experimental and contour samples are not certified HLR/silhouettes.
+The standard distributed SolidCraft release does not automatically
+include fork development-branch changes. The full native drawing workspace
+and production-quality sheets/exports remain to be implemented.
+
 ## First use
 
 Create or open a 3D plate and run this command through the browser/CLI/engine command API:
