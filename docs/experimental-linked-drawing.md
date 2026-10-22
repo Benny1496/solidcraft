@@ -126,3 +126,31 @@ The entire batch is added to the **existing manual** `.github/workflows/solidcra
 - One non-fatal warning concerns GitHub's Node.js-20 deprecation of `actions/upload-artifact@v4`, unrelated to SolidCraft's drawing behavior.
 - This success confirms the experimental XY bounding-box drawing and its current behavior. It **does not** yet supply exact projected outer contours, native dimension references to individual holes, a professional drawing sheet, title block, precision tolerancing, or validated DXF exports.
 - HA project status file `/share/GitHub SolidCraft/PROJEKTSTATUS.md` was not updated/reverified because the last request was denied by the connector. The GitHub documentation records the current verified state until access is explicitly reauthorized.
+
+## Step toward 3D→2D manufacturing measurements (pending CI)
+
+**Verified predecessor:** workflow #15 passed 15/15 named browser scenarios, the reference four-hole plate, 6/6 drawing UI interactions, and 6/6 drawing engine tests. The current branch adds code and tests but **has not yet passed its own CI run**.
+
+The `drawing.preview` command now derives read-only `drawing.geometry.cylinder_dimensions[]` from real measured vertical B-rep cylinder surfaces, not copied raw dimensions or a sketch feature's unverified parameters. Each entry contains:
+- `center_mm: [x,y]` in world XY;
+- `diameter_mm`, derived from twice the measured cylinder radius;
+- `x_from_left_mm` and `y_from_bottom_mm`, measured from the body's XY *bounding envelope*, in millimetres;
+- `reference_status: "unverified"` (crucial: **NOT a permanently stable hole identity**).
+
+The 2D egui preview now paints a temporary `Ø` diameter leader by each circle, plus a read-only measured-dimensions table listing the provisional cylinder number, Ø, X, and Y. The table and drawing are visible after saving; existing saved preview snapshots are refreshed for display when current, and the old drawing remains visible when stale until the operator confirms. Existing tests for stale warnings and saved overall-dimension positions remain.
+
+### What is actually associative?
+
+The measured **values** are derived anew from current 3D geometry (and after a model edit, appear as `proposed` until accepted). In this limited sense, the 3D-derived measurements *follow the model*. They are **not yet true manufacturing drawing dimensions anchored to persistent feature identities**. Their ordinal table numbers change when geometry changes; they have no persistent dimension layout, and exterior cylinders/bosses may appear. The XY rectangle is still a bounding-envelope approximation, not a certified silhouette. Do not call this a completed Fusion 360-style drawing workspace. Work remaining includes stable model-reference provenance, selectable and editable dimensional annotations, measured centre-to-centre spacings, angles and radii, proper sheets with title blocks, views/projections and print/DXF.
+
+### Consolidated verification suite, next workflow
+
+The existing manual workflow now includes **19 named browser CAD scenarios**, plus its reference plate and browser command-API smoke, **8 real egui interaction tests**, and **8 drawing engine Rust tests** (36 counted cases plus API). Four new named browser scenarios exercise:
+1. Four parametrically placed Ø8 cylinders whose plate width and diameters change (Ø8→Ø10, 150→180 mm): exact 3D-measured Ø/X/Y transfer, unchanged old drawing, explicit accepted preview.
+2. A translated plate with negative world coordinates: X/Y offsets are measured from the actual left/bottom envelope, rather than treating the global origin as zero.
+3. 0→1→2 new bore cylinders with undo/redo: stale detection and preservation of unconfirmed drawing values.
+4. A twelve-cylinder matrix with Ø4/Ø6/Ø8: real measured diameter, centre offsets and consistency between drawing circles and measured data.
+
+The additional egui tests verify that the Ø/X/Y measurement table is actually shown and that a second 3D cylinder is withheld until the user clicks to accept the stale drawing. The two new native engine tests check translated XY coordinate offsets and accepted-vs-pending dimensions after adding a cylinder.
+
+All added scripts are included in the existing browser suite; the Rust GUI/engine suites are run in the same workflow. A manual GitHub Actions run on `feature/browser-automation` must still validate the new code and tests before claiming success. The Home Assistant project-status file remains **unverified / unsynchronized** because its connector last denied access.
