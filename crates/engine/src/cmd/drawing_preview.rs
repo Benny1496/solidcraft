@@ -411,7 +411,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
         "annotations": annotated,
         "label_positions": layout,
         "warnings": if !holes.is_empty() {
-            vec!["Measured cylinder diameters and XY offsets are provisional, not confirmed hole callouts. No persistent hole/feature reference exists; never reattach drawing dimensions by list order"]
+            vec!["Cylinders are measured but not necessarily drilled holes; only user-selected dimensions with unique, history-verified face names are safely linked. The outer XY rectangle is not a true manufacturing projection"]
         } else {
             Vec::new()
         }
