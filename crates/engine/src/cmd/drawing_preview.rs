@@ -117,7 +117,8 @@ fn resolve_annotations(previous: Option<&Value>, cylinders: &[Value]) -> Result<
         let matches: Vec<&Value> = cylinders.iter().filter(|d|
             d["eligible_face_name"].as_str() == Some(face)).collect();
         let resolved = matches.len() == 1;
-        let original = a["value_mm"].as_f64().filter(|v| v.is_finite());
+        let original = a["value_mm"].as_f64().filter(|v| v.is_finite())
+            .or_else(|| a["last_value_mm"].as_f64().filter(|v| v.is_finite()));
         let value = if resolved { annotation_value(matches[0],kind) } else { None };
         let center = if resolved { matches[0]["center_mm"].clone() }
             else { a.get("center_mm").cloned().unwrap_or(Value::Null) };
