@@ -281,7 +281,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
     if faces.len() > 2048 {
         return Err(bad(CMD, "too many faces for drawing preview"));
     }
-    let mut holes: Vec<[f64; 3]> = Vec::new();
+    let mut holes: Vec<([f64; 3], Vec<String>)> = Vec::new();
     for face in faces {
         let Some(cylinder) = face.get("cylinder") else { continue };
         let origin = coords(&cylinder["origin"], 3).ok_or_else(|| bad(CMD, "invalid cylinder origin"))?;
@@ -303,17 +303,28 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
         {
             return Err(bad(CMD, "cylinder is not contained by the XY envelope"));
         }
-        if !holes.iter().any(|h| (h[0] - x).abs() < 0.01 && (h[1] - y).abs() < 0.01
-            && (h[2] - diameter).abs() < 0.01)
+        let exact_name = face["name"].as_str().filter(|_| face["exact"] == true)
+            .filter(|n| !n.is_empty() && n.len() <= 1024).map(str::to_string);
+        if let Some(group) = holes.iter_mut().find(|h|
+            (h.0[0] - x).abs() < 0.01 && (h.0[1] - y).abs() < 0.01
+            && (h.0[2] - diameter).abs() < 0.01)
         {
+            if let Some(n) = exact_name {
+                if !group.1.contains(&n) { group.1.push(n); }
+            }
+        } else {
             if holes.len() >= 64 {
                 return Err(bad(CMD, "more than 64 cylinders"));
             }
-            holes.push([x, y, diameter]);
+            holes.push(([x, y, diameter], exact_name.into_iter().collect()));
         }
     }
-    holes.sort_by(|a, b| a[1].total_cmp(&b[1]).then(a[0].total_cmp(&b[0]))
-        .then(a[2].total_cmp(&b[2])));
+    holes.sort_by(|a, b| a.0[1].total_cmp(&b.0[1])
+        .then(a.0[0].total_cmp(&b.0[0]))
+        .then(a.0[2].total_cmp(&b.0[2])));
+    let eligible_faces: Vec<Vec<String>> = holes.iter().map(|h| h.1.clone()).collect();
+    let holes: Vec<[f64; 3]> = holes.into_iter().map(|h| h.0).collect();
+    let measured_cylinders = provisional_cylinder_dimensions(&holes,&min,&eligible_faces);
 
     // This is deliberately geometry-based rather than only the user's command
     // parameters: the measured 3D body is the authority for freshness.
@@ -344,7 +355,17 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
             Some(v)
         }
     };
-    let layout = label_positions(prev.and_then(|d| d.get("label_positions")), &current_labels)?;
+    let annotated = resolve_annotations(prev.and_then(|d| d.get("annotations")), &measured_cylinders)?;
+    let mut label_defaults = current_labels;
+    for annotation in &annotated {
+        if let (Some(id), Some(c)) = (
+            annotation["id"].as_str(),
+            coords(&annotation["center_mm"],2)
+        ) {
+            label_defaults[id] = json!([c[0]+12.0,c[1]+12.0]);
+        }
+    }
+    let layout = label_positions(prev.and_then(|d| d.get("label_positions")), &label_defaults)?;
     let drawing = json!({
         "format": "solidcraft-drawing-preview/1",
         "body": name,
@@ -355,13 +376,14 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
             "outline": { "type": "rectangle_envelope", "min_xy_mm": [mm(min[0]),mm(min[1])],
                          "max_xy_mm": [mm(max[0]),mm(max[1])] },
             "cylinders": holes.iter().map(|h| json!({"center_mm":[h[0],h[1]],"diameter_mm":h[2]})).collect::<Vec<_>>(),
-            "cylinder_dimensions": provisional_cylinder_dimensions(&holes, &min),
+            "cylinder_dimensions": measured_cylinders,
         },
         "dimensions": [
             {"id":"overall_x","kind":"horizontal","value_mm":dimensions[0]},
             {"id":"overall_y","kind":"vertical","value_mm":dimensions[1]}
         ],
         "svg": svg_preview(&min, &max, &holes, &layout),
+        "annotations": annotated,
         "label_positions": layout,
         "warnings": if !holes.is_empty() {
             vec!["Measured cylinder diameters and XY offsets are provisional, not confirmed hole callouts. No persistent hole/feature reference exists; never reattach drawing dimensions by list order"]
@@ -371,7 +393,11 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
     });
 
     if let Some(previous) = prev {
-        let stale = !source_matches(&previous["source"], &drawing["source"]);
+        let missing = drawing["annotations"].as_array().is_some_and(|a| a.iter().any(|d|
+            d["reference_status"] == "missing_reference" && previous["annotations"]
+                .as_array().is_some_and(|old| old.iter().any(|p|
+                    p["id"] == d["id"] && p["reference_status"] == "resolved"))));
+        let stale = !source_matches(&previous["source"], &drawing["source"]) || missing;
         if stale && !accept {
             return Ok(json!({
                 "status":"stale",
