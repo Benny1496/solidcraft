@@ -824,4 +824,144 @@ mod tests {
             ["annotations"][0]["face_name"].as_str().is_some());
     }
 
+    #[test]
+    fn clicking_2d_cylinder_selects_verified_face_and_adds_diameter_dimension() {
+        let mut h=drawing_harness();
+        h.app.run("solid.hole",json!({
+            "name":"DirectlySelectedHole","position":[17,16,8],"diameter":8
+        })).unwrap();
+        h.frames(3);
+        assert!(handle_at("drawing:cylinder:0").is_some(),
+            "the actual drawing must expose a real mouse hit target");
+        assert!(h.app.drawing_ui.selected_face.is_none());
+        // Before the drawing is saved a circle cannot be used for editing.
+        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.frames(2);
+        assert!(h.app.drawing_ui.selected_face.is_none(),
+            "unsaved drawing is deliberately read-only");
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.frames(3);
+        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.frames(2);
+        assert!(h.app.drawing_ui.selected_face.is_some(),
+            "real click directly on the projected circle selects its exact 3D face");
+        assert!(h.widget("Ø aus Auswahl").is_some());
+        h.step(&json!({"widget":"Ø aus Auswahl"})).unwrap();
+        h.frames(3);
+        let saved=h.app.session.doc.metadata.get(KEY).unwrap();
+        assert_eq!(saved["annotations"].as_array().unwrap().len(),1);
+        assert_eq!(saved["annotations"][0]["kind"],"diameter");
+        assert_eq!(saved["annotations"][0]["reference_status"],"resolved");
+        assert_eq!(saved["annotations"][0]["value_mm"].as_f64(),Some(8.0));
+        assert_eq!(saved["annotations"][0]["face_name"].as_str(),
+            h.app.drawing_ui.selected_face.as_deref());
+        assert!(h.widget("X aus Auswahl").is_some(),
+            "the same clicked face can be used for another independent dimension");
+    }
+
+    #[test]
+    fn direct_2d_selection_chooses_exact_hole_not_neighbor_and_three_dimension_types() {
+        let mut h=drawing_harness();
+        for (name,x,y,diameter) in [
+            ("Smaller",17,12,6),("Larger",71,33,10)
+        ] {
+            h.app.run("solid.hole",json!({
+                "name":name,"position":[x,y,8],"diameter":diameter
+            })).unwrap();
+        }
+        h.frames(3);
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.frames(2);
+        h.step(&json!({"click":"drawing:cylinder:1"})).unwrap();
+        h.frames(2);
+        let selected=h.app.drawing_ui.selected_face.clone().unwrap();
+        let model=h.app.session.doc.metadata.get(KEY).unwrap();
+        let second=model["geometry"]["cylinder_dimensions"][1]["eligible_face_name"].as_str().unwrap();
+        assert_eq!(selected,second);
+        h.step(&json!({"widget":"Ø aus Auswahl"})).unwrap();
+        h.frames(2);
+        h.step(&json!({"widget":"X aus Auswahl"})).unwrap();
+        h.frames(2);
+        h.step(&json!({"widget":"Y aus Auswahl"})).unwrap();
+        h.frames(3);
+        let saved=h.app.session.doc.metadata.get(KEY).unwrap();
+        let labels=saved["annotations"].as_array().unwrap();
+        assert_eq!(labels.len(),3);
+        assert!(labels.iter().all(|a|a["face_name"].as_str()==Some(selected.as_str())));
+        for (kind,val) in [("diameter",10.0),("x_from_left",71.0),("y_from_bottom",33.0)] {
+            let found=labels.iter().find(|a|a["kind"].as_str()==Some(kind)).unwrap();
+            assert_eq!(found["value_mm"].as_f64(),Some(val));
+        }
+        assert!(h.widget("Ø aus Auswahl ✓").is_some(),
+            "duplicate dimension selection visibly disabled");
+        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.frames(2);
+        assert_ne!(h.app.drawing_ui.selected_face.as_deref(),Some(selected.as_str()),
+            "the other circle has its own distinct history-verified source");
+    }
+
+    #[test]
+    fn unsaved_or_stale_drawing_cannot_select_a_new_2d_dimension() {
+        let mut h=drawing_harness();
+        h.app.run("solid.hole",json!({
+            "name":"First","position":[18,12,8],"diameter":6
+        })).unwrap();
+        h.frames(3);
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.frames(2);
+        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.frames(2);
+        assert!(h.app.drawing_ui.selected_face.is_some());
+        h.app.run("solid.hole",json!({
+            "name":"Second","position":[64,31,8],"diameter":10
+        })).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some());
+        assert!(h.app.drawing_ui.selected_face.is_none(),
+            "selected 3D reference cleared while an old drawing is being displayed");
+        assert!(h.widget("Ø aus Auswahl").is_none(),
+            "no annotation may be inserted before confirming a model revision");
+        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.frames(2);
+        assert!(h.app.drawing_ui.selected_face.is_none());
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["annotations"].as_array().unwrap().len(),0);
+        h.step(&json!({"widget":"Zeichnung aktualisieren"})).unwrap();
+        h.frames(3);
+        h.step(&json!({"click":"drawing:cylinder:1"})).unwrap();
+        h.frames(2);
+        assert!(h.app.drawing_ui.selected_face.is_some(),
+            "click selection works again after explicit drawing update");
+    }
+
+    #[test]
+    fn direct_2d_selection_can_be_cleared_and_is_not_saved_as_drawing_metadata() {
+        let mut h=drawing_harness();
+        h.app.run("solid.hole",json!({
+            "name":"OnlyHole","position":[18,12,8],"diameter":6
+        })).unwrap();
+        h.frames(3);
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.frames(3);
+        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.frames(2);
+        assert!(h.widget("Auswahl aufheben").is_some());
+        assert!(h.app.session.doc.metadata.get(KEY).unwrap()
+            .get("selected_face").is_none(),"temporary selection never belongs in the CAD file");
+        h.step(&json!({"widget":"Auswahl aufheben"})).unwrap();
+        h.frames(2);
+        assert!(h.app.drawing_ui.selected_face.is_none());
+        assert!(h.widget("Ø aus Auswahl").is_none());
+        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.frames(2);
+        assert!(h.app.drawing_ui.selected_face.is_some());
+        h.app.drawing_ui.open=false;
+        h.frames(2);
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        assert!(h.app.drawing_ui.selected_face.is_none(),
+            "reopening the window must not inherit an accidental user selection");
+        assert!(h.widget("Ø aus Auswahl").is_none());
+    }
+
 }
