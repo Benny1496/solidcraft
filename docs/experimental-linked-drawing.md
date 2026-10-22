@@ -505,3 +505,44 @@ manually on `feature/browser-automation`; tests must not be reported
 as passed until its GitHub Actions log verifies success. General
 hidden-line removal, certified silhouette and DXF export remain
 outside this experimental scope.
+
+## Upstream RFC #860 coordination and contribution scope (22 October 2026)
+
+The canonical SolidCraft project has a **public, active Drawings plan** in
+[upstream RFC #860](https://github.com/tangency-labs/solidcraft/issues/860).
+Its staged roadmap distinguishes M1 independent geometry/snapshot tools, M2
+integrated, saved/reopened/updated single-part drawings, and later industrial
+part-and-assembly coverage. The contributor's goal is a practical native
+3D-to-2D workflow that fits this design, not a competing application.
+
+**Do not claim or duplicate packages already underway.** On 22 October 2026
+CamWight has active issues/draft PRs for sheet/paper primitives and exports
+(W10/W21/W22, [#4890](https://github.com/tangency-labs/solidcraft/issues/4890)),
+drawing references/updates (W13/W14, [#4892](https://github.com/tangency-labs/solidcraft/issues/4892)),
+the native workspace/end-to-end M2 checkpoint (W16/W23,
+[#4894](https://github.com/tangency-labs/solidcraft/issues/4894)),
+dimension formatting/annotations (W09/W19/W20,
+[#4896](https://github.com/tangency-labs/solidcraft/issues/4896)),
+view frames ([#4816](https://github.com/tangency-labs/solidcraft/issues/4816)),
+and storage/records/commands ([#3890](https://github.com/tangency-labs/solidcraft/issues/3890)).
+Other contributors own section geometry and hidden-line work.
+Work-package ownership is subject to maintainer guidance; a draft is not a
+finished or merged product. Do not assume upstream will accept this prototype's
+temporary `drawing.preview` metadata contract.
+
+**Proposed cooperative contribution** (pending acknowledgement in #860):
+small, original, analytic workshop-oriented plate fixtures; repeatable
+native/browser acceptance testing of saved/reopened drawings, deferred update,
+rejected/accepted changes, lost references, undo and hand-placed dimensions;
+and hands-on UX feedback about the confirmation flow and drawing output.
+If upstream requests an isolated code slice, first align with its current
+W11/W12/W13/W14/W16/W17/W19 contracts and avoid an alternate document model.
+
+**Connection status:** A first substantive comment was drafted for #860 with
+the public fork and the verified [run #25](https://github.com/Benny1496/solidcraft/actions/runs/39787639840)
+(**100/100 scoped checks passing: 50 browser, 21 egui, 29 Rust**).
+The connected GitHub integration was denied permission to comment on the
+upstream issue (HTTP 403 `Resource not accessible by integration`).
+Consequently **no upstream contact has been posted yet**; the owner must
+paste the prepared comment using their own logged-in GitHub account or grant
+an appropriate permission path separately. No upstream PR or merge has been made.
