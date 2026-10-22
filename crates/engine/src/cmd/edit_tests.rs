@@ -807,3 +807,59 @@ fn renaming_a_feature_evaluates_nothing() {
     fresh.refresh();
     assert_eq!(failed(&s), failed(&fresh));
 }
+
+ 
+/// A feature created after Undo is a new historical object even if its geometry
+/// equals the deleted feature. Its face name must not silently revalidate a
+/// previously saved Drawing annotation; see the W23 replacement-bore test.
+#[test]
+fn undo_then_replacement_hole_gets_fresh_feature_and_face_identity() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({
+        "length": 150, "width": 80, "height": 10, "body_name": "Plate"
+    }));
+    run(&mut s, "solid.hole", json!({
+        "name": "B", "position": [70, 50, 10], "diameter": 8
+    }));
+    run(&mut s, "solid.hole", json!({
+        "name": "A", "position": [30, 20, 10], "diameter": 8
+    }));
+    let id_a = s.doc.find_feature("A").unwrap().id;
+    let first = run(&mut s, "drawing.preview", json!({"body": "Plate"}));
+    let original = first["drawing"].clone();
+    let face_a = original["geometry"]["cylinder_dimensions"].as_array().unwrap()
+        .iter().find(|c| c["center_mm"][0].as_f64() == Some(30.0))
+        .unwrap()["eligible_face_name"].as_str().unwrap().to_string();
+    let saved = run(&mut s, "drawing.annotation.add", json!({
+        "body": "Plate", "previous": original,
+        "face_name": face_a, "kind": "diameter", "position_mm": [20, 90]
+    }))["drawing"].clone();
+
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.find_feature("A").is_none(), "Undo removes A");
+    let deleted = run(&mut s, "drawing.preview", json!({"body": "Plate", "previous": saved}));
+    assert_eq!(deleted["status"], "stale");
+    assert_eq!(deleted["proposed"]["annotations"][0]["reference_status"], "missing_reference");
+
+    run(&mut s, "solid.hole", json!({
+        "name": "ReplacementA", "position": [30, 20, 10], "diameter": 8
+    }));
+    let id_replacement = s.doc.find_feature("ReplacementA").unwrap().id;
+    assert!(id_replacement > id_a, "feature ids are never recycled after Undo");
+    let pending = run(&mut s, "drawing.preview", json!({"body": "Plate", "previous": saved}));
+    assert_eq!(pending["status"], "stale", "identical geometry must still stale the Drawing");
+    let replacement_face = pending["proposed"]["geometry"]["cylinder_dimensions"]
+        .as_array().unwrap().iter()
+        .find(|c| c["center_mm"][0].as_f64() == Some(30.0))
+        .unwrap()["eligible_face_name"].as_str().unwrap().to_string();
+    assert_ne!(replacement_face, face_a, "new feature must have a new face name");
+    let annotation = &pending["proposed"]["annotations"][0];
+    assert_eq!(annotation["reference_status"], "missing_reference");
+    assert!(annotation["value_mm"].is_null());
+    assert_eq!(annotation["last_value_mm"].as_f64(), Some(8.0));
+    assert_eq!(pending["proposed"]["label_positions"]["linked_cyl_1"], json!([20, 90]));
+
+    // The allocation watermark is stored with the document for future edits.
+    let reopened = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap();
+    assert!(reopened.next_id > id_replacement);
+}
