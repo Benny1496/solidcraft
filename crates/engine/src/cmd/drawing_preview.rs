@@ -870,4 +870,62 @@ mod tests {
         let _=std::fs::remove_file(path);
     }
 
+    #[test]
+    fn only_uniquely_verified_faces_can_be_selected_on_the_2d_circle() {
+        let cylinders=[
+            [12.0, 15.0, 6.0],
+            [35.0, 15.0, 8.0],
+            [60.0, 15.0, 10.0],
+            [85.0, 15.0, 10.0],
+        ];
+        // The preview collects only history-exact names into this table.
+        // Nonexact source faces must not enter it. Two groups with the same
+        // "verified" name are still ambiguous and remain unselectable.
+        let certified=vec![
+            vec!["F11:side".to_string()],
+            vec![],
+            vec!["Fshared:side".to_string()],
+            vec!["Fshared:side".to_string()],
+        ];
+        let measured=super::provisional_cylinder_dimensions(
+            &cylinders,&[0.0,0.0,0.0],&certified);
+        assert_eq!(measured.len(),4);
+        assert_eq!(measured[0]["eligible_face_name"],"F11:side");
+        assert!(measured[1]["eligible_face_name"].is_null());
+        assert!(measured[2]["eligible_face_name"].is_null());
+        assert!(measured[3]["eligible_face_name"].is_null());
+        assert!(measured.iter().all(|d|d["reference_status"] == "unverified"),
+            "a geometrically projected cylinder is not necessarily a drilled hole");
+    }
+
+    #[test]
+    fn reversing_cylinder_order_does_not_move_an_annotation_to_another_bore() {
+        let previous=json!([
+            {"id":"linked_cyl_1","face_name":"F1:bore","kind":"diameter",
+             "value_mm":6,"center_mm":[20,20]},
+            {"id":"linked_cyl_2","face_name":"F2:bore","kind":"diameter",
+             "value_mm":10,"center_mm":[85,45]},
+            {"id":"linked_cyl_3","face_name":"F1:bore","kind":"x_from_left",
+             "value_mm":20,"center_mm":[20,20]}
+        ]);
+        // Simulate a topology rebuild where the order, diameters and
+        // positions change. Never resolve by sorted index or closest radius.
+        let current=json!([
+            {"eligible_face_name":"F2:bore","center_mm":[17,19],
+             "diameter_mm":12,"x_from_left_mm":17,"y_from_bottom_mm":19},
+            {"eligible_face_name":"F1:bore","center_mm":[83,44],
+             "diameter_mm":8,"x_from_left_mm":83,"y_from_bottom_mm":44}
+        ]);
+        let updated=super::resolve_annotations(
+            Some(&previous),current.as_array().unwrap()).unwrap();
+        assert_eq!(updated[0]["id"],"linked_cyl_1");
+        assert_eq!(updated[0]["face_name"],"F1:bore");
+        assert_eq!(updated[0]["value_mm"].as_f64(),Some(8.0));
+        assert_eq!(updated[1]["face_name"],"F2:bore");
+        assert_eq!(updated[1]["value_mm"].as_f64(),Some(12.0));
+        assert_eq!(updated[2]["face_name"],"F1:bore");
+        assert_eq!(updated[2]["value_mm"].as_f64(),Some(83.0));
+        assert_eq!(updated[2]["reference_status"],"resolved");
+    }
+
 }
