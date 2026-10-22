@@ -5,6 +5,12 @@ name: SolidCraft Browser Smoke (manual)
 
 on:
   workflow_dispatch:
+    inputs:
+      oracle_only:
+        description: 'Only test the official #4950 workshop oracle (skip experimental browser suite)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,6 +21,7 @@ concurrency:
 
 jobs:
   browser-test:
+    if: \${{ !inputs.oracle_only }}
     name: Build WebAssembly and test browser API
     runs-on: ubuntu-latest
     timeout-minutes: 90
