@@ -35,22 +35,42 @@ jobs:
             | tar -xz -C "$HOME/.local/bin" trunk
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Check all CAD browser scenarios for JavaScript syntax
+        id: syntax
+        continue-on-error: true
         shell: bash
         run: |
+          failed=0
           for script in xtask/src/browser_*_test.js; do
             echo "Checking $script"
-            node --check "$script"
+            if node --check "$script"; then
+              echo "PASS $script"
+            else
+              echo "::error file=$script::JavaScript syntax check failed"
+              failed=$((failed + 1))
+            fi
           done
+          echo "JavaScript syntax failures: $failed"
+          test "$failed" -eq 0
       - name: Build SolidCraft web app
+        id: build
+        if: ${{ !cancelled() }}
+        continue-on-error: true
         working-directory: apps/solidcraft-web
         run: trunk build --release --public-url ./
       - name: Run SolidCraft browser command API smoke test
+        id: browser
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true
         run: cargo xtask web-api-test --site dist/web
       - name: Test drawing window mouse interactions in real egui harness
+        id: gui
         if: ${{ !cancelled() }}
+        continue-on-error: true
         run: cargo test -p solidcraft-ui-egui drawing_ui::tests --lib -- --nocapture
       - name: Test drawing geometry signatures and invalid snapshots in Rust engine
+        id: engine
         if: ${{ !cancelled() }}
+        continue-on-error: true
         run: cargo test -p solidcraft-engine drawing_preview --lib -- --nocapture
       - name: Save built web app even when a CAD test fails
         if: always()
@@ -60,3 +80,36 @@ jobs:
           path: dist/web/
           if-no-files-found: ignore
           retention-days: 3
+      - name: Summarize every test and fail the workflow if any check failed
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          SYNTAX: ${{ steps.syntax.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          BROWSER: ${{ steps.browser.outcome }}
+          GUI: ${{ steps.gui.outcome }}
+          ENGINE: ${{ steps.engine.outcome }}
+        run: |
+          echo "## SolidCraft consolidated test results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Independent test group | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| --- | --- |" >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          for entry in "JavaScript syntax|$SYNTAX" "WebAssembly build|$BUILD" "Browser API + CAD suite|$BROWSER" "Real egui drawing interactions|$GUI" "Drawing engine regression|$ENGINE"; do
+            name="${entry%%|*}"
+            result="${entry#*|}"
+            if [ "$result" = "success" ]; then
+              echo "| $name | PASS |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| $name | $result |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::$name did not pass ($result)"
+              failed=$((failed + 1))
+            fi
+          done
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Test groups not passing: $failed**" >> "$GITHUB_STEP_SUMMARY"
+          echo "Consolidated test groups not passing: $failed"
+          # Preserve a truthful red workflow, but only AFTER independent
+          # suites have run. A skipped browser test after a failed build
+          # is an unverified check, never a green result.
+          test "$failed" -eq 0
