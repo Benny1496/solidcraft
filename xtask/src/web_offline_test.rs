@@ -135,6 +135,10 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("drawing-dim-offset", include_str!("browser_drawing_dim_offset_test.js")),
         ("drawing-dim-mutations", include_str!("browser_drawing_dim_mutations_test.js")),
         ("drawing-dim-many", include_str!("browser_drawing_dim_many_test.js")),
+        ("linked-face-diameter", include_str!("browser_drawing_linked_diameter_test.js")),
+        ("linked-face-dimensions", include_str!("browser_drawing_linked_dimensions_test.js")),
+        ("linked-face-removed", include_str!("browser_drawing_linked_missing_test.js")),
+        ("linked-face-rejections", include_str!("browser_drawing_linked_rejections_test.js")),
     ];
     let scenario_count = scenarios.len();
     let mut passed = 0;
