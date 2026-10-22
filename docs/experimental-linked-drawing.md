@@ -315,3 +315,21 @@ Static verification checked the nine replacements, absence of the invalid cylind
 All four GUI tests that failed in #20 now pass with the nine structured handle locators. This verifies actual circle selection, exact selection of the second cylinder and its diameter/X/Y annotations, switching selection, blocking edits on unsaved/stale drawings, resuming after explicit update, clearing selection and resetting it on reopening without persisting transient state. No production-code change was needed for this correction.
 
 The earlier pending-validation notices are superseded by this result for the tested SHA. The prototype remains limited to the XY bounding envelope and verified cylinder references; true silhouette projection, arbitrary edge selection, centre-to-centre dimensions and production drawing sheets/export remain outside this test claim. This update changes documentation only.
+
+
+## Two-centre associative distance — prepared after Run #21 (22 October 2026)
+
+**Not yet CI-verified.** The last confirmed run remains #21 (60/60). This increment adds the straight-line **XY centre-to-centre distance**, including diagonal pairs, between two uniquely verified cylinder faces. It does not introduce separate horizontal/vertical pair dimensions or arbitrary edge selection.
+
+In the drawing window: click a circle, choose **Ersten Mittelpunkt merken**, click the other circle, then **Mitte-zu-Mitte setzen**. The saved annotation stores both exact face identities. A reversed pair is the same dimension and cannot be duplicated. The first-point selection is transient and cleared on stale geometry, body changes, clearing the selection, and reopening.
+
+The existing `drawing.annotation.add` command accepts `kind: "center_distance"` and `second_face_name`. Both names must resolve uniquely to different measured centres. UI/SVG show an M–M label, the two referenced centres and connecting lines; labels remain draggable. This remains prototype graphics, not standards-certified dimension styling.
+
+**3D-to-2D confirmation is mandatory:** changing the model does not mutate the saved drawing. When the closed drawing is reopened, the existing warning offers **Zeichnung aktualisieren** or **Alte Zeichnung beibehalten**. Acceptance recomputes the distance from both source faces and preserves manual label coordinates. A missing/ambiguous face leaves the annotation unresolved with null current value, historical value and a question mark, never reassigned by proximity. With the drawing closed, no popup interrupts 3D work.
+
+Tests prepared in the existing non-fail-fast workflow:
+- One browser scenario: analytic 3–4–5 distance, parametric change, explicit acceptance, position retention, reverse duplicates/invalid references, Undo/Redo, removed second bore and repeated preview.
+- Two Rust tests: both references and reordered cylinders, lost first/second references and malformed pairs; real save/open followed by a parameter edit, unchanged saved snapshot until acceptance and retained layout.
+- Two real egui tests: two-circle mouse selection, label drag, closing before a 3D edit, popup on reopening, declining/reopening/accepting; clearing/stale selection reset.
+
+Expected bundle: **30 browser checks (28 named + 2 base), 17 GUI, 18 Rust = 65 checks**. Existing 60 tests and workflow continuation rules retained. JavaScript syntax checked with Node; source diff reviewed. Rust compilation, full tests and visual validation remain pending on GitHub (no local Rust toolchain). A pending design-format note records the new persisted annotation fields; no migration of older drawings is needed. Run a new manual workflow on `feature/browser-automation`.

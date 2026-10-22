@@ -143,6 +143,7 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("drawing-click-layout", include_str!("browser_drawing_click_layout_test.js")),
         ("drawing-click-invalid", include_str!("browser_drawing_click_invalid_test.js")),
         ("drawing-click-translated", include_str!("browser_drawing_click_translated_test.js")),
+        ("drawing-centre-distance", include_str!("browser_drawing_center_distance_test.js")),
     ];
     let scenario_count = scenarios.len();
     let mut passed = 0;

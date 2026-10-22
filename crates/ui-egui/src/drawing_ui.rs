@@ -25,6 +25,7 @@ pub struct State {
     /// UI-only selection of a certified 3D cylindrical face; never persisted as
     /// an annotation until the user explicitly picks a dimension type.
     selected_face: Option<String>,
+    distance_anchor: Option<String>,
 }
 
 fn xy(v: &Value) -> Option<[f32; 2]> {
@@ -267,8 +268,16 @@ fn render_plate(ui: &mut egui::Ui, drawing: &mut Value, editable: bool, selected
             "diameter" => format!("{prefix}Ø{value:.2} mm"),
             "x_from_left" => format!("{prefix}X {value:.2} mm"),
             "y_from_bottom" => format!("{prefix}Y {value:.2} mm"),
+            "center_distance" => format!("{prefix}M–M {value:.2} mm"),
             _ => continue,
         };
+        if kind == "center_distance"
+            && let Some(second) = xy(&annotation["second_center_mm"])
+        {
+            let second = map(second);
+            ui.painter().line_segment([from,second],Stroke::new(0.9,color));
+            ui.painter().line_segment([second,at],Stroke::new(0.9,color));
+        }
         stopped |= draw_label(ui,drawing,id,text,at,scale,editable,color);
     }
     stopped
@@ -339,6 +348,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let mut request_save:Option<Value>=None;
     let mut request_layout_save=false;
     let mut request_annotation:Option<(String,String)>=None;
+    let mut request_second_face:Option<String>=None;
     let names=get_body_names(app);
     crate::frame::window(ctx, "2D-Zeichnung (Testversion)", crate::frame::Width::Wide)
         .id(egui::Id::new("sc_drawing_preview"))
@@ -355,6 +365,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 });
             if chosen != state.body {
                 state.selected_face = None;
+                state.distance_anchor = None;
                 state.body=chosen;
                 state.snapshot=app.session.doc.metadata.get(KEY)
                     .filter(|v| v["body"].as_str() == Some(state.body.as_str())).cloned();
@@ -396,7 +407,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             ui.separator();
             // Edit the label coordinates on a draft. Persist only when drag ends.
             let editable = state.snapshot.is_some() && state.proposed.is_none();
-            if state.proposed.is_some() {state.selected_face = None;}
+            if state.proposed.is_some() {state.selected_face = None; state.distance_anchor = None;}
             if render_plate(ui,&mut drawing,editable,&mut state.selected_face) {
                 state.layout_changed=true;
                 request_layout_save=true;
@@ -429,18 +440,47 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                                     request_annotation=Some((face.to_string(),kind.to_string()));
                                 }
                             }
+                            if ui.button("Ersten Mittelpunkt merken").clicked() {
+                                state.distance_anchor=Some(face.clone());
+                            }
+                            if let Some(first) = state.distance_anchor.clone() {
+                                let exists=drawing["annotations"].as_array().is_some_and(|list|
+                                    list.iter().any(|a| a["kind"] == "center_distance"
+                                        && ((a["face_name"].as_str() == Some(first.as_str())
+                                            && a["second_face_name"].as_str() == Some(face.as_str()))
+                                            || (a["face_name"].as_str() == Some(face.as_str())
+                                            && a["second_face_name"].as_str() == Some(first.as_str())))));
+                                if ui.add_enabled(first != face && !exists,
+                                    egui::Button::new("Mitte-zu-Mitte setzen")).clicked() {
+                                    request_annotation=Some((first,"center_distance".to_string()));
+                                    request_second_face=Some(face.clone());
+                                }
+                            }
                             if ui.button("Auswahl aufheben").clicked() {
+                                state.distance_anchor=None;
                                 state.selected_face=None;
                             }
                         });
+                        if let Some(first) = state.distance_anchor.as_deref() {
+                            if let Some(center) = drawing["geometry"]["cylinder_dimensions"]
+                                .as_array().and_then(|list| list.iter().find(|d|
+                                    d["eligible_face_name"].as_str() == Some(first)))
+                                .and_then(|d| xy(&d["center_mm"]))
+                            {
+                                ui.label(format!("Erster Mittelpunkt: X {:.2}, Y {:.2} mm. Zweiten Kreis anklicken.", center[0], center[1]));
+                            } else {
+                                state.distance_anchor=None;
+                            }
+                        }
                     } else {
+                        state.distance_anchor=None;
                         state.selected_face=None;
                     }
                 }
             }
             let table_request = render_cylinder_measurements(ui, &drawing,editable);
             if request_annotation.is_none() { request_annotation=table_request; }
-            ui.label(RichText::new("Außenmaße und gesetzte Ø-/X-/Y-Maße sind verschiebbar. Bei Verlust der 3D-Flächenreferenz bleibt das Maß sichtbar, aber ungeklärt.").small().color(t.text_dim));
+            ui.label(RichText::new("Außenmaße und gesetzte Ø-/X-/Y-/Mitte-zu-Mitte-Maße sind verschiebbar. Bei Verlust der 3D-Flächenreferenz bleibt das Maß sichtbar, aber ungeklärt.").small().color(t.text_dim));
             ui.horizontal(|ui| {
                 if state.snapshot.is_none() {
                     if ui.button("Zeichnung im Modell speichern").clicked() {
@@ -465,8 +505,11 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         save_layout(app,&mut state);
     } else if let Some((face_name,kind)) = request_annotation {
         if let Some(previous) = &state.snapshot {
-            let params = json!({"body":state.body,"previous":previous,
+            let mut params = json!({"body":state.body,"previous":previous,
                 "face_name":face_name,"kind":kind});
+            if let Some(second) = request_second_face {
+                params["second_face_name"] = json!(second);
+            }
             match app.session.execute("drawing.annotation.add",&params) {
                 Ok(reply) if reply["status"] == "annotated" => {
                     if let Some(drawing) = reply.get("drawing") {
@@ -962,6 +1005,83 @@ mod tests {
         assert!(h.app.drawing_ui.selected_face.is_none(),
             "reopening the window must not inherit an accidental user selection");
         assert!(h.widget("Ø aus Auswahl").is_none());
+    }
+
+    fn centre_pair_harness() -> Harness {
+        let mut h=drawing_harness();
+        h.app.run("parameters.add",json!({"name":"PairX","expression":"65 mm"})).unwrap();
+        h.app.run("solid.hole",json!({"name":"PairFirst","position":[15,12,8],"diameter":6})).unwrap();
+        h.app.run("solid.hole",json!({"name":"PairSecond","position":["PairX",32,8],"diameter":6})).unwrap();
+        h.frames(3);
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.frames(3);
+        h.step(&json!({"click":{"handle":"drawing:cylinder:0"}})).unwrap();
+        h.frames(3);
+        h.step(&json!({"widget":"Ersten Mittelpunkt merken"})).unwrap();
+        h.frames(3);
+        h.step(&json!({"click":{"handle":"drawing:cylinder:1"}})).unwrap();
+        h.frames(3);
+        h.step(&json!({"widget":"Mitte-zu-Mitte setzen"})).unwrap();
+        h.frames(3);
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap()["annotations"][0]["kind"],"center_distance");
+        h
+    }
+
+    #[test]
+    fn centre_distance_updates_only_after_reopening_and_confirming_the_dialog() {
+        let mut h=centre_pair_harness();
+        let before=h.app.session.doc.metadata.get(KEY).unwrap().clone();
+        let id=before["annotations"][0]["id"].as_str().unwrap().to_string();
+        let at=handle_at(&format!("drawing:label:{id}")).unwrap();
+        let reply=h.call("ui.drag",json!({"x0":at.x,"y0":at.y,"x1":at.x+20.0,"y1":at.y-10.0,"steps":12}));
+        assert_eq!(reply["ok"],true);
+        h.frames(3);
+        let saved=h.app.session.doc.metadata.get(KEY).unwrap().clone();
+        assert_ne!(saved["label_positions"][id.as_str()],before["label_positions"][id.as_str()]);
+        h.app.drawing_ui.open=false;
+        h.frames(2);
+        h.app.run("parameters.change",json!({"name":"PairX","expression":"75 mm"})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_none(),"3D work must not open a drawing popup");
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap(),&saved);
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some());
+        assert!(h.app.drawing_ui.distance_anchor.is_none());
+        h.step(&json!({"widget":"Alte Zeichnung beibehalten"})).unwrap();
+        h.frames(2);
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap(),&saved);
+        h.app.drawing_ui.open=false;
+        h.frames(2);
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        h.step(&json!({"widget":"Zeichnung aktualisieren"})).unwrap();
+        h.frames(3);
+        let updated=h.app.session.doc.metadata.get(KEY).unwrap();
+        assert!((updated["annotations"][0]["value_mm"].as_f64().unwrap()-60.0_f64.hypot(20.0)).abs()<0.002);
+        assert_eq!(updated["annotations"][0]["face_name"],saved["annotations"][0]["face_name"]);
+        assert_eq!(updated["annotations"][0]["second_face_name"],saved["annotations"][0]["second_face_name"]);
+        assert_eq!(updated["label_positions"][id.as_str()],saved["label_positions"][id.as_str()]);
+        assert!(h.widget("Zeichnung aktualisieren").is_none());
+    }
+
+    #[test]
+    fn centre_distance_anchor_is_cleared_when_selection_is_cleared_or_drawing_stales() {
+        let mut h=centre_pair_harness();
+        assert!(h.app.drawing_ui.distance_anchor.is_some());
+        h.step(&json!({"widget":"Auswahl aufheben"})).unwrap();
+        h.frames(2);
+        assert!(h.app.drawing_ui.distance_anchor.is_none());
+        h.step(&json!({"click":{"handle":"drawing:cylinder:0"}})).unwrap();
+        h.frames(2);
+        h.step(&json!({"widget":"Ersten Mittelpunkt merken"})).unwrap();
+        h.frames(2);
+        h.app.run("parameters.change",json!({"name":"PairX","expression":"70 mm"})).unwrap();
+        h.frames(3);
+        assert!(h.app.drawing_ui.distance_anchor.is_none());
+        assert!(h.app.drawing_ui.selected_face.is_none());
+        assert!(h.widget("Mitte-zu-Mitte setzen").is_none());
+        assert!(h.widget("Zeichnung aktualisieren").is_some());
     }
 
 }

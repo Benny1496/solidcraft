@@ -20,7 +20,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("drawing.annotation.add", "Add Verified Drawing Dimension", annotation_add)
         .noundo()
         .icon("measure")
-        .params("body, previous: a current drawing, face_name: exact verified 3D cylindrical face, kind: diameter|x_from_left|y_from_bottom; position_mm?: [x,y]. Returns annotated read-only drawing; save with document.metadata.set. Rejects stale/unverified/ambiguous references."),
+        .params("body, previous: a current drawing, face_name: exact verified 3D cylindrical face, kind: diameter|x_from_left|y_from_bottom|center_distance; second_face_name: required for center_distance (XY centre-to-centre distance); position_mm?: [x,y]. Returns annotated read-only drawing; save with document.metadata.set. Rejects stale/unverified/ambiguous references."),
 ];
 
 fn coords(value: &Value, n: usize) -> Option<Vec<f64>> {
@@ -92,6 +92,40 @@ fn annotation_value(d: &Value, kind: &str) -> Option<f64> {
     d[key].as_f64().filter(|n| n.is_finite())
 }
 
+fn is_pair_kind(kind: &str) -> bool {
+    kind == "center_distance"
+}
+
+fn second_face<'a>(value: &'a Value, kind: &str) -> Result<Option<&'a str>> {
+    if !is_pair_kind(kind) {
+        if value.get("second_face_name").is_some_and(|v| !v.is_null()) {
+            return Err(bad(CMD, "second face is only valid for center_distance"));
+        }
+        return Ok(None);
+    }
+    let second = value["second_face_name"].as_str()
+        .filter(|s| !s.is_empty() && s.len() <= 1024)
+        .ok_or_else(|| bad(CMD, "center_distance requires second_face_name"))?;
+    if value["face_name"].as_str() == Some(second) {
+        return Err(bad(CMD, "choose two different cylinder faces"));
+    }
+    Ok(Some(second))
+}
+
+fn annotation_key(face: &str, second: Option<&str>, kind: &str) -> (String, String, String) {
+    let other = second.unwrap_or("");
+    let (a, b) = if second.is_some() && face > other { (other, face) } else { (face, other) };
+    (a.to_string(), b.to_string(), kind.to_string())
+}
+
+fn center_distance(first: &Value, second: &Value) -> Option<f64> {
+    let a = coords(&first["center_mm"], 2)?;
+    let b = coords(&second["center_mm"], 2)?;
+    let distance = (b[0] - a[0]).hypot(b[1] - a[1]);
+    let rounded = mm(distance);
+    (rounded.is_finite() && rounded > 0.0).then_some(rounded)
+}
+
 /// Resolve only against uniquely named, history-verified cylindrical faces.
 /// Unresolvable old dimensions survive with their identity and manual layout,
 /// but without an authoritative new value.
@@ -109,26 +143,38 @@ fn resolve_annotations(previous: Option<&Value>, cylinders: &[Value]) -> Result<
         let face = a["face_name"].as_str().filter(|s| !s.is_empty() && s.len() <= 1024)
             .ok_or_else(|| bad(CMD, "invalid annotation face"))?;
         let kind = a["kind"].as_str().filter(|k|
-            matches!(*k, "diameter" | "x_from_left" | "y_from_bottom"))
+            matches!(*k, "diameter" | "x_from_left" | "y_from_bottom" | "center_distance"))
             .ok_or_else(|| bad(CMD, "invalid annotation kind"))?;
-        if !ids.insert(id.to_string()) || !pair.insert((face.to_string(),kind.to_string())) {
+        let second = second_face(a, kind)?;
+        if !ids.insert(id.to_string()) || !pair.insert(annotation_key(face, second, kind)) {
             return Err(bad(CMD, "duplicate drawing annotation"));
         }
         let matches: Vec<&Value> = cylinders.iter().filter(|d|
             d["eligible_face_name"].as_str() == Some(face)).collect();
-        let resolved = matches.len() == 1;
+        let other: Vec<&Value> = cylinders.iter().filter(|d|
+            second.is_some() && d["eligible_face_name"].as_str() == second).collect();
+        let resolved = matches.len() == 1 && (second.is_none() || other.len() == 1);
         let original = a["value_mm"].as_f64().filter(|v| v.is_finite())
             .or_else(|| a["last_value_mm"].as_f64().filter(|v| v.is_finite()));
-        let value = if resolved { annotation_value(matches[0],kind) } else { None };
+        let value = if resolved {
+            if second.is_some() { center_distance(matches[0], other[0]) }
+            else { annotation_value(matches[0],kind) }
+        } else { None };
         let center = if resolved { matches[0]["center_mm"].clone() }
             else { a.get("center_mm").cloned().unwrap_or(Value::Null) };
-        out.push(json!({
+        let mut annotation = json!({
             "id":id, "face_name":face, "kind":kind,
             "reference_status":if value.is_some() {"resolved"} else {"missing_reference"},
             "center_mm":center,
             "value_mm":value,
             "last_value_mm":value.or(original)
-        }));
+        });
+        if let Some(second) = second {
+            annotation["second_face_name"] = json!(second);
+            annotation["second_center_mm"] = if resolved { other[0]["center_mm"].clone() }
+                else { a.get("second_center_mm").cloned().unwrap_or(Value::Null) };
+        }
+        out.push(annotation);
     }
     Ok(out)
 }
@@ -142,8 +188,9 @@ fn annotation_add(s: &mut Session, p: &Value) -> Result<Value> {
     let face = str_(p,"face_name").filter(|x| !x.is_empty() && x.len() <= 1024)
         .ok_or_else(|| bad(cmd,"face_name required"))?;
     let kind = str_(p,"kind").filter(|k|
-        matches!(*k,"diameter"|"x_from_left"|"y_from_bottom"))
-        .ok_or_else(|| bad(cmd,"kind must be diameter, x_from_left, or y_from_bottom"))?;
+        matches!(*k,"diameter"|"x_from_left"|"y_from_bottom"|"center_distance"))
+        .ok_or_else(|| bad(cmd,"kind must be diameter, x_from_left, y_from_bottom, or center_distance"))?;
+    let second = second_face(p, kind)?;
     let current = preview(s,&json!({"body":name,"previous":old}))?;
     if current["status"] != "current" {
         return Err(bad(cmd,"drawing is stale: confirm original 3D change before adding dimensions"));
@@ -154,9 +201,17 @@ fn annotation_add(s: &mut Session, p: &Value) -> Result<Value> {
     if matches.len() != 1 {
         return Err(bad(cmd,"cylindrical face is not unique and history-verified"));
     }
+    let other: Vec<&Value> = current["drawing"]["geometry"]["cylinder_dimensions"]
+        .as_array().into_iter().flatten().filter(|d|
+            second.is_some() && d["eligible_face_name"].as_str() == second).collect();
+    if second.is_some() && (other.len() != 1 || center_distance(matches[0], other[0]).is_none()) {
+        return Err(bad(cmd, "second cylinder must be unique, verified and have a distinct centre"));
+    }
     let saved = &current["drawing"];
     if saved["annotations"].as_array().is_some_and(|list| list.iter().any(|a|
-        a["face_name"].as_str() == Some(face) && a["kind"].as_str() == Some(kind))) {
+        annotation_key(a["face_name"].as_str().unwrap_or(""),
+            a["second_face_name"].as_str(), a["kind"].as_str().unwrap_or(""))
+            == annotation_key(face, second, kind))) {
         return Err(bad(cmd,"dimension is already annotated"));
     }
     let mut annotated = saved.clone();
@@ -180,10 +235,16 @@ fn annotation_add(s: &mut Session, p: &Value) -> Result<Value> {
             vec![center[0]+12.0,center[1]+12.0]
         },
     };
-    list.push(json!({
+    let mut annotation = json!({
         "id":id,"face_name":face,"kind":kind,"value_mm":annotation_value(d,kind),
         "center_mm":d["center_mm"],"reference_status":"resolved"
-    }));
+    });
+    if let Some(second) = second {
+        annotation["second_face_name"] = json!(second);
+        annotation["second_center_mm"] = other[0]["center_mm"].clone();
+        annotation["value_mm"] = json!(center_distance(d, other[0]));
+    }
+    list.push(annotation);
     annotated["label_positions"][id.as_str()]=json!(location);
     let rechecked=preview(s,&json!({"body":name,"previous":annotated}))?;
     if rechecked["status"] != "current" {
@@ -240,8 +301,15 @@ fn svg_preview(min: &[f64], max: &[f64], cylinders: &[[f64; 3]], labels: &Value,
             Some("diameter")=>format!("{prefix}Ø{historic:.2}"),
             Some("x_from_left")=>format!("{prefix}X {historic:.2}"),
             Some("y_from_bottom")=>format!("{prefix}Y {historic:.2}"),
+            Some("center_distance")=>format!("{prefix}M–M {historic:.2}"),
             _=>continue,
         };
+        if a["kind"] == "center_distance"
+            && let Some(second) = coords(&a["second_center_mm"], 2)
+        {
+            let (x2, y2) = map(&second);
+            svg.push_str(&format!("<path stroke=\"{color}\" stroke-width=\"0.17\" fill=\"none\" d=\"M {x0} {y0} L {x2} {y2} L {x1} {y1}\"/>"));
+        }
         svg.push_str(&format!(
             "<path stroke=\"{color}\" stroke-width=\"0.17\" d=\"M {x0} {y0} L {x1} {y1}\"/><text x=\"{x1}\" y=\"{y1}\" font-family=\"sans-serif\" font-size=\"3.5\" fill=\"{color}\" text-anchor=\"middle\">{label}</text>"
         ));
@@ -926,6 +994,92 @@ mod tests {
         assert_eq!(updated[2]["face_name"],"F1:bore");
         assert_eq!(updated[2]["value_mm"].as_f64(),Some(83.0));
         assert_eq!(updated[2]["reference_status"],"resolved");
+    }
+
+    #[test]
+    fn centre_pair_resolves_both_identities_and_never_uses_list_order_or_neighbours() {
+        let old=json!([{"id":"linked_cyl_1","kind":"center_distance",
+            "face_name":"A","second_face_name":"B","center_mm":[10,10],
+            "second_center_mm":[40,50],"value_mm":50,"reference_status":"resolved"}]);
+        let current=json!([
+            {"eligible_face_name":"B","center_mm":[70,90]},
+            {"eligible_face_name":"A","center_mm":[10,10]}
+        ]);
+        let resolved=super::resolve_annotations(Some(&old),current.as_array().unwrap()).unwrap();
+        assert_eq!(resolved[0]["value_mm"].as_f64(),Some(100.0));
+        assert_eq!(resolved[0]["face_name"],"A");
+        assert_eq!(resolved[0]["second_face_name"],"B");
+        for missing in ["A","B"] {
+            let mut changed=current.as_array().unwrap().clone();
+            for c in &mut changed {
+                if c["eligible_face_name"] == missing { c["eligible_face_name"]=json!("Unrelated"); }
+            }
+            let unresolved=super::resolve_annotations(Some(&old),&changed).unwrap();
+            assert_eq!(unresolved[0]["reference_status"],"missing_reference");
+            assert!(unresolved[0]["value_mm"].is_null());
+            assert_eq!(unresolved[0]["last_value_mm"].as_f64(),Some(50.0));
+            let again=super::resolve_annotations(Some(&json!(unresolved)),&changed).unwrap();
+            assert_eq!(again[0]["last_value_mm"].as_f64(),Some(50.0));
+        }
+        let mut reversed=old[0].clone();
+        reversed["id"]=json!("linked_cyl_2");
+        reversed["face_name"]=json!("B");
+        reversed["second_face_name"]=json!("A");
+        assert!(super::resolve_annotations(Some(&json!([old[0],reversed])),
+            current.as_array().unwrap()).is_err());
+        for invalid in [Value::Null,json!("A"),json!("")] {
+            let mut malformed=old.clone();
+            malformed[0]["second_face_name"]=invalid;
+            assert!(super::resolve_annotations(Some(&malformed),current.as_array().unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn centre_pair_saved_file_requires_confirmation_and_preserves_label_after_3d_edit() {
+        let path=std::env::temp_dir().join(format!("solidcraft-centre-pair-{}.solidcraft",std::process::id()));
+        let mut s=Session::default();
+        s.execute("parameters.add",&json!({"name":"SecondX","expression":"50 mm"})).unwrap();
+        s.execute("solid.box",&json!({"length":120,"width":70,"height":8,"body_name":"Plate"})).unwrap();
+        s.execute("solid.hole",&json!({"name":"First","position":[20,20,8],"diameter":6})).unwrap();
+        s.execute("solid.hole",&json!({"name":"Second","position":["SecondX",60,8],"diameter":6})).unwrap();
+        let first=preview(&mut s,&json!({"body":"Plate"})).unwrap()["drawing"].clone();
+        let a=first["geometry"]["cylinder_dimensions"][0]["eligible_face_name"].clone();
+        let b=first["geometry"]["cylinder_dimensions"][1]["eligible_face_name"].clone();
+        let added=super::annotation_add(&mut s,&json!({"body":"Plate","previous":first,
+            "face_name":a,"second_face_name":b,"kind":"center_distance","position_mm":[70,65]})).unwrap();
+        let old=added["drawing"].clone();
+        let id=added["annotation_id"].as_str().unwrap();
+        assert_eq!(old["annotations"][0]["value_mm"].as_f64(),Some(50.0));
+        assert!(old["svg"].as_str().unwrap().contains("M–M 50.00"));
+        assert!(super::annotation_add(&mut s,&json!({"body":"Plate","previous":old,
+            "face_name":b,"second_face_name":a,"kind":"center_distance"})).is_err());
+        for second in [a.clone(),json!("not-a-verified-face"),Value::Null] {
+            assert!(super::annotation_add(&mut s,&json!({"body":"Plate","previous":first,
+                "face_name":a,"second_face_name":second,"kind":"center_distance"})).is_err());
+        }
+        let key="org.solidcraft.experimental_drawing";
+        s.execute("document.metadata.set",&json!({"key":key,"value":old})).unwrap();
+        s.execute("file.save_as",&json!({"path":path,"format":"container"})).unwrap();
+        let mut reopened=Session::default();
+        reopened.execute("doc.open",&json!({"path":path})).unwrap();
+        let saved=reopened.doc.metadata.get(key).unwrap().clone();
+        assert_eq!(saved["annotations"][0]["second_face_name"],b);
+        reopened.execute("parameters.change",&json!({"name":"SecondX","expression":"80 mm"})).unwrap();
+        let pending=preview(&mut reopened,&json!({"body":"Plate","previous":saved})).unwrap();
+        assert_eq!(pending["status"],"stale");
+        assert_eq!(pending["requires_confirmation"],true);
+        assert_eq!(pending["drawing"],saved);
+        let expected=super::mm(60.0_f64.hypot(40.0));
+        assert_eq!(pending["proposed"]["annotations"][0]["value_mm"].as_f64(),Some(expected));
+        assert_eq!(reopened.doc.metadata.get(key).unwrap(),&saved);
+        assert!(super::annotation_add(&mut reopened,&json!({"body":"Plate","previous":saved,
+            "face_name":a,"second_face_name":b,"kind":"center_distance"})).is_err());
+        let accepted=preview(&mut reopened,&json!({"body":"Plate","previous":saved,"accept":true})).unwrap();
+        assert_eq!(accepted["status"],"updated");
+        assert_eq!(accepted["drawing"]["annotations"][0]["value_mm"].as_f64(),Some(expected));
+        assert_eq!(super::coords(&accepted["drawing"]["label_positions"][id],2),Some(vec![70.0,65.0]));
+        assert_eq!(preview(&mut reopened,&json!({"body":"Plate","previous":accepted["drawing"]})).unwrap()["status"],"current");
+        let _=std::fs::remove_file(path);
     }
 
 }
