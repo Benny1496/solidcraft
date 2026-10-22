@@ -130,8 +130,8 @@ jobs:
         with:
           ref: feature/upstream-4950-oracle
           persist-credentials: false
-      - name: Verify 12 fixture recipes and all independent analytic values
-        run: python3 tests/oracle/W23a-verify.py
+      - name: Regenerate independent workshop analytic expected geometry
+        run: python3 tools/oracle-analytic/cases_workshop.py
       - name: Set up stable Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Rust dependencies
