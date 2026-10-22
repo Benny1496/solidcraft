@@ -224,8 +224,6 @@ In particular, all four new browser scripts passed: `linked-face-diameter` (same
 
 **This validates the implemented, expressly limited prototype behavior, not a finished manufacturing drawing suite.** The XY bounding rectangle is still only an envelope; real silhouette projection, free direct selection of arbitrary edges/points, midpoint-to-midpoint and angle/radius dimensions, robust all-topology provenance, title blocks, multi-view layout and production export remain open.
 
-### Continuous chat handoff
+### Private project handoff
 
-A root-level [`Chatlauf.md`](../Chatlauf.md) has now been added to the same development branch. It consolidates the project goals, conversation decisions, implementation status, tested GitHub runs, non-fail-fast CI policy, next tasks, the user's preferred GitHub-only workflow, and instructions for seamlessly continuing in a new conversation. **Update `Chatlauf.md` as well as this technical document after major future commits and verified runs.**
-
-The separate Home Assistant file `/share/GitHub SolidCraft/PROJEKTSTATUS.md` remains **unverified/unsynchronized**. A prior connector request to that file was explicitly denied; obtain renewed authorization before attempting the prohibited file-access path again.
+Project handoff and conversation notes are kept privately in the user's approved Home Assistant project folder, not in the public GitHub repository. This GitHub document contains technical implementation and test results only. Do not reintroduce a public `Chatlauf.md` or include private conversation notes in GitHub commits. The project's Home Assistant status documentation was updated and verified following passing run #19.
