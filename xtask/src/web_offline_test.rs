@@ -144,6 +144,12 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("drawing-click-invalid", include_str!("browser_drawing_click_invalid_test.js")),
         ("drawing-click-translated", include_str!("browser_drawing_click_translated_test.js")),
         ("drawing-centre-distance", include_str!("browser_drawing_center_distance_test.js")),
+        ("drawing-edges-box", include_str!("browser_drawing_edges_box_test.js")),
+        ("drawing-edges-edit", include_str!("browser_drawing_edges_edit_test.js")),
+        ("drawing-edges-chamfer", include_str!("browser_drawing_edges_chamfer_test.js")),
+        ("drawing-edges-bores", include_str!("browser_drawing_edges_bores_test.js")),
+        ("drawing-edges-matrix", include_str!("browser_drawing_edges_matrix_test.js")),
+        ("drawing-edges-safety", include_str!("browser_drawing_edges_safety_test.js")),
     ];
     let scenario_count = scenarios.len();
     let mut passed = 0;

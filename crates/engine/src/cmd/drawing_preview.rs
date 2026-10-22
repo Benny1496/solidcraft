@@ -17,6 +17,10 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("INSPECT", "DRAWING")
         .icon("inspect")
         .params("body: name; previous?: a prior drawing from this command; accept?: bool. Provisional XY drawing with 3D-derived cylinders, external dimensions, and user-selected annotations linked by verified exact face names. Stale edits require explicit confirmation. Missing references stay unresolved."),
+    CommandSpec::new("drawing.projected_edges", "Experimental XY Edge Projection", projected_edges)
+        .noundo()
+        .icon("inspect")
+        .params("body: name. Read-only B-rep-derived straight XY edge candidates; no visibility classification, hidden-line removal, arc projection, silhouette guarantee or saved drawing changes."),
     CommandSpec::new("drawing.annotation.add", "Add Verified Drawing Dimension", annotation_add)
         .noundo()
         .icon("measure")
@@ -251,6 +255,85 @@ fn annotation_add(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd,"model changed before annotation could be saved"));
     }
     Ok(json!({"status":"annotated","drawing":rechecked["drawing"],"annotation_id":id}))
+}
+
+/// First, deliberately conservative projection increment: expose straight B-rep
+/// edge candidates, not a certified outline or a hidden-line-removed drawing.
+/// Arc and spline edges MUST NOT be represented as their straight chords.
+/// This is read-only and does not change the saved 2D drawing contract.
+fn projected_edges(s: &mut Session, p: &Value) -> Result<Value> {
+    let command = "drawing.projected_edges";
+    let name = str_(p, "body").filter(|n| !n.is_empty() && n.len() < 256)
+        .ok_or_else(|| bad(command, "body name required"))?;
+    let inspected = s.execute("document.inspect", &json!({"measure": true}))?;
+    let bodies = inspected["bodies"].as_array()
+        .ok_or_else(|| bad(command, "missing measured bodies"))?;
+    let body = bodies.iter().find(|b| b["name"].as_str() == Some(name))
+        .ok_or_else(|| bad(command, "body not found"))?;
+    let lower = coords(&body["bbox"]["min"], 3)
+        .ok_or_else(|| bad(command, "invalid lower bound"))?;
+    let upper = coords(&body["bbox"]["max"], 3)
+        .ok_or_else(|| bad(command, "invalid upper bound"))?;
+    let result = s.execute("model.edges", &json!({"body": name}))?;
+    let edges = result["edges"].as_array()
+        .filter(|edges| edges.len() <= 4096)
+        .ok_or_else(|| bad(command, "missing or excessive B-rep edges"))?;
+    let mut segments: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut nonstraight = 0usize;
+    let mut point_projection = 0usize;
+    let mut duplicates = 0usize;
+    for edge in edges {
+        let start = coords(&edge["start"], 3)
+            .ok_or_else(|| bad(command, "invalid edge start"))?;
+        let end = coords(&edge["end"], 3)
+            .ok_or_else(|| bad(command, "invalid edge end"))?;
+        let length = edge["length"].as_f64()
+            .filter(|x| x.is_finite() && *x >= 0.0)
+            .ok_or_else(|| bad(command, "invalid edge length"))?;
+        let chord = (0..3).map(|i| (end[i] - start[i]).powi(2)).sum::<f64>().sqrt();
+        // Length/chord agreement proves a straight segment to this sampling
+        // tolerance; a circular edge is not promoted to a fake chord.
+        if (length - chord).abs() > (0.01_f64).max(length * 0.0001) {
+            nonstraight += 1;
+            continue;
+        }
+        let mut a = [mm(start[0]), mm(start[1])];
+        let mut b = [mm(end[0]), mm(end[1])];
+        if a == b {
+            point_projection += 1;
+            continue;
+        }
+        // Opposite top/bottom edge directions produce one XY line. Do not
+        // attach a persistent 3D feature name to this unclassified geometry.
+        if (a[0], a[1]) > (b[0], b[1]) {
+            std::mem::swap(&mut a, &mut b);
+        }
+        if segments.contains(&(a, b)) {
+            duplicates += 1;
+        } else {
+            segments.push((a, b));
+        }
+    }
+    segments.sort_by(|x, y| x.0[0].total_cmp(&y.0[0])
+        .then(x.0[1].total_cmp(&y.0[1]))
+        .then(x.1[0].total_cmp(&y.1[0]))
+        .then(x.1[1].total_cmp(&y.1[1])));
+    let lines: Vec<Value> = segments.iter().map(|(a, b)| json!({
+        "start_xy_mm": a, "end_xy_mm": b
+    })).collect();
+    Ok(json!({
+        "body": name,
+        "projection": "xy_top",
+        "accuracy": "unclassified_straight_brep_edges_only",
+        "bounds": {"min_xy_mm": [mm(lower[0]),mm(lower[1])],
+                   "max_xy_mm": [mm(upper[0]),mm(upper[1])]},
+        "segments": lines,
+        "statistics": {"source_edges": edges.len(), "unique_straight_segments": segments.len(),
+                       "curved_or_nonstraight_skipped": nonstraight,
+                       "point_projections_skipped": point_projection,
+                       "duplicate_projections_skipped": duplicates},
+        "warnings": ["Not a manufacturing silhouette: visibility, hidden lines, arcs, tangency, overlaps, pockets and outline classification are not resolved. No existing drawing is modified."]
+    }))
 }
 
 // A limited, geometrically scaled SVG view for the same verified XY envelope.
@@ -514,6 +597,69 @@ mod tests {
     use super::{preview, source_matches};
     use crate::Session;
     use serde_json::{Value, json};
+
+
+    #[test]
+    fn projected_brep_box_has_four_unique_xy_lines_without_mutating_model() {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length":120,"width":75,"height":10,"body_name":"Plate"})).unwrap();
+        let before = s.execute("document.inspect", &json!({"measure":true})).unwrap();
+        let p = s.execute("drawing.projected_edges", &json!({"body":"Plate"})).unwrap();
+        assert_eq!(p["accuracy"], "unclassified_straight_brep_edges_only");
+        assert_eq!(p["segments"].as_array().unwrap().len(), 4);
+        assert_eq!(p["bounds"]["max_xy_mm"], json!([120.0,75.0]));
+        assert_eq!(p["statistics"]["unique_straight_segments"], 4);
+        let after = s.execute("document.inspect", &json!({"measure":true})).unwrap();
+        assert_eq!(before["timeline"],after["timeline"]);
+    }
+
+    #[test]
+    fn projection_is_deterministic_and_ignores_z_only_edges() {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length":43,"width":19,"height":12,"body_name":"Plate"})).unwrap();
+        let a = s.execute("drawing.projected_edges", &json!({"body":"Plate"})).unwrap();
+        let b = s.execute("drawing.projected_edges", &json!({"body":"Plate"})).unwrap();
+        assert_eq!(a,b);
+        assert_eq!(a["segments"].as_array().unwrap().len(), 4);
+        assert!(a["statistics"]["point_projections_skipped"].as_u64().unwrap() >= 4);
+        assert!(a["statistics"]["duplicate_projections_skipped"].as_u64().unwrap() >= 4);
+    }
+
+    #[test]
+    fn projection_tracks_parameter_edit_and_undo() {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length":40,"width":20,"height":5,
+            "body_name":"Plate","name":"Stock"})).unwrap();
+        let a = s.execute("drawing.projected_edges", &json!({"body":"Plate"})).unwrap();
+        s.execute("timeline.edit", &json!({"feature":"Stock","set":{"length":"70"}})).unwrap();
+        let b = s.execute("drawing.projected_edges", &json!({"body":"Plate"})).unwrap();
+        assert_eq!(b["bounds"]["max_xy_mm"],json!([70.0,20.0]));
+        assert_ne!(a["segments"],b["segments"]);
+        s.execute("edit.undo", &json!({})).unwrap();
+        let restored = s.execute("drawing.projected_edges", &json!({"body":"Plate"})).unwrap();
+        assert_eq!(a["segments"],restored["segments"]);
+    }
+
+    #[test]
+    fn projection_refuses_unknown_and_missing_body() {
+        let mut s = Session::default();
+        assert!(s.execute("drawing.projected_edges", &json!({})).is_err());
+        assert!(s.execute("drawing.projected_edges", &json!({"body":"not-present"})).is_err());
+        s.execute("solid.box", &json!({"length":10,"width":15,"height":4,"body_name":"A"})).unwrap();
+        assert!(s.execute("drawing.projected_edges", &json!({"body":"B"})).is_err());
+    }
+
+    #[test]
+    fn projected_edges_do_not_alter_the_existing_linked_drawing() {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length":50,"width":40,"height":8,"body_name":"Plate"})).unwrap();
+        let before = preview(&mut s, &json!({"body":"Plate"})).unwrap()["drawing"].clone();
+        let p = s.execute("drawing.projected_edges", &json!({"body":"Plate"})).unwrap();
+        assert_eq!(p["segments"].as_array().unwrap().len(),4);
+        let after = preview(&mut s, &json!({"body":"Plate","previous":before.clone()})).unwrap();
+        assert_eq!(after["status"],"current");
+        assert_eq!(after["drawing"],before);
+    }
 
     #[test]
     fn javascript_numeric_json_roundtrip_does_not_stale_a_drawing() {

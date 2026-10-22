@@ -352,3 +352,29 @@ Syntax, WASM build, artifact upload and final consolidated summary also passed (
 This confirms that a model edit leaves the stored drawing unchanged until explicit acceptance, reopening displays the update prompt, closed drawings do not interrupt 3D work, and acceptance preserves both references and manual label placement. The previous pending-CI notice is superseded for this tested SHA.
 
 Scope remains an experimental XY bounding-envelope drawing with verified cylinder references and straight-line centre distances, not a finished multi-view manufacturing drawing system or exhaustive validation of SolidCraft. True contours/hidden edges, broader dimension types, annotation editing/deletion, sheets/title blocks/scales, production PDF/DXF and manual visual evaluation remain open. This result update changes documentation only.
+
+
+## First actual B-rep edge-projection test slice (not yet CI-verified, 22 October 2026)
+
+A new read-only experimental command, \`drawing.projected_edges\`, takes \`{body:"Plate"}\`.
+It measures \`model.edges\` from the actual 3D B-rep and projects only straight,
+non-point XY segments. It normalizes endpoint order, removes matching top/bottom
+duplicates and sorts the result deterministically. The result includes measured
+bounds, segments \`{start_xy_mm,end_xy_mm}\` and counters for skipped curved
+edges, point projections and duplicates. A curved arc is **not** drawn as a
+misleading straight chord. The output is explicitly
+\`unclassified_straight_brep_edges_only\`: there is **no silhouette proof**,
+hidden-line classification, arc/spline projection, full pocket visibility or
+certified manufacturing geometry yet.
+
+This initial API deliberately does not modify \`drawing.preview\`, stored drawing
+snapshots, annotation identities, the on-screen 2D workspace or the update
+confirmation dialog. The existing 65-regression suite is retained. Six new,
+independent browser scenarios cover rectangles, dimensions, a chamfer,
+bores/curves, parameters/undo/redo, input validation and isolation; five new
+engine unit tests cover geometry, deterministic ordering, edits, errors and
+saved-drawing isolation. The intended bundle is 36 browser (34 CAD scenarios
+plus 2 baseline), 17 egui and 23 Rust = **76 checks**. Do not record them as
+successful before running and inspecting a fresh manual GitHub Actions workflow
+on \`feature/browser-automation\`. The old browser DXF test remains isolated
+because it previously stalled CDP.
