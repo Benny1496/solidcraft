@@ -227,3 +227,35 @@ In particular, all four new browser scripts passed: `linked-face-diameter` (same
 ### Private project handoff
 
 Project handoff and conversation notes are kept privately in the user's approved Home Assistant project folder, not in the public GitHub repository. This GitHub document contains technical implementation and test results only. Do not reintroduce a public `Chatlauf.md` or include private conversation notes in GitHub commits. The project's Home Assistant status documentation was updated and verified following passing run #19.
+
+## Direct 2D cylinder selection and 60-check regression bundle (22 October 2026; **not yet CI-verified**)
+
+**Verified predecessor:** [Run #19](https://github.com/Benny1496/solidcraft/actions/runs/39731900004) completed successfully with 50/50 checks. The changes described below are committed on `feature/browser-automation` but have **not** been validated by a new complete GitHub Actions run.
+
+### Incremental UI feature
+
+- An exact-history and unambiguously identified cylinder can be clicked **directly inside the existing egui 2D drawing preview**. The click selects the corresponding certified `eligible_face_name`; the selected circle receives a visible accent outline.
+- A contextual editor offers **“Ø aus Auswahl”, “X aus Auswahl”, “Y aus Auswahl”**. Each action delegates to the already tested `drawing.annotation.add` Rust command, which creates a persisted, movable drawing annotation using the named-face identity. Duplicate dimensions are disabled.
+- The circle hitbox remains usable for small projected diameters (clamped to 11–32 px radius) and its real mouse coordinates are exposed to the native scenario harness as `drawing:cylinder:N`.
+- **Safety:** Circle interaction is enabled only after saving a nonstale drawing, and only if the 3D face's exact name is verified and unique. The transient selection is never saved in the drawing metadata; it can be cleared, is reset on body change / stale geometry, and is not retained on reopening the drawing.
+- The pre-existing measurement table actions still work. No different 3D kernel, native drawing document type or global CAD viewport model-selection behavior was modified.
+- Caveat: this is **direct circle selection only** (not arbitrary edge or line selection); detected cylinders are not certified as through-holes; real 2D silhouette, datum selection, orthographic view sets and production-quality dimensions remain future work.
+
+### Extended manual verification
+
+The same non-fail-fast manual GitHub Action now includes:
+
+| Group | Previously verified | Newly prepared |
+| --- | ---: | ---: |
+| Browser API + reference plate + named CAD scenarios | 25 | **29** (27 named + 2 base checks) |
+| Native egui drawing window mouse interactions | 11 | **15** (+4 real circle click / select / add / change tests) |
+| Rust drawing core | 14 | **16** (+2 unique-provenance / face-order regression tests) |
+| **Total independently reported checks** | **50** | **60** |
+
+New browser scenarios: six cylinders with 18 independently set annotations; manually positioned Ø/X/Y labels retained through parametric 3D edits and explicit acceptance; rejection of five kinds of malformed/falsified annotation data; and real measured XY offsets of selected named faces on a plate with negative world-space coordinates.
+
+Native egui cases: clicking an unsaved then a saved real bore, selecting and placing Ø, selecting the second of two cylinders for all three dimension types, safely blocking selection while a drawing is stale, and clearing/transient state after reopening. Core cases: only unique verified cylinder faces offered for 2D selection, and changing cylinder iteration order without rebinding existing annotations to a wrong face.
+
+All four new JavaScript source files were **syntax-checked statically**, the scenario registration and workflow continuation rules checked in-source. **The new Rust code and real browser/GUI tests still require a new manual GitHub Actions run**; do not describe them as already passing.
+
+The private project/chat handoff remains stored outside GitHub; only technical implementation and CI status are recorded here.
