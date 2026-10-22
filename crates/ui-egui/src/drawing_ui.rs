@@ -186,7 +186,18 @@ fn render_plate(ui: &mut egui::Ui, drawing: &mut Value, editable: bool, selected
     };
     let left_top = map([min[0], max[1]]);
     let right_bottom = map([max[0], min[1]]);
-    ui.painter().rect_stroke(Rect::from_min_max(left_top, right_bottom), 0.0, Stroke::new(1.8, t.text), StrokeKind::Inside);
+    ui.painter().rect_stroke(Rect::from_min_max(left_top, right_bottom), 0.0, Stroke::new(1.0, t.text_dim), StrokeKind::Inside);
+    // Show sampled top-plane edge candidates in a distinct colour. These are
+    // model-derived lines and curves, not a certified visible silhouette.
+    if let Some(paths)=drawing["geometry"]["top_edge_candidates"].as_array() {
+        for path in paths {
+            let Some(samples)=path["points_xy_mm"].as_array() else {continue};
+            let pts: Vec<Pos2>=samples.iter().filter_map(xy).map(map).collect();
+            if pts.len()>=2 && pts.len()<=1024 {
+                ui.painter().add(egui::Shape::line(pts,Stroke::new(1.9,t.accent)));
+            }
+        }
+    }
 
     if let Some(circles) = drawing["geometry"]["cylinders"].as_array() {
         for (i,c) in circles.iter().enumerate() {
@@ -574,6 +585,41 @@ mod tests {
     fn saved_length(h: &Harness) -> f64 {
         h.app.session.doc.metadata.get(KEY).unwrap()["dimensions"][0]["value_mm"]
             .as_f64().unwrap()
+    }
+
+    #[test]
+    fn real_gui_displays_sampled_top_edge_paths_from_3d() {
+        let mut h=drawing_harness();
+        let draft=h.app.drawing_ui.draft.as_ref().unwrap();
+        assert_eq!(draft["geometry"]["top_edge_candidates"].as_array().unwrap().len(),4);
+        assert_eq!(draft["accuracy"],"bbox_envelope_with_unclassified_upper_edge_samples");
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        assert!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["geometry"]["top_edge_candidates"].is_array());
+    }
+
+    #[test]
+    fn gui_contour_only_model_edit_opens_update_confirmation() {
+        let mut h=drawing_harness();
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        let first=h.app.session.doc.metadata.get(KEY).unwrap().clone();
+        let edges=h.app.run("model.edges",json!({"body":"DrawingPlate"})).unwrap();
+        let vertical=edges["edges"].as_array().unwrap().iter().find(|e| {
+            e["length"].as_f64().is_some_and(|l|(l-8.0).abs()<0.01) &&
+            e["mid"][0].as_f64().is_some_and(|x|x.abs()<0.01) &&
+            e["mid"][1].as_f64().is_some_and(|y|y.abs()<0.01)
+        }).unwrap();
+        h.app.run("solid.chamfer",json!({
+            "edges":[vertical["mid"].clone()],"distance":2.5,"name":"CornerRelief"
+        })).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some());
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap(),&first);
+        h.step(&json!({"widget":"Zeichnung aktualisieren"})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_none());
+        assert_ne!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["geometry"]["top_edge_candidates"],first["geometry"]["top_edge_candidates"]);
     }
 
     #[test]

@@ -57,9 +57,17 @@ fn source_numbers(v: &Value) -> Option<(Vec<f64>, Vec<f64>, Vec<[f64; 3]>)> {
 }
 
 fn source_matches(old: &Value, current: &Value) -> bool {
-    match (source_numbers(old), source_numbers(current)) {
+    let basic = match (source_numbers(old), source_numbers(current)) {
         (Some(a), Some(b)) => a == b,
         _ => false,
+    };
+    // Old drawings without edge samples remain valid. New drawings track
+    // contour-only edits even where the bbox and bores do not change.
+    basic && match old.get("top_edge_paths_xy_mm") {
+        None => true,
+        Some(a) => current.get("top_edge_paths_xy_mm").is_some_and(|b|
+            matches!((path_sample_numbers(a),path_sample_numbers(b)),
+                (Some(x),Some(y)) if x==y)),
     }
 }
 
@@ -336,10 +344,65 @@ fn projected_edges(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// Experimental sampled curves on the topmost horizontal level. These are
+/// NOT certified visible silhouettes or classified pocket/outer loops.
+fn upper_edge_paths(s: &Session, name: &str, top_z: f64) -> Vec<Value> {
+    let world = s.world_state();
+    let Some(b) = world.bodies.iter().find(|b| b.name == name) else { return Vec::new() };
+    let tol = (b.body.size() * 0.001).clamp(0.01,0.15);
+    let Ok(edges) = b.body.edges(tol) else { return Vec::new() };
+    if edges.len()>2048 { return Vec::new(); }
+    let mut out = Vec::new();
+    let mut total = 0usize;
+    for edge in edges {
+        if !(2..=1024).contains(&edge.points.len()) { continue; }
+        if !edge.points.iter().all(|p| p.is_finite() && (p.z-top_z).abs()<0.03) {continue;}
+        let mut xy: Vec<[f64;2]> = Vec::new();
+        for p in &edge.points {
+            let v=[mm(p.x),mm(p.y)];
+            if xy.last()!=Some(&v) { xy.push(v); }
+        }
+        if xy.len()<2 { continue; }
+        let start=xy[0];
+        let end=*xy.last().unwrap_or(&start);
+        let dx=end[0]-start[0];
+        let dy=end[1]-start[1];
+        let chord=dx.hypot(dy);
+        let closed=chord<0.02;
+        let curved=closed || xy.iter().skip(1).take(xy.len().saturating_sub(2))
+            .any(|pt| {
+                if chord<0.0001 { return true; }
+                ((pt[0]-start[0])*dy-(pt[1]-start[1])*dx).abs()/chord>0.02
+            });
+        if !curved { xy=vec![start,end]; }
+        total+=xy.len();
+        if total>20000 { return Vec::new(); }
+        out.push(json!({"kind":if curved {"sampled_curve"} else {"straight"},
+                        "closed":closed,"points_xy_mm":xy}));
+    }
+    out.sort_by(|a,b|a["points_xy_mm"].to_string().cmp(&b["points_xy_mm"].to_string()));
+    out
+}
+
+/// Compare numeric path coordinates, not JSON int/float number variants.
+fn path_sample_numbers(value: &Value) -> Option<Vec<Vec<[f64;2]>>> {
+    let paths=value.as_array().filter(|a|a.len()<=2048)?;
+    let mut n=0usize;
+    paths.iter().map(|path| {
+        let a=path.as_array().filter(|x|(2..=1024).contains(&x.len()))?;
+        n+=a.len();
+        if n>20000 {return None;}
+        a.iter().map(|point| {
+            let p=coords(point,2)?;
+            Some([p[0],p[1]])
+        }).collect::<Option<Vec<_>>>()
+    }).collect()
+}
+
 // A limited, geometrically scaled SVG view for the same verified XY envelope.
 // Width/height use physical millimetres. Geometry is not a true occlusion/HLR
 // projection; the drawing contract states the supported subset explicitly.
-fn svg_preview(min: &[f64], max: &[f64], cylinders: &[[f64; 3]], labels: &Value, annotations: &[Value]) -> String {
+fn svg_preview(min: &[f64], max: &[f64], cylinders: &[[f64; 3]], top_paths: &[Value], labels: &Value, annotations: &[Value]) -> String {
     let w = mm(max[0] - min[0]);
     let h = mm(max[1] - min[1]);
     let view_w = w + 48.0;
@@ -354,6 +417,18 @@ fn svg_preview(min: &[f64], max: &[f64], cylinders: &[[f64; 3]], labels: &Value,
     let mut svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {view_w} {view_h}\" width=\"{view_w}mm\" height=\"{view_h}mm\"><title>SolidCraft experimental XY top-view drawing</title><g stroke=\"#12283c\" stroke-width=\"0.3\" fill=\"none\"><rect x=\"{start_x}\" y=\"{start_y}\" width=\"{w}\" height=\"{h}\"/>"
     );
+    // Informative B-rep upper-level samples; not certified hidden-line removal.
+    for path in top_paths {
+        let Some(points)=path["points_xy_mm"].as_array() else {continue};
+        let mut d=String::new();
+        for (i,p) in points.iter().enumerate() {
+            let Some(pt)=coords(p,2) else {continue};
+            let (x,y)=map(&pt);
+            d.push_str(&format!("{} {x} {y} ",if i==0 {"M"} else {"L"}));
+        }
+        if path["closed"]==true { d.push('Z'); }
+        svg.push_str(&format!("<path data-upper-edge-candidate=\"true\" stroke=\"#167e88\" stroke-width=\"0.4\" d=\"{d}\"/>"));
+    }
     for c in cylinders {
         let (cx, cy) = map(&c[0..2]);
         svg.push_str(&format!("<circle cx=\"{cx}\" cy=\"{cy}\" r=\"{}\"/>", c[2] / 2.0));
@@ -501,6 +576,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
     let eligible_faces: Vec<Vec<String>> = holes.iter().map(|h| h.1.clone()).collect();
     let holes: Vec<[f64; 3]> = holes.into_iter().map(|h| h.0).collect();
     let measured_cylinders = provisional_cylinder_dimensions(&holes,&min,&eligible_faces);
+    let top_paths = upper_edge_paths(s, name, max[2]);
 
     // This is deliberately geometry-based rather than only the user's command
     // parameters: the measured 3D body is the authority for freshness.
@@ -508,6 +584,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
         "lower_xy_mm": [mm(min[0]), mm(min[1])],
         "size_mm": dimensions,
         "cylinders_xy_diameter_mm": holes,
+        "top_edge_paths_xy_mm": top_paths.iter().map(|p|p["points_xy_mm"].clone()).collect::<Vec<_>>(),
     });
     let mut default_labels = serde_json::Map::new();
     let cx = mm((min[0] + max[0]) / 2.0);
@@ -546,26 +623,23 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
         "format": "solidcraft-drawing-preview/1",
         "body": name,
         "projection": "xy_top",
-        "accuracy": "bbox_envelope_and_measured_cylinders_only",
+        "accuracy": "bbox_envelope_with_unclassified_upper_edge_samples",
         "source": source,
         "geometry": {
             "outline": { "type": "rectangle_envelope", "min_xy_mm": [mm(min[0]),mm(min[1])],
                          "max_xy_mm": [mm(max[0]),mm(max[1])] },
             "cylinders": holes.iter().map(|h| json!({"center_mm":[h[0],h[1]],"diameter_mm":h[2]})).collect::<Vec<_>>(),
             "cylinder_dimensions": measured_cylinders,
+            "top_edge_candidates": top_paths.clone(),
         },
         "dimensions": [
             {"id":"overall_x","kind":"horizontal","value_mm":dimensions[0]},
             {"id":"overall_y","kind":"vertical","value_mm":dimensions[1]}
         ],
-        "svg": svg_preview(&min, &max, &holes, &layout, &annotated),
+        "svg": svg_preview(&min, &max, &holes, &top_paths, &layout, &annotated),
         "annotations": annotated,
         "label_positions": layout,
-        "warnings": if !holes.is_empty() {
-            vec!["Cylinders are measured but not necessarily drilled holes; only user-selected dimensions with unique, history-verified face names are safely linked. The outer XY rectangle is not a true manufacturing projection"]
-        } else {
-            Vec::new()
-        }
+        "warnings": ["Upper-level edge paths are sampled B-rep candidates, NOT a certified manufacturing silhouette, pocket classification or hidden-line result. The rectangle is a bounding envelope; existing linked dimensions retain verified face names."]
     });
 
     if let Some(previous) = prev {
@@ -598,6 +672,54 @@ mod tests {
     use crate::Session;
     use serde_json::{Value, json};
 
+
+
+    #[test]
+    fn sampled_upper_edges_of_box_are_four_real_lines() {
+        let mut s=Session::default();
+        s.execute("solid.box",&json!({"length":70,"width":40,"height":9,"body_name":"Panel"})).unwrap();
+        let d=preview(&mut s,&json!({"body":"Panel"})).unwrap()["drawing"].clone();
+        let paths=d["geometry"]["top_edge_candidates"].as_array().unwrap();
+        assert_eq!(paths.len(),4);
+        assert!(paths.iter().all(|p|p["kind"]=="straight"));
+        assert_eq!(d["accuracy"],"bbox_envelope_with_unclassified_upper_edge_samples");
+        assert!(d["svg"].as_str().unwrap().contains("data-upper-edge-candidate"));
+    }
+
+    #[test]
+    fn top_paths_are_stable_and_old_drawings_still_open() {
+        let mut s=Session::default();
+        s.execute("solid.box",&json!({"length":90,"width":50,"height":8,"body_name":"Panel"})).unwrap();
+        let original=preview(&mut s,&json!({"body":"Panel"})).unwrap()["drawing"].clone();
+        assert_eq!(preview(&mut s,&json!({"body":"Panel","previous":original.clone()})).unwrap()["status"],"current");
+        let mut old=original;
+        old["source"].as_object_mut().unwrap().remove("top_edge_paths_xy_mm");
+        old["geometry"].as_object_mut().unwrap().remove("top_edge_candidates");
+        assert_eq!(preview(&mut s,&json!({"body":"Panel","previous":old})).unwrap()["status"],"current");
+    }
+
+    #[test]
+    fn contour_change_with_same_bbox_requires_confirmation() {
+        let mut s=Session::default();
+        s.execute("solid.box",&json!({"length":50,"width":30,"height":12,"body_name":"Panel"})).unwrap();
+        let first=preview(&mut s,&json!({"body":"Panel"})).unwrap()["drawing"].clone();
+        let mut modified=first.clone();
+        modified["source"]["top_edge_paths_xy_mm"][0][0][0]=json!(1.25);
+        let stale=preview(&mut s,&json!({"body":"Panel","previous":modified.clone()})).unwrap();
+        assert_eq!(stale["status"],"stale");
+        assert_eq!(stale["drawing"],modified);
+        let accepted=preview(&mut s,&json!({"body":"Panel","previous":modified,"accept":true})).unwrap();
+        assert_eq!(accepted["status"],"updated");
+    }
+
+    #[test]
+    fn malformed_top_edge_signature_never_reports_current() {
+        let mut s=Session::default();
+        s.execute("solid.box",&json!({"length":48,"width":32,"height":6,"body_name":"Panel"})).unwrap();
+        let mut d=preview(&mut s,&json!({"body":"Panel"})).unwrap()["drawing"].clone();
+        d["source"]["top_edge_paths_xy_mm"]=json!([[[1,2],["invalid",3]]]);
+        assert_eq!(preview(&mut s,&json!({"body":"Panel","previous":d})).unwrap()["status"],"stale");
+    }
 
     #[test]
     fn projected_brep_box_has_four_unique_xy_lines_without_mutating_model() {

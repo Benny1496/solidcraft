@@ -387,3 +387,35 @@ because it previously stalled CDP.
 - Five new Rust tests passed in the 23/23 engine total, confirming straight projections, repeatability, ignored vertical-only projections, model edits/undo, invalid inputs and existing linked-drawing isolation.
 - The newly demonstrated `drawing.projected_edges` API reports conservative **unclassified straight B-rep candidates only**. This is NOT yet a silhouette/hidden-line-removal engine, nor does it display true contours in the 2D egui drawing window or handle actual curved arcs and pockets as printable outlines. `drawing.preview` intentionally keeps the existing rectangle-based view and safely linked dimensions unchanged.
 - Next proposed increment (not yet implemented or tested): correct XY contour identification, true arc curves and visibility classification, then integrate a properly marked contour into the 2D GUI while preserving prior saved-document format, 3D update confirmation and 76 regression checks. Keep DXF timeouts isolated.
+
+
+## Run #24 development slice: sampled upper B-rep contours in the experimental 2D view (NOT YET TESTED, 22 October 2026)
+
+The existing \`drawing.preview\` now exposes \`geometry.top_edge_candidates\`,
+a sorted set of measured top-Z B-rep edge polylines, with
+\`points_xy_mm\`, \`kind: straight|sampled_curve\`, and \`closed\`.
+Curved edges are tessellated to bounded, millimetre-based samples; they
+are *not* replaced with straight endpoint chords. The experimental
+drawing SVG displays these paths distinctly, and the real egui window
+shows a candidate-edge overlay while continuing to show its bounding
+rectangle as an envelope. Existing cylindrical measures, annotations,
+layout and stale-model confirmation logic are preserved.
+
+New drawings include \`source.top_edge_paths_xy_mm\` for changes that
+alter the top contour but not bbox or bore measurements. Legacy
+drawings lacking this source field remain compatible. The persisted
+format stays \`solidcraft-drawing-preview/1\`.
+
+**Limits**: only edges whose full sampled curve lies in the topmost
+horizontal plane; no general HLR, silhouette topology, concave pocket
+visibility, cutting-plane support, exact arc representation, or
+standards-certified manufacturing output. As such the preview uses
+\`bbox_envelope_with_unclassified_upper_edge_samples\` and
+must not be described as a complete contour-projection engine.
+
+All previous 76 checks remain. Added six browser scenarios
+(rectangle, real chamfer, fillet, bores, edited revision and
+legacy/malformed snapshots), two egui window tests and four Rust tests.
+Planned #24 is **88 checks: 42 browser + 19 egui + 27 Rust** in the
+same manual, non-fail-fast workflow; only a successful future run
+can validate those counts and the new functionality.

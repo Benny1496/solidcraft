@@ -150,6 +150,12 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("drawing-edges-bores", include_str!("browser_drawing_edges_bores_test.js")),
         ("drawing-edges-matrix", include_str!("browser_drawing_edges_matrix_test.js")),
         ("drawing-edges-safety", include_str!("browser_drawing_edges_safety_test.js")),
+        ("drawing-upper-box", include_str!("browser_drawing_upper_box_test.js")),
+        ("drawing-upper-chamfer", include_str!("browser_drawing_upper_chamfer_test.js")),
+        ("drawing-upper-fillet", include_str!("browser_drawing_upper_fillet_test.js")),
+        ("drawing-upper-bores", include_str!("browser_drawing_upper_bores_test.js")),
+        ("drawing-upper-revision", include_str!("browser_drawing_upper_revision_test.js")),
+        ("drawing-upper-legacy", include_str!("browser_drawing_upper_legacy_test.js")),
     ];
     let scenario_count = scenarios.len();
     let mut passed = 0;
