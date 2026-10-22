@@ -619,3 +619,39 @@ certified HLR or PDF export.
 **Planned manual workflow #27: 122 checks** =
 62 browser (60 CAD + 2 baselines), 25 egui, 35 Rust.
 Do not describe this batch as successful until GitHub CI logs confirm it.
+
+## Consolidated #27 manual workflow: experimental Drawing + upstream W23a oracle
+
+Following the independently claimed upstream contribution
+[#4950](https://github.com/tangency-labs/solidcraft/issues/4950),
+with [draft PR #4962](https://github.com/tangency-labs/solidcraft/pull/4962),
+the *existing fork-only* manual GitHub Actions workflow now has two
+independent jobs, one launch:
+
+1. **Experimental Browser Smoke:** run the previously prepared #27 suite
+   on \`feature/browser-automation\` (planned 122 scoped checks across
+   browser/API, real egui UI and Rust Drawing engine).
+2. **Official workshop W23a oracle:** separately check out
+   \`feature/upstream-4950-oracle\` from the same fork, verify every
+   analytic \`tests/oracle/84-*\` through \`95-*\` reference via
+   \`python3 tests/oracle/W23a-verify.py\`, build the genuine SolidCraft
+   native CLI and run **all** \`cargo xtask oracle\` reference cases.
+   Upload the resulting \`docs/oracle.md\` report.
+
+Both jobs are independent; a failure in one does not prevent the other
+from reporting. Do not mistake a passing independent formula check for
+successful B-rep geometry replay or an accepted upstream PR. The oracle
+branch remains free of the experimental Drawing code, and the extra
+job is **not** part of upstream draft PR #4962.
+
+The 12 new oracle cases include a chamfered plate and a separate
+chamfer-plus-fillet reference with closed-form volume, area and centroid.
+Kernel replay is still required to validate the actual edge selections
+and topology; production 2D command acceptance remains gated by the
+upstream Drawing API and storage decisions.
+
+This workflow is manual and must be dispatched by a GitHub account with
+Actions access. Selecting branch \`feature/browser-automation\` triggers
+the combined job list; do not select the oracle-only branch, where this
+fork-only workflow is intentionally absent.
+
