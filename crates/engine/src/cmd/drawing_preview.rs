@@ -15,7 +15,7 @@ pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new(CMD, "Preview Drawing",
     .noundo()
     .at("INSPECT", "DRAWING")
     .icon("inspect")
-    .params("body: name; previous?: a prior drawing from this command; accept?: bool. Returns provisional top-view rectangle and vertical cylinders. When geometry changes, returns stale/confirmation_required without modifying previous; accept:true returns an updated drawing with preserved label positions. No persisted sheet, full silhouette or dialog.")];
+    .params("body: name; previous?: a prior drawing from this command; accept?: bool. Returns provisional top-view rectangle and vertical cylinders. When geometry changes, returns stale/confirmation_required without modifying previous; accept:true returns an updated drawing with preserved label positions. Also reports read-only provisional cylinder diameters and XY offsets from bounding edges. No persistent hole identifiers or native drawing sheet.")];
 
 fn coords(value: &Value, n: usize) -> Option<Vec<f64>> {
     let arr = value.as_array().filter(|a| a.len() == n)?;
@@ -51,6 +51,20 @@ fn source_matches(old: &Value, current: &Value) -> bool {
         (Some(a), Some(b)) => a == b,
         _ => false,
     }
+}
+
+/// Read-only measurements derived from actual B-rep cylinder surfaces and
+/// the body's XY bounding rectangle. Entries have no persistent hole id:
+/// without certified feature provenance reordering must never move a callout.
+fn provisional_cylinder_dimensions(holes: &[[f64; 3]], min: &[f64]) -> Vec<Value> {
+    holes.iter().map(|h| json!({
+        "kind": "vertical_cylinder",
+        "reference_status": "unverified",
+        "center_mm": [h[0], h[1]],
+        "diameter_mm": h[2],
+        "x_from_left_mm": mm(h[0] - min[0]),
+        "y_from_bottom_mm": mm(h[1] - min[1])
+    })).collect()
 }
 
 // A limited, geometrically scaled SVG view for the same verified XY envelope.
@@ -217,6 +231,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
             "outline": { "type": "rectangle_envelope", "min_xy_mm": [mm(min[0]),mm(min[1])],
                          "max_xy_mm": [mm(max[0]),mm(max[1])] },
             "cylinders": holes.iter().map(|h| json!({"center_mm":[h[0],h[1]],"diameter_mm":h[2]})).collect::<Vec<_>>(),
+            "cylinder_dimensions": provisional_cylinder_dimensions(&holes, &min),
         },
         "dimensions": [
             {"id":"overall_x","kind":"horizontal","value_mm":dimensions[0]},
@@ -225,7 +240,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
         "svg": svg_preview(&min, &max, &holes, &layout),
         "label_positions": layout,
         "warnings": if !holes.is_empty() {
-            vec!["Cylinder circles are provisional. Bore dimension/callout identity is not yet linked to a stable model source; do not reattach callouts automatically"]
+            vec!["Measured cylinder diameters and XY offsets are provisional, not confirmed hole callouts. No persistent hole/feature reference exists; never reattach drawing dimensions by list order"]
         } else {
             Vec::new()
         }
