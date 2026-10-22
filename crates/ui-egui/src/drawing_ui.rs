@@ -193,6 +193,15 @@ fn render_plate(ui: &mut egui::Ui, drawing: &mut Value, editable: bool) -> bool 
                     let cross = 5.0;
                     ui.painter().line_segment([p - vec2(cross,0.0), p + vec2(cross,0.0)], Stroke::new(0.7,t.text_dim));
                     ui.painter().line_segment([p - vec2(0.0,cross), p + vec2(0.0,cross)], Stroke::new(0.7,t.text_dim));
+                    // Provisional, read-only diameter note based on the true
+                    // B-rep cylinder; no stable feature reference or manually
+                    // arranged dimension is implied at this stage.
+                    let radius_px = d as f32 * scale * 0.5;
+                    let leader_start = p + vec2(radius_px * 0.70, -radius_px * 0.70);
+                    let leader_end = leader_start + vec2(13.0, -14.0);
+                    ui.painter().line_segment([leader_start, leader_end], Stroke::new(0.7,t.text_dim));
+                    ui.painter().text(leader_end + vec2(2.0,-1.0), Align2::LEFT_BOTTOM,
+                        format!("Ø{d:.2}"),FontId::proportional(11.0),t.text_dim);
                 }
             }
         }
