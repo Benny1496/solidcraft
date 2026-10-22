@@ -298,3 +298,20 @@ Source inspection confirms that `Harness::at` forwards non-array locators to `ui
 All **nine click steps across the four failing GUI tests** now use `{"click":{"handle":"drawing:cylinder:N"}}` (indices 0 and 1). Production UI code and assertions are unchanged. All 15 GUI tests and the full 60-check non-fail-fast bundle are retained.
 
 Static verification checked the nine replacements, absence of the invalid cylinder click syntax, and preservation of test names/assertions and production code. No Rust build or GUI execution was performed for this correction yet; the latest executed result remains Run #20, **56/60**. Start a new manual `SolidCraft Browser Smoke (manual)` run on `feature/browser-automation` to validate the corrected commit, rather than rerunning the old SHA.
+
+
+## Verified success: corrected direct-selection GUI tests — Run #21 (22 October 2026)
+
+[Run #21](https://github.com/Benny1496/solidcraft/actions/runs/39752171411) completed **successfully** at 09:33:37 UTC on `feature/browser-automation`, tested commit `b017c114e52a5d460fe6da1b95c931879ce0e662`. Job `119735151506` and its execution log were checked.
+
+| Group | Verified result |
+| --- | --- |
+| Browser CAD scenarios + API smoke + reference plate | **29/29 PASS** (27 + 2) |
+| Real egui drawing interaction tests | **15/15 PASS** |
+| Native Rust drawing core | **16/16 PASS** |
+| Total | **60/60 PASS** |
+| JavaScript syntax, WASM build, artifact upload, final summary | **PASS** |
+
+All four GUI tests that failed in #20 now pass with the nine structured handle locators. This verifies actual circle selection, exact selection of the second cylinder and its diameter/X/Y annotations, switching selection, blocking edits on unsaved/stale drawings, resuming after explicit update, clearing selection and resetting it on reopening without persisting transient state. No production-code change was needed for this correction.
+
+The earlier pending-validation notices are superseded by this result for the tested SHA. The prototype remains limited to the XY bounding envelope and verified cylinder references; true silhouette projection, arbitrary edge selection, centre-to-centre dimensions and production drawing sheets/export remain outside this test claim. This update changes documentation only.
