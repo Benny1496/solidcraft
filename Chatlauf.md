@@ -136,30 +136,31 @@ Trotz des grünen Testlaufs ist die 2D-Fertigungszeichnung **noch experimentell*
 - Nicht den GitHub-Workflow manuell auf \`main\` auslösen; nicht aus dem Erfolg eines alten Commits auf einen neuen schließen.
 - Keine Ergebnisse, Testanzahl, Dokumentationssync oder Berechtigungen erfinden.
 
-## 8. Home Assistant: separate Projektstatusdatei / spätere Synchronisation
+## 8. Home Assistant: freigegebener Projektordner und Dokumentationspflege
 
-- Gewünschtes Ziel des Nutzers: Die technische Projektübergabe auch in Home Assistant aktuell halten.
-- Bekannter HA-Dateipfad: \`/share/GitHub SolidCraft/PROJEKTSTATUS.md\`.
-- Ein früherer Aufruf der Home-Assistant-Verbindung zur Dateiaktualisierung wurde **ausdrücklich wegen fehlender Zustimmung/Anmeldung abgewiesen**. Die Rückmeldung verbot, denselben abgelehnten Tool-Pfad erneut aufzurufen. **Diese Sperre beachten.**
-- **Die HA-Datei ist nicht als synchronisiert bestätigt.** Alle aktuellen nachprüfbaren Informationen stehen derzeit in GitHub, in \`docs/experimental-linked-drawing.md\` und hier in \`Chatlauf.md\`.
-- Nach Abschluss von Test #19 ist GitHub-Projektstand bereits erfolgreich verifiziert. Nun mit dem Nutzer klären, ob Home Assistant wieder **ausdrücklich autorisiert/verbunden** ist. **Nur bei wiederhergestellter Autorisierung** den HA-Projektstatus lesen/abgleichen/aktualisieren, dabei vorhandene Inhalte respektieren. Anschließend den wirklichen Schreib- und Lesestand verifizieren.
-- In einem neuen Chat **nicht** ohne erteilte neue Berechtigung den zuvor abgelehnten HA-Dateizugriff wiederholen. Keine Aussage „synchronisiert“, solange kein erfolgreicher Dateizugriff vorliegt.
+- **Bestätigter HA-Ordner:** `/share/GitHub SolidCraft/`
+- **Dateien:** `/share/GitHub SolidCraft/Chatlauf.md` (dauerhafter Projekt-/Chatverlauf) und `/share/GitHub SolidCraft/PROJEKTSTATUS.md` (technischer Projektstatus).
+- **Zugriff wiederhergestellt und verifiziert am 22.10.2026:** Die HA-Verbindung konnte den freigegebenen Ordner auflisten, `Chatlauf.md` als textidentische Kopie der GitHub-Datei schreiben und zurücklesen. Die bestehende `PROJEKTSTATUS.md` wurde erhalten, um einen **Nachtrag zu GitHub-Testlauf #19 mit 50/50 grünen Prüfungen** und den jüngsten Zeichnungsfunktionen erweitert, erfolgreich überschrieben und vollständig gegengeprüft.
+- **Explizite Erlaubnis des Nutzers vom 22.10.2026:** Der Assistent darf die beiden genannten Markdown-Projektdokumente im freigegebenen HA-Ordner **bei der laufenden Projektarbeit jederzeit ohne vorherige Rückfrage lesen und aktualisieren**. Diese Erlaubnis bezieht sich auf die Projektdokumentation, **nicht** auf andere Home-Assistant-Systemdateien, Steuerungen oder Einstellungen. Die Verbindung muss weiterhin technisch verfügbar und für die Pfade freigeschaltet sein.
+- **Historischer Kontext:** Ein älterer Schreibversuch wurde abgewiesen. Danach wurde der HA-Ordner neu freigegeben, die Verbindung erfolgreich geprüft und die aktuelle ausdrückliche Erlaubnis erteilt. Vermeide weitere Zugriffe nur, wenn die Verbindung **erneut** verweigert wird; in diesem Fall die aktuelle Sperre respektieren.
+- **Dauerhafte Arbeitsvereinbarung:** Nach wesentlichen CAD-Entwicklungsschritten und nach tatsächlich bestätigten GitHub-Testläufen `Chatlauf.md` und `PROJEKTSTATUS.md` im freigegebenen HA-Ordner aktualisieren; die GitHub-Dokumente `Chatlauf.md` und `docs/experimental-linked-drawing.md` ebenfalls auf dem Laufenden halten. Historie nicht löschen, Ergänzungen nachprüfbar kennzeichnen und Schreib-/Leseerfolg prüfen.
+- **Kein Hintergrunddienst:** Die Erlaubnis gestattet Updates im Rahmen unserer aktiven Arbeitsaufträge; sie startet keine eigenständigen automatischen, zeitversetzten Schreibvorgänge.
 
 ## 9. Anleitung für den nächsten Chat / den ausführenden Assistenten
 
 Wenn ein neuer Chat beginnt und auf dieses Projekt Bezug genommen wird:
 
-1. Im verbundenen GitHub-Fork \`Benny1496/solidcraft\`, Branch \`feature/browser-automation\`, als Erstes **\`Chatlauf.md\`** und danach bei technischen Fragen **\`docs/experimental-linked-drawing.md\`** lesen. Die GitHub-Version ist der maßgebliche, bisher fortlaufend gespeicherte Projektkontext.
+1. Als Erstes **\`/share/GitHub SolidCraft/Chatlauf.md\`** und **\`/share/GitHub SolidCraft/PROJEKTSTATUS.md\`** im freigegebenen HA-Ordner lesen; bei technischen Fragen ergänzend **\`docs/experimental-linked-drawing.md\`** im GitHub-Fork auf Branch \`feature/browser-automation\`. GitHub-\`Chatlauf.md\` ist Sicherungskopie.
 2. Aktuelle Head-SHA, letzte GitHub-Action und Testprotokolle prüfen, insbesondere falls der Nutzer einen Lauf gestartet oder einen Fehler gemeldet hat.
 3. Als zuletzt **verifizierten** Stand #19 mit 50/50 grünen Prüfungen verwenden. Nicht versehentlich erneut einen bereits behobenen Rückschritt beginnen.
 4. Gemeinsam mit dem Nutzer die nächste 2D-Zeichnungsfunktion planen oder – wenn die Aufgabenstellung klar ist – direkt im GitHub-Branch implementieren. Immer den **großen, unabhängigen Testblock** beibehalten/erweitern.
 5. Nach eigenem Code-Commit den Nutzer um einen neuen **manuellen** Workflow-Lauf auf dem korrekten Branch bitten; Logs selbst abrufen, Fehler gesammelt korrigieren.
-6. **Nach bestätigtem Testergebnis sowohl \`Chatlauf.md\` als auch \`docs/experimental-linked-drawing.md\` aktualisieren.** Tests nicht als grün deklarieren, bevor sie bestanden wurden.
-7. Beim Thema Home Assistant an die frühere Zugriffsverweigerung und die erforderliche **erneute Zustimmung** denken.
+6. **Nach bestätigtem Testergebnis beide HA-Dateien (\`Chatlauf.md\`, \`PROJEKTSTATUS.md\`) und beide GitHub-Dokumente (\`Chatlauf.md\`, \`docs/experimental-linked-drawing.md\`) aktualisieren.** Tests nicht als grün deklarieren, bevor sie bestanden wurden.
+7. Die am 22.10.2026 ausdrücklich erteilte Dokumentations-Schreibfreigabe respektieren und nutzen, solange der HA-Ordner technisch verfügbar bleibt. Bei einer neuen tatsächlichen Zugriffsverweigerung nicht eigenmächtig Sperren umgehen.
 
 **Kurzfassung zum Copy/Paste beim Start eines neuen Chats:**
 
-> „Wir setzen GitHub SolidCraft fort. Bitte lies zuerst die Datei \`Chatlauf.md\` im Repo \`Benny1496/solidcraft\` auf \`feature/browser-automation\` und die Datei \`docs/experimental-linked-drawing.md\`. Halte die bisherigen Entscheidungen ein, prüfe den neuesten GitHub-Teststatus und arbeite ausschließlich direkt auf GitHub weiter. Nutze wieder große Testpakete mit vollständiger Fehlerauswertung; nach jedem erfolgreichen Durchlauf die Dokumentation fortführen. Home Assistant nur nach erneuter Autorisierung synchronisieren.“
+> „Wir setzen GitHub SolidCraft fort. Bitte lies zuerst die Datei \`Chatlauf.md\` im Repo \`Benny1496/solidcraft\` auf \`feature/browser-automation\` und die Datei \`docs/experimental-linked-drawing.md\`. Halte die bisherigen Entscheidungen ein, prüfe den neuesten GitHub-Teststatus und arbeite ausschließlich direkt auf GitHub weiter. Nutze wieder große Testpakete mit vollständiger Fehlerauswertung; nach jedem erfolgreichen Durchlauf die Dokumentation fortführen. Die freigegebenen HA-Projektdateien im Rahmen unserer Arbeit ohne erneute Rückfrage aktuell halten.“
 
 ---
 
