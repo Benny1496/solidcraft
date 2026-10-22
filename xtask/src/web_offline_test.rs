@@ -87,10 +87,29 @@ pub fn run_api(site: &str) -> Result<(), String> {
     cdp.call("Emulation.setDeviceMetricsOverride", json!({"width": 1280, "height": 900, "deviceScaleFactor": 1, "mobile": false}))?;
     cdp.call("Page.navigate", json!({"url": format!("http://127.0.0.1:{}{PREFIX}?webgl", server.port)}))?;
     wait_for(&mut cdp, "!!window.solidcraft && !document.getElementById('solidcraft_loading')", "the browser API is ready", |v| v == true)?;
-    let result = cdp.eval(API_TEST)?;
-    println!("web-api-test: {result}");
-    let plate = cdp.eval(include_str!("browser_plate_test.js"))?;
-    println!("web-api-test plate: {plate}");
+    // All browser checks should report independently, even if the initial
+    // smoke test or the four-hole plate fails. An unavailable Chrome/CDP
+    // session itself is a fatal infrastructure error; evaluated JS scenarios
+    // are isolated and accumulated in the final failing summary.
+    let mut failures: Vec<String> = Vec::new();
+    let mut baseline_passed = 0;
+    for (name, script) in [
+        ("api-smoke", API_TEST),
+        ("four-hole-plate", include_str!("browser_plate_test.js")),
+    ] {
+        let started = Instant::now();
+        println!("web-api-test {name}: START");
+        match cdp.eval(script) {
+            Ok(report) => {
+                baseline_passed += 1;
+                println!("web-api-test {name}: PASS ({:.2}s) {report}", started.elapsed().as_secs_f64());
+            }
+            Err(error) => {
+                println!("web-api-test {name}: FAIL ({:.2}s) {error}", started.elapsed().as_secs_f64());
+                failures.push(format!("{name}: {error}"));
+            }
+        }
+    }
     // One compiled WebAssembly build, several independent browser CAD scenarios.
     // Each scenario starts a fresh design, except the verified four-hole plate above.
     // Browser DXF export currently blocks the DevTools client for its entire
@@ -118,7 +137,6 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("drawing-dim-many", include_str!("browser_drawing_dim_many_test.js")),
     ];
     let scenario_count = scenarios.len();
-    let mut failures = Vec::new();
     let mut passed = 0;
     for (name, script) in scenarios {
         let started = Instant::now();
@@ -135,8 +153,14 @@ pub fn run_api(site: &str) -> Result<(), String> {
         }
     }
     println!("web-api-test CAD suite: {passed}/{scenario_count} scenarios passed");
+    let total = scenario_count + 2;
+    let total_passed = passed + baseline_passed;
+    println!("web-api-test consolidated: {total_passed}/{total} independent browser checks passed; {} failed", failures.len());
+    for failure in &failures {
+        println!("web-api-test failure summary: {failure}");
+    }
     if !failures.is_empty() {
-        return Err(format!("{} CAD scenarios failed: {}", failures.len(), failures.join("; ")));
+        return Err(format!("{} browser checks failed: {}", failures.len(), failures.join("; ")));
     }
     Ok(())
 }
