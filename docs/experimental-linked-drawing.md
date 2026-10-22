@@ -289,3 +289,12 @@ Test names:
 Scope/caveats: The compiled WASM and Rust core pass, and 11 previous GUI tests pass. However the actual mouse-driven direct-cylinder-selection workflow is **not yet validated**, until those four tests pass. Preserve all 60 checks and the final red status for any remaining failure. A **new manual GitHub Actions run** is required after the code correction; a rerun of the old SHA is not sufficient for validating new code.
 
 **Next conversation handoff:** Private `Chatlauf.md` and `PROJEKTSTATUS.md` live exclusively in the user-authorized Home Assistant folder `/share/GitHub SolidCraft/`; neither is stored in public GitHub. The user requested documentation/transfer first and a new chat afterward. Major architectural modifications require prior user confirmation.
+
+
+## Run #20 locator correction (22 October 2026; validation pending)
+
+Source inspection confirms that `Harness::at` forwards non-array locators to `ui.at`, and `control.rs` resolves published targets only through the `handle` object field. A bare string cannot resolve a published cylinder target.
+
+All **nine click steps across the four failing GUI tests** now use `{"click":{"handle":"drawing:cylinder:N"}}` (indices 0 and 1). Production UI code and assertions are unchanged. All 15 GUI tests and the full 60-check non-fail-fast bundle are retained.
+
+Static verification checked the nine replacements, absence of the invalid cylinder click syntax, and preservation of test names/assertions and production code. No Rust build or GUI execution was performed for this correction yet; the latest executed result remains Run #20, **56/60**. Start a new manual `SolidCraft Browser Smoke (manual)` run on `feature/browser-automation` to validate the corrected commit, rather than rerunning the old SHA.

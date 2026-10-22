@@ -835,13 +835,13 @@ mod tests {
             "the actual drawing must expose a real mouse hit target");
         assert!(h.app.drawing_ui.selected_face.is_none());
         // Before the drawing is saved a circle cannot be used for editing.
-        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.step(&json!({"click":{"handle":"drawing:cylinder:0"}})).unwrap();
         h.frames(2);
         assert!(h.app.drawing_ui.selected_face.is_none(),
             "unsaved drawing is deliberately read-only");
         h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
         h.frames(3);
-        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.step(&json!({"click":{"handle":"drawing:cylinder:0"}})).unwrap();
         h.frames(2);
         assert!(h.app.drawing_ui.selected_face.is_some(),
             "real click directly on the projected circle selects its exact 3D face");
@@ -872,7 +872,7 @@ mod tests {
         h.frames(3);
         h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
         h.frames(2);
-        h.step(&json!({"click":"drawing:cylinder:1"})).unwrap();
+        h.step(&json!({"click":{"handle":"drawing:cylinder:1"}})).unwrap();
         h.frames(2);
         let selected=h.app.drawing_ui.selected_face.clone().unwrap();
         let model=h.app.session.doc.metadata.get(KEY).unwrap();
@@ -894,7 +894,7 @@ mod tests {
         }
         assert!(h.widget("Ø aus Auswahl ✓").is_some(),
             "duplicate dimension selection visibly disabled");
-        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.step(&json!({"click":{"handle":"drawing:cylinder:0"}})).unwrap();
         h.frames(2);
         assert_ne!(h.app.drawing_ui.selected_face.as_deref(),Some(selected.as_str()),
             "the other circle has its own distinct history-verified source");
@@ -909,7 +909,7 @@ mod tests {
         h.frames(3);
         h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
         h.frames(2);
-        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.step(&json!({"click":{"handle":"drawing:cylinder:0"}})).unwrap();
         h.frames(2);
         assert!(h.app.drawing_ui.selected_face.is_some());
         h.app.run("solid.hole",json!({
@@ -921,14 +921,14 @@ mod tests {
             "selected 3D reference cleared while an old drawing is being displayed");
         assert!(h.widget("Ø aus Auswahl").is_none(),
             "no annotation may be inserted before confirming a model revision");
-        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.step(&json!({"click":{"handle":"drawing:cylinder:0"}})).unwrap();
         h.frames(2);
         assert!(h.app.drawing_ui.selected_face.is_none());
         assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap()
             ["annotations"].as_array().unwrap().len(),0);
         h.step(&json!({"widget":"Zeichnung aktualisieren"})).unwrap();
         h.frames(3);
-        h.step(&json!({"click":"drawing:cylinder:1"})).unwrap();
+        h.step(&json!({"click":{"handle":"drawing:cylinder:1"}})).unwrap();
         h.frames(2);
         assert!(h.app.drawing_ui.selected_face.is_some(),
             "click selection works again after explicit drawing update");
@@ -943,7 +943,7 @@ mod tests {
         h.frames(3);
         h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
         h.frames(3);
-        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.step(&json!({"click":{"handle":"drawing:cylinder:0"}})).unwrap();
         h.frames(2);
         assert!(h.widget("Auswahl aufheben").is_some());
         assert!(h.app.session.doc.metadata.get(KEY).unwrap()
@@ -952,7 +952,7 @@ mod tests {
         h.frames(2);
         assert!(h.app.drawing_ui.selected_face.is_none());
         assert!(h.widget("Ø aus Auswahl").is_none());
-        h.step(&json!({"click":"drawing:cylinder:0"})).unwrap();
+        h.step(&json!({"click":{"handle":"drawing:cylinder:0"}})).unwrap();
         h.frames(2);
         assert!(h.app.drawing_ui.selected_face.is_some());
         h.app.drawing_ui.open=false;
