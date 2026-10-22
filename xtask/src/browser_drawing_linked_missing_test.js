@@ -23,6 +23,8 @@
  check(accepted.status==='updated','user can accept removal without auto reattachment');
  check(accepted.drawing.annotations[0].face_name===selected.eligible_face_name,'face identity retained for inspection');
  check(accepted.drawing.annotations[0].reference_status==='missing_reference','still unresolved');
+ check(accepted.drawing.svg.includes('? Ø8.00'),
+   'SVG marks a lost reference without pretending its historic diameter is current');
  check((await app.execute('drawing.preview',{body:'Plate',previous:accepted.drawing})).status==='current',
     'accepted missing annotation does not endlessly retrigger a warning');
  return {test:'deleted hole leaves old annotation unresolved, not matched to another same-sized circle',result:'passed'};
