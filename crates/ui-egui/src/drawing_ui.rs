@@ -297,7 +297,15 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         } else {
             ui.label("Noch kein Zeichnungsblatt gespeichert.");
         }
-        if let Some(mut drawing) = state.snapshot.clone().or_else(|| state.draft.clone()) {
+        // Prefer the recomputed read-only view when the stored snapshot is still
+        // current (including older files with fewer measured dimension fields).
+        // For a stale sheet, always show the original until confirmation.
+        let displayed = if state.proposed.is_some() {
+            state.snapshot.clone()
+        } else {
+            state.draft.clone().or_else(|| state.snapshot.clone())
+        };
+        if let Some(mut drawing) = displayed {
             ui.separator();
             // Edit the label coordinates on a draft. Persist only when drag ends.
             let editable = state.snapshot.is_some() && state.proposed.is_none();
@@ -528,6 +536,52 @@ mod tests {
             "the old drawing window must not remain open for another document");
         assert!(h.app.session.doc.metadata.get(KEY).is_none(),
             "a brand-new design must not inherit an old sheet");
+    }
+
+    #[test]
+    fn measured_diameter_and_xy_offsets_are_visible_in_the_drawing_window() {
+        let mut h = drawing_harness();
+        h.app.run("solid.hole", json!({"name":"FirstDrill",
+            "position":[15,12,8],"diameter":6})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Aus 3D gemessene Zylindermaße (vorläufig)").is_some(),
+            "the new measured geometry table must be visible in real egui");
+        assert!(h.widget("Ø 6.00 mm").is_some(),
+            "a diameter measured from the real 3D cylinder must reach the drawing");
+        assert!(h.widget("15.00 mm").is_some(), "X-offset of the centre is visible");
+        assert!(h.widget("12.00 mm").is_some(), "Y-offset of the centre is visible");
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.frames(3);
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["geometry"]["cylinder_dimensions"][0]["diameter_mm"].as_f64(),Some(6.0));
+        assert!(h.widget("Ø 6.00 mm").is_some(),
+            "3D-derived diameter stays visible after saving the drawing");
+    }
+
+    #[test]
+    fn added_cylinder_requires_confirmation_before_new_2d_diameter_appears() {
+        let mut h = drawing_harness();
+        h.app.run("solid.hole", json!({"name":"FirstDrill",
+            "position":[15,12,8],"diameter":6})).unwrap();
+        h.frames(3);
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.frames(2);
+        assert!(h.widget("Ø 6.00 mm").is_some());
+        h.app.run("solid.hole", json!({"name":"SecondDrill",
+            "position":[65,35,8],"diameter":10})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some(),
+            "new 3D cylinder triggers drawing revision confirmation");
+        assert!(h.widget("Ø 6.00 mm").is_some(),
+            "old cylinder dimensions remain while confirmation is outstanding");
+        assert!(h.widget("Ø 10.00 mm").is_none(),
+            "new diameter must not silently appear in the saved old drawing");
+        h.step(&json!({"widget":"Zeichnung aktualisieren"})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Ø 10.00 mm").is_some(),
+            "confirmed model revision transfers second measured diameter");
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["geometry"]["cylinder_dimensions"].as_array().unwrap().len(),2);
     }
 
 }
