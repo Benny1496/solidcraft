@@ -165,7 +165,7 @@ fn annotation_add(s: &mut Session, p: &Value) -> Result<Value> {
     let mut counter = 1;
     let id = loop {
         let candidate=format!("linked_cyl_{counter}");
-        if !list.iter().any(|a| a["id"].as_str()==Some(&candidate)) { break candidate; }
+        if !list.iter().any(|a| a["id"].as_str()==Some(candidate.as_str())) { break candidate; }
         counter+=1;
         if counter>128 { return Err(bad(cmd,"annotation ids exhausted")); }
     };
@@ -183,7 +183,7 @@ fn annotation_add(s: &mut Session, p: &Value) -> Result<Value> {
         "id":id,"face_name":face,"kind":kind,"value_mm":annotation_value(d,kind),
         "center_mm":d["center_mm"],"reference_status":"resolved"
     }));
-    annotated["label_positions"][&id]=json!(location);
+    annotated["label_positions"][id.as_str()]=json!(location);
     let rechecked=preview(s,&json!({"body":name,"previous":annotated}))?;
     if rechecked["status"] != "current" {
         return Err(bad(cmd,"model changed before annotation could be saved"));
