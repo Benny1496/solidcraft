@@ -226,21 +226,49 @@ fn render_plate(ui: &mut egui::Ui, drawing: &mut Value, editable: bool) -> bool 
     let height = drawing["dimensions"][1]["value_mm"].as_f64().unwrap_or(f64::from(h));
     stopped |= draw_label(ui,drawing,"overall_x",format!("{width:.2} mm"),dim_x,scale,editable,t.text);
     stopped |= draw_label(ui,drawing,"overall_y",format!("{height:.2} mm"),dim_y,scale,editable,t.text);
+    // User-selected dimensions are anchored by an exact named 3D face.
+    // Their labels are independent of cylinder list order and remain visible
+    // with a warning after a reference is removed or becomes ambiguous.
+    let annotations = drawing["annotations"].as_array().cloned().unwrap_or_default();
+    for annotation in annotations {
+        let Some(id) = annotation["id"].as_str() else { continue };
+        let Some(source) = xy(&annotation["center_mm"]) else { continue };
+        let Some(at_xy) = point(drawing,id) else { continue };
+        let at = map(at_xy);
+        let from = map(source);
+        let resolved = annotation["reference_status"] == "resolved";
+        let color = if resolved { t.text } else { t.warning };
+        ui.painter().line_segment([from,at],Stroke::new(0.9,color));
+        let value = annotation["value_mm"].as_f64().or_else(||
+            annotation["last_value_mm"].as_f64()).unwrap_or(0.0);
+        let kind = annotation["kind"].as_str().unwrap_or("");
+        let prefix = if !resolved { "? " } else { "" };
+        let text = match kind {
+            "diameter" => format!("{prefix}Ø{value:.2} mm"),
+            "x_from_left" => format!("{prefix}X {value:.2} mm"),
+            "y_from_bottom" => format!("{prefix}Y {value:.2} mm"),
+            _ => continue,
+        };
+        stopped |= draw_label(ui,drawing,id,text,at,scale,editable,color);
+    }
     stopped
 }
 
 /// Show measured Ø and edge offsets, but intentionally without a persistent
 /// bore identifier. This is a read-only measured-geometry table, not an
 /// associative manufacturing callout selection.
-fn render_cylinder_measurements(ui: &mut egui::Ui, drawing: &Value) {
-    let Some(values) = drawing["geometry"]["cylinder_dimensions"].as_array() else { return };
-    if values.is_empty() { return; }
+fn render_cylinder_measurements(
+    ui: &mut egui::Ui, drawing: &Value, can_add: bool,
+) -> Option<(String,String)> {
+    let mut request = None;
+    let Some(values) = drawing["geometry"]["cylinder_dimensions"].as_array() else { return None };
+    if values.is_empty() { return None; }
     ui.separator();
     ui.label(RichText::new("Aus 3D gemessene Zylindermaße (vorläufig)").strong());
     ui.label(RichText::new("X ab linker Hüllrahmenkante, Y ab unterer Hüllrahmenkante. Zylinder sind noch nicht als Bohrungen zertifiziert; keine dauerhafte Maßreferenz.").small());
     egui::ScrollArea::vertical().max_height(145.0).show(ui, |ui| {
         egui::Grid::new("drawing_measured_cylinders").striped(true).show(ui, |ui| {
-            for title in ["Nr.", "Durchmesser", "X", "Y"] {
+            for title in ["Nr.", "Durchmesser", "X", "Y", "Bemaßung"] {
                 ui.strong(title);
             }
             ui.end_row();
@@ -254,10 +282,30 @@ fn render_cylinder_measurements(ui: &mut egui::Ui, drawing: &Value) {
                 ui.label(format!("Ø {d:.2} mm"));
                 ui.label(format!("{x:.2} mm"));
                 ui.label(format!("{y:.2} mm"));
+                if can_add {
+                    if let Some(face) = item["eligible_face_name"].as_str() {
+                        for (kind,caption) in [
+                            ("diameter","Ø setzen"),("x_from_left","X setzen"),
+                            ("y_from_bottom","Y setzen")
+                        ] {
+                            let already = drawing["annotations"].as_array().is_some_and(|list|
+                                list.iter().any(|a| a["face_name"].as_str() == Some(face)
+                                    && a["kind"].as_str() == Some(kind)));
+                            if !already && ui.button(caption).clicked() {
+                                request = Some((face.to_string(),kind.to_string()));
+                            }
+                        }
+                    } else {
+                        ui.label("Referenz nicht eindeutig");
+                    }
+                } else {
+                    ui.label("Zeichnung zuerst speichern / aktualisieren");
+                }
                 ui.end_row();
             }
         });
     });
+    request
 }
 
 /// Render a visible window and a separate explicit stale-model confirmation.
@@ -271,6 +319,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let mut window_open=true;
     let mut request_save:Option<Value>=None;
     let mut request_layout_save=false;
+    let mut request_annotation:Option<(String,String)>=None;
     let names=get_body_names(app);
     crate::frame::window(ctx, "2D-Zeichnung (Testversion)", crate::frame::Width::Wide)
         .id(egui::Id::new("sc_drawing_preview"))
@@ -335,7 +384,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 state.snapshot=Some(drawing.clone());
                 state.layout_changed=true;
             }
-            render_cylinder_measurements(ui, &drawing);
+            request_annotation = render_cylinder_measurements(ui, &drawing,editable);
             ui.label(RichText::new("Außenmaßtexte sind verschiebbar. Ø- und X/Y-Zylindermaße werden aus der 3D-Geometrie gemessen, aber noch nicht als sichere Fertigungsmaße referenziert.").small().color(t.text_dim));
             ui.horizontal(|ui| {
                 if state.snapshot.is_none() {
@@ -359,6 +408,20 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         persist(app,&mut state,v);
     } else if request_layout_save {
         save_layout(app,&mut state);
+    } else if let Some((face_name,kind)) = request_annotation {
+        if let Some(previous) = &state.snapshot {
+            let params = json!({"body":state.body,"previous":previous,
+                "face_name":face_name,"kind":kind});
+            match app.session.execute("drawing.annotation.add",&params) {
+                Ok(reply) if reply["status"] == "annotated" => {
+                    if let Some(drawing) = reply.get("drawing") {
+                        persist(app,&mut state,drawing.clone());
+                    }
+                }
+                Ok(_) => state.error=Some("Die Bemaßung konnte nicht erstellt werden.".into()),
+                Err(err) => state.error=Some(err.to_string()),
+            }
+        }
     }
 
     if state.proposed.is_some() && state.dismissed_revision != Some(app.session.revision) {
