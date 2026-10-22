@@ -841,6 +841,12 @@ fn undo_then_replacement_hole_gets_fresh_feature_and_face_identity() {
     assert_eq!(deleted["status"], "stale");
     assert_eq!(deleted["proposed"]["annotations"][0]["reference_status"], "missing_reference");
 
+    // Redo restores the *original* feature id; a subsequent new branch of
+    // history must allocate a different one.
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc.find_feature("A").unwrap().id, id_a);
+    run(&mut s, "edit.undo", json!({}));
+
     run(&mut s, "solid.hole", json!({
         "name": "ReplacementA", "position": [30, 20, 10], "diameter": 8
     }));
@@ -857,7 +863,7 @@ fn undo_then_replacement_hole_gets_fresh_feature_and_face_identity() {
     assert_eq!(annotation["reference_status"], "missing_reference");
     assert!(annotation["value_mm"].is_null());
     assert_eq!(annotation["last_value_mm"].as_f64(), Some(8.0));
-    assert_eq!(pending["proposed"]["label_positions"]["linked_cyl_1"], json!([20, 90]));
+    assert_eq!(pending["proposed"]["label_positions"]["linked_cyl_1"], json!([20.0, 90.0]));
 
     // The allocation watermark is stored with the document for future edits.
     let reopened = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap();
