@@ -22,6 +22,9 @@ pub struct State {
     checked_revision: Option<u64>,
     dismissed_revision: Option<u64>,
     layout_changed: bool,
+    /// UI-only selection of a certified 3D cylindrical face; never persisted as
+    /// an annotation until the user explicitly picks a dimension type.
+    selected_face: Option<String>,
 }
 
 fn xy(v: &Value) -> Option<[f32; 2]> {
@@ -162,7 +165,7 @@ fn draw_label(
     response.drag_stopped()
 }
 
-fn render_plate(ui: &mut egui::Ui, drawing: &mut Value, editable: bool) -> bool {
+fn render_plate(ui: &mut egui::Ui, drawing: &mut Value, editable: bool, selected_face: &mut Option<String>) -> bool {
     let t = Tokens::get();
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(280.0).min(670.0), 355.0), Sense::hover());
     ui.painter().rect_filled(rect, 6.0, t.panel);
@@ -185,11 +188,28 @@ fn render_plate(ui: &mut egui::Ui, drawing: &mut Value, editable: bool) -> bool 
     ui.painter().rect_stroke(Rect::from_min_max(left_top, right_bottom), 0.0, Stroke::new(1.8, t.text), StrokeKind::Inside);
 
     if let Some(circles) = drawing["geometry"]["cylinders"].as_array() {
-        for c in circles {
+        for (i,c) in circles.iter().enumerate() {
             if let (Some(at), Some(d)) = (xy(&c["center_mm"]), c["diameter_mm"].as_f64()) {
                 if d.is_finite() && d > 0.0 && d < 1e6 {
                     let p = map(at);
-                    ui.painter().circle_stroke(p, d as f32 * scale * 0.5, Stroke::new(1.5, t.text));
+                    let exact_face = drawing["geometry"]["cylinder_dimensions"][i]
+                        ["eligible_face_name"].as_str();
+                    let selected = exact_face.is_some_and(|face| selected_face.as_deref() == Some(face));
+                    let ring = if selected { t.accent } else { t.text };
+                    ui.painter().circle_stroke(p, d as f32 * scale * 0.5,
+                        Stroke::new(if selected { 3.0 } else { 1.5 },ring));
+                    // Hit test in screen space; a small bore still has a usable
+                    // finger/mouse target. Unverified faces remain read-only.
+                    let radius = (d as f32 * scale * 0.5).clamp(11.0, 32.0);
+                    let hit = Rect::from_center_size(p,vec2(radius*2.0,radius*2.0));
+                    crate::scenario::publish_target(&format!("drawing:cylinder:{i}"),hit);
+                    if editable && let Some(face) = exact_face {
+                        let response=ui.interact(hit,ui.id().with(("drawing_cylinder",i)),Sense::click());
+                        if response.hovered() {ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);}
+                        if response.clicked() {
+                            *selected_face = Some(face.to_string());
+                        }
+                    }
                     let cross = 5.0;
                     ui.painter().line_segment([p - vec2(cross,0.0), p + vec2(cross,0.0)], Stroke::new(0.7,t.text_dim));
                     ui.painter().line_segment([p - vec2(0.0,cross), p + vec2(0.0,cross)], Stroke::new(0.7,t.text_dim));
@@ -334,6 +354,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                     }
                 });
             if chosen != state.body {
+                state.selected_face = None;
                 state.body=chosen;
                 state.snapshot=app.session.doc.metadata.get(KEY)
                     .filter(|v| v["body"].as_str() == Some(state.body.as_str())).cloned();
@@ -375,7 +396,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             ui.separator();
             // Edit the label coordinates on a draft. Persist only when drag ends.
             let editable = state.snapshot.is_some() && state.proposed.is_none();
-            if render_plate(ui,&mut drawing,editable) {
+            if state.proposed.is_some() {state.selected_face = None;}
+            if render_plate(ui,&mut drawing,editable,&mut state.selected_face) {
                 state.layout_changed=true;
                 request_layout_save=true;
             }
@@ -383,7 +405,41 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 state.snapshot=Some(drawing.clone());
                 state.layout_changed=true;
             }
-            request_annotation = render_cylinder_measurements(ui, &drawing,editable);
+            if editable {
+                if let Some(face) = &state.selected_face {
+                    let selected= drawing["geometry"]["cylinder_dimensions"].as_array()
+                        .and_then(|list| list.iter().find(|d|
+                            d["eligible_face_name"].as_str() == Some(face)));
+                    if let Some(selected)=selected {
+                        ui.separator();
+                        ui.label(RichText::new("Im 2D-Bild ausgewählte 3D-Fläche").strong());
+                        let d=selected["diameter_mm"].as_f64().unwrap_or(0.0);
+                        ui.label(format!("Zylinder Ø {d:.2} mm – Maßart auswählen:"));
+                        ui.horizontal_wrapped(|ui| {
+                            for (kind, caption) in [
+                                ("diameter","Ø aus Auswahl"),
+                                ("x_from_left","X aus Auswahl"),
+                                ("y_from_bottom","Y aus Auswahl"),
+                            ] {
+                                let exists=drawing["annotations"].as_array().is_some_and(|list|
+                                    list.iter().any(|a| a["face_name"].as_str() == Some(face)
+                                        && a["kind"].as_str() == Some(kind)));
+                                if exists {ui.add_enabled(false,egui::Button::new(format!("{caption} ✓")));}
+                                else if ui.button(caption).clicked() {
+                                    request_annotation=Some((face.to_string(),kind.to_string()));
+                                }
+                            }
+                            if ui.button("Auswahl aufheben").clicked() {
+                                state.selected_face=None;
+                            }
+                        });
+                    } else {
+                        state.selected_face=None;
+                    }
+                }
+            }
+            let table_request = render_cylinder_measurements(ui, &drawing,editable);
+            if request_annotation.is_none() { request_annotation=table_request; }
             ui.label(RichText::new("Außenmaße und gesetzte Ø-/X-/Y-Maße sind verschiebbar. Bei Verlust der 3D-Flächenreferenz bleibt das Maß sichtbar, aber ungeklärt.").small().color(t.text_dim));
             ui.horizontal(|ui| {
                 if state.snapshot.is_none() {
