@@ -172,6 +172,10 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("drawing-triview-legacy", include_str!("browser_drawing_triview_legacy_test.js")),
         ("drawing-triview-metadata", include_str!("browser_drawing_triview_metadata_test.js")),
         ("drawing-triview-chamfer", include_str!("browser_drawing_triview_chamfer_test.js")),
+        ("upstream-pair-update", include_str!("browser_drawing_upstream_pair_update_test.js")),
+        ("upstream-pair-deletion", include_str!("browser_drawing_upstream_pair_deletion_test.js")),
+        ("upstream-pair-undo", include_str!("browser_drawing_upstream_pair_undo_test.js")),
+        ("upstream-pair-storage", include_str!("browser_drawing_upstream_pair_storage_test.js")),
     ];
     let scenario_count = scenarios.len();
     let mut passed = 0;

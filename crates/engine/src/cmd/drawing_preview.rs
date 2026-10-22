@@ -732,6 +732,78 @@ mod tests {
 
 
     #[test]
+    fn upstream_m2_two_similar_bores_keep_selected_diameter_and_pair_through_edit() {
+        let mut s=Session::default();
+        s.execute("parameters.add",&json!({"name":"BoreD","expression":"8 mm"})).unwrap();
+        s.execute("solid.box",&json!({"length":120,"width":70,"height":9,"body_name":"Plate"})).unwrap();
+        s.execute("solid.hole",&json!({"name":"A","position":[20,20,9],"diameter":"BoreD"})).unwrap();
+        s.execute("solid.hole",&json!({"name":"B","position":[90,45,9],"diameter":"BoreD"})).unwrap();
+        let d=preview(&mut s,&json!({"body":"Plate"})).unwrap()["drawing"].clone();
+        let faces=d["geometry"]["cylinder_dimensions"].as_array().unwrap();
+        assert_eq!(faces.len(),2);
+        let a=faces[0]["eligible_face_name"].as_str().unwrap().to_owned();
+        let b=faces[1]["eligible_face_name"].as_str().unwrap().to_owned();
+        assert_ne!(a,b);
+        let first=super::annotation_add(&mut s,&json!({"body":"Plate","previous":d,
+            "face_name":a,"kind":"diameter","position_mm":[15,62]})).unwrap();
+        let next=super::annotation_add(&mut s,&json!({"body":"Plate","previous":first["drawing"],
+            "face_name":a,"second_face_name":b,"kind":"center_distance",
+            "position_mm":[82,62]})).unwrap();
+        let saved=next["drawing"].clone();
+        let id_dia=first["annotation_id"].as_str().unwrap();
+        let id_pair=next["annotation_id"].as_str().unwrap();
+        assert_eq!(saved["annotations"].as_array().unwrap().len(),2);
+        s.execute("parameters.change",&json!({"name":"BoreD","expression":"10 mm"})).unwrap();
+        let pending=preview(&mut s,&json!({"body":"Plate","previous":saved})).unwrap();
+        assert_eq!(pending["status"],"stale");
+        assert_eq!(pending["drawing"],saved);
+        assert_eq!(pending["proposed"]["annotations"][0]["value_mm"].as_f64(),Some(10.0));
+        assert_eq!(pending["proposed"]["annotations"][1]["value_mm"].as_f64(),
+            Some(super::mm(70.0_f64.hypot(25.0))));
+        assert_eq!(super::coords(&pending["proposed"]["label_positions"][id_dia],2),
+            Some(vec![15.0,62.0]));
+        assert_eq!(super::coords(&pending["proposed"]["label_positions"][id_pair],2),
+            Some(vec![82.0,62.0]));
+        assert!(pending["proposed"]["annotations"].as_array().unwrap().iter().all(
+            |a|a["reference_status"]=="resolved"));
+    }
+
+    #[test]
+    fn upstream_m2_removed_second_bore_never_relabels_surviving_same_size_bore() {
+        let mut s=Session::default();
+        s.execute("solid.box",&json!({"length":110,"width":65,"height":8,"body_name":"Plate"})).unwrap();
+        s.execute("solid.hole",&json!({"name":"A","position":[20,20,8],"diameter":8})).unwrap();
+        s.execute("solid.hole",&json!({"name":"B","position":[80,40,8],"diameter":8})).unwrap();
+        let initial=preview(&mut s,&json!({"body":"Plate"})).unwrap()["drawing"].clone();
+        let faces=initial["geometry"]["cylinder_dimensions"].as_array().unwrap();
+        let a=faces[0]["eligible_face_name"].as_str().unwrap().to_owned();
+        let b=faces[1]["eligible_face_name"].as_str().unwrap().to_owned();
+        let kept=super::annotation_add(&mut s,&json!({"body":"Plate","previous":initial,
+            "face_name":a,"kind":"diameter","position_mm":[15,55]})).unwrap();
+        let lost=super::annotation_add(&mut s,&json!({"body":"Plate","previous":kept["drawing"],
+            "face_name":b,"kind":"diameter","position_mm":[92,55]})).unwrap();
+        let pair=super::annotation_add(&mut s,&json!({"body":"Plate","previous":lost["drawing"],
+            "face_name":a,"second_face_name":b,"kind":"center_distance",
+            "position_mm":[65,60]})).unwrap();
+        let original=pair["drawing"].clone();
+        s.execute("edit.undo",&json!({})).unwrap();
+        let pending=preview(&mut s,&json!({"body":"Plate","previous":original})).unwrap();
+        assert_eq!(pending["status"],"stale");
+        assert_eq!(pending["drawing"],original);
+        let notes=pending["proposed"]["annotations"].as_array().unwrap();
+        assert_eq!(notes.len(),3);
+        assert_eq!(notes[0]["reference_status"],"resolved");
+        assert_eq!(notes[0]["face_name"],a);
+        assert_eq!(notes[1]["face_name"],b);
+        assert_eq!(notes[1]["reference_status"],"missing_reference");
+        assert_eq!(notes[1]["value_mm"],Value::Null);
+        assert_eq!(notes[1]["last_value_mm"].as_f64(),Some(8.0));
+        assert_eq!(notes[2]["reference_status"],"missing_reference");
+        assert_eq!(notes[2]["value_mm"],Value::Null);
+        assert!(pending["proposed"]["svg"].as_str().unwrap().contains("? Ø8.00"));
+    }
+
+    #[test]
     fn three_view_reference_planes_of_box_use_real_3d_edges() {
         let mut s=Session::default();
         s.execute("solid.box",&json!({"length":90,"width":45,"height":8,
@@ -739,8 +811,8 @@ mod tests {
         let d=preview(&mut s,&json!({"body":"Plate"})).unwrap()["drawing"].clone();
         assert_eq!(d["geometry"]["top_edge_candidates"].as_array().unwrap().len(),4);
         let views=&d["geometry"]["reference_views"];
-        assert_eq!(views["front"]["bounds"]["max_xy_mm"],json!([90,8]));
-        assert_eq!(views["right"]["bounds"]["max_xy_mm"],json!([45,8]));
+        assert_eq!(views["front"]["bounds"]["max_xy_mm"],json!([90.0,8.0]));
+        assert_eq!(views["right"]["bounds"]["max_xy_mm"],json!([45.0,8.0]));
         assert_eq!(views["front"]["paths"].as_array().unwrap().len(),4);
         assert_eq!(views["right"]["paths"].as_array().unwrap().len(),4);
         assert_eq!(views["accuracy"],"unclassified_extreme_plane_brep_candidates_only");
@@ -758,7 +830,7 @@ mod tests {
         assert_eq!(pending["status"],"stale");
         assert_eq!(pending["drawing"],first);
         assert_eq!(pending["proposed"]["geometry"]["reference_views"]["front"]
-            ["bounds"]["max_xy_mm"],json!([80,12]));
+            ["bounds"]["max_xy_mm"],json!([80.0,12.0]));
         s.execute("edit.undo",&json!({})).unwrap();
         assert_eq!(preview(&mut s,&json!({"body":"Plate","previous":first}))
             .unwrap()["status"],"current");

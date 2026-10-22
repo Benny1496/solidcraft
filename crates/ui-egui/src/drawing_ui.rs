@@ -645,9 +645,9 @@ mod tests {
         let h=drawing_harness();
         let draft=h.app.drawing_ui.draft.as_ref().unwrap();
         assert_eq!(draft["geometry"]["reference_views"]["front"]["bounds"]
-            ["max_xy_mm"],json!([90,8]));
+            ["max_xy_mm"],json!([90.0,8.0]));
         assert_eq!(draft["geometry"]["reference_views"]["right"]["bounds"]
-            ["max_xy_mm"],json!([45,8]));
+            ["max_xy_mm"],json!([45.0,8.0]));
         assert!(h.widget("Vorderansicht (XZ, Y min) · vorläufig").is_some());
         assert!(h.widget("Seitenansicht (YZ, X max) · vorläufig").is_some());
     }
@@ -665,11 +665,78 @@ mod tests {
         assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap(),&original);
         assert_eq!(h.app.drawing_ui.proposed.as_ref().unwrap()
             ["geometry"]["reference_views"]["front"]["bounds"]["max_xy_mm"],
-            json!([120,8]));
+            json!([120.0,8.0]));
         h.step(&json!({"widget":"Zeichnung aktualisieren"})).unwrap();
         h.frames(3);
         assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap()
-            ["geometry"]["reference_views"]["front"]["bounds"]["max_xy_mm"],json!([120,8]));
+            ["geometry"]["reference_views"]["front"]["bounds"]["max_xy_mm"],json!([120.0,8.0]));
+    }
+
+    #[test]
+    fn upstream_m2_closed_sheet_reopen_defers_three_view_change_until_clicked() {
+        let mut h=drawing_harness();
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        let initial=h.app.session.doc.metadata.get(KEY).unwrap().clone();
+        assert_eq!(initial["geometry"]["reference_views"]["front"]["bounds"]
+            ["max_xy_mm"][0].as_f64(),Some(90.0));
+        h.app.drawing_ui.open=false;
+        h.frames(2);
+        h.app.run("parameters.change",json!({"name":"PanelLength","expression":"126 mm"})).unwrap();
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap(),&initial);
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some());
+        assert_eq!(h.app.drawing_ui.snapshot.as_ref().unwrap(),&initial);
+        assert_eq!(h.app.drawing_ui.proposed.as_ref().unwrap()
+            ["geometry"]["reference_views"]["front"]["bounds"]["max_xy_mm"][0].as_f64(),Some(126.0));
+        h.step(&json!({"widget":"Alte Zeichnung beibehalten"})).unwrap();
+        h.frames(2);
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap(),&initial);
+        h.app.drawing_ui.open=false;
+        h.frames(2);
+        h.step(&json!({"start":"drawing.preview"})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some());
+        h.step(&json!({"widget":"Zeichnung aktualisieren"})).unwrap();
+        h.frames(3);
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["geometry"]["reference_views"]["front"]["bounds"]["max_xy_mm"][0].as_f64(),Some(126.0));
+    }
+
+    #[test]
+    fn upstream_m2_two_bores_2d_clicks_select_separate_real_faces() {
+        let mut h=drawing_harness();
+        for (name,x,y) in [("BoreLeft",18,18),("BoreRight",70,30)] {
+            h.app.run("solid.hole",json!({
+                "name":name,"position":[x,y,8],"diameter":8
+            })).unwrap();
+        }
+        h.frames(3);
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.frames(2);
+        let before=h.app.session.doc.metadata.get(KEY).unwrap().clone();
+        assert_eq!(before["geometry"]["cylinder_dimensions"].as_array().unwrap().len(),2);
+        h.step(&json!({"click":{"handle":"drawing:cylinder:0"}})).unwrap();
+        h.frames(2);
+        let first=h.app.drawing_ui.selected_face.clone().unwrap();
+        h.step(&json!({"widget":"Ersten Mittelpunkt merken"})).unwrap();
+        h.frames(2);
+        h.step(&json!({"click":{"handle":"drawing:cylinder:1"}})).unwrap();
+        h.frames(2);
+        let second=h.app.drawing_ui.selected_face.clone().unwrap();
+        assert_ne!(first,second,"two similar circles must not use the same historical 3D face");
+        assert!(h.widget("Mitte-zu-Mitte setzen").is_some());
+        h.step(&json!({"widget":"Mitte-zu-Mitte setzen"})).unwrap();
+        h.frames(3);
+        let saved=h.app.session.doc.metadata.get(KEY).unwrap();
+        assert_eq!(saved["annotations"].as_array().unwrap().len(),1);
+        let pair=&saved["annotations"][0];
+        assert_eq!(pair["kind"],"center_distance");
+        assert_eq!(pair["face_name"],first);
+        assert_eq!(pair["second_face_name"],second);
+        let actual=(52.0_f64.hypot(12.0)*1000.0).round()/1000.0;
+        assert_eq!(pair["value_mm"].as_f64(),Some(actual));
+        assert_eq!(pair["reference_status"],"resolved");
     }
 
     #[test]

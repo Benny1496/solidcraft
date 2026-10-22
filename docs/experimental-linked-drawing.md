@@ -584,3 +584,38 @@ snapshot, persisted dimensions, chamfer), **2 real egui** tests and
 (58 browser, 23 GUI, 33 engine) — *not yet compiled or run in GitHub
 Actions*. A passed workflow is required before calling these
 additions successful.
+
+## Test #26 result and proposed upstream-oriented #27 (22 October 2026)
+
+Real [workflow run #26](https://github.com/Benny1496/solidcraft/actions/runs/39800272899)
+finished **failed**: 109 of 114 tests passed (57/58 browser, 21/23
+real egui, 31/33 Rust); WASM compiled and all eight newly added
+three-view browser scenarios passed. The only browser failure was an
+outdated warning-text assertion in `drawing-dim-offset`. Two Rust
+and two UI tests compared JSON integer literals with `f64` JSON
+numbers instead of asserting equivalent physical numeric values.
+The functional geometry and dimensions passed their browser tests.
+
+The next commit corrects those **five test assumptions without
+changing the engine or screen's drawing geometry**. Float-typed
+expected values are retained at full exact numeric precision in the
+Rust/UI checks; the browser warning check is updated to require the
+*actual explicit no-HLR / bounding-envelope disclosure*, not removed.
+
+Four new browser, two native egui and two Rust checks implement a
+coherent subset of the workshop acceptance fixtures requested by
+[upstream RFC #860](https://github.com/tangency-labs/solidcraft/issues/860#issuecomment-6344334038)
+for [W16/W23, #4894](https://github.com/tangency-labs/solidcraft/issues/4894):
+two similar bores with measured and separately placed diameter and
+centre-to-centre dimensions; stored/reopened drawing state; model
+parameter edits, deferral and user-accepted refresh; closing/reopening
+the real drawing window; undo/redo; deleting one of two similar bores
+without misattributing its dimensions; and preserved historical values
+and manually placed callouts. All tests stay within the temporary
+experimental `drawing.preview` metadata model pending upstream W11
+storage and W13 reference contracts. They do not claim upstream merge,
+certified HLR or PDF export.
+
+**Planned manual workflow #27: 122 checks** =
+62 browser (60 CAD + 2 baselines), 25 egui, 35 Rust.
+Do not describe this batch as successful until GitHub CI logs confirm it.

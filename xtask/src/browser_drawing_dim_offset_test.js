@@ -28,7 +28,7 @@
    'outer dimensions still use the bounded rectangle envelope');
  ok(d.geometry.top_edge_candidates.length>=4,
    'translated stock upper edges are now included');
- ok(d.warnings.some(w=>w.includes('NOT a certified manufacturing silhouette')),
+ ok(d.warnings.some(w=>w.includes('NOT complete visible/hidden silhouettes') && w.includes('bounding envelopes')),
    'preview does not claim a certified manufactured outline');
  return {test:'XY coordinates relative to shifted physical edges, mixed diameters',result:'passed'};
 })()

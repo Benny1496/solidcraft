@@ -1,0 +1,37 @@
+(async()=>{
+ const app=window.solidcraft,check=(v,m)=>{if(!v)throw Error(m)};
+ const near=(x,y,m)=>check(Number.isFinite(x)&&Math.abs(x-y)<.002,m+' ('+x+' / '+y+')');
+ await app.execute('file.new',{name:'RFC860 workshop pair update acceptance'});
+ await app.execute('parameters.add',{name:'BoreDia',expression:'8 mm'});
+ await app.execute('parameters.add',{name:'StockLength',expression:'140 mm'});
+ await app.execute('solid.box',{length:'StockLength',width:75,height:10,body_name:'Plate'});
+ await app.execute('solid.hole',{name:'LeftBore',position:[25,20,10],diameter:'BoreDia'});
+ await app.execute('solid.hole',{name:'RightBore',position:[105,50,10],diameter:'BoreDia'});
+ let d=(await app.execute('drawing.preview',{body:'Plate'})).drawing;
+ const bores=d.geometry.cylinder_dimensions;
+ check(bores.length===2&&bores.every(b=>b.eligible_face_name),'two certified 3D source faces');
+ const l=bores.find(x=>Math.abs(x.center_mm[0]-25)<.01).eligible_face_name;
+ const r=bores.find(x=>Math.abs(x.center_mm[0]-105)<.01).eligible_face_name;
+ let reply=await app.execute('drawing.annotation.add',{body:'Plate',previous:d,face_name:l,kind:'diameter',position_mm:[18,64]});
+ d=reply.drawing;const diaId=reply.annotation_id;
+ reply=await app.execute('drawing.annotation.add',{body:'Plate',previous:d,face_name:l,second_face_name:r,kind:'center_distance',position_mm:[80,70]});
+ d=reply.drawing;const distId=reply.annotation_id;
+ near(d.annotations.find(x=>x.kind==='diameter').value_mm,8,'old diameter');
+ near(d.annotations.find(x=>x.kind==='center_distance').value_mm,Math.hypot(80,30),'old centre distance');
+ const key='org.solidcraft.experimental_drawing';
+ await app.execute('document.metadata.set',{key,value:d});
+ await app.execute('parameters.change',{name:'BoreDia',expression:'10 mm'});
+ const original=(await app.execute('document.metadata',{})).metadata[key];
+ check(original.annotations.length===2,'saved annotation count');
+ const stale=await app.execute('drawing.preview',{body:'Plate',previous:original});
+ check(stale.status==='stale'&&stale.requires_confirmation,'deferred update');
+ check(stale.drawing.annotations.find(x=>x.kind==='diameter').value_mm===8,'old sheet unchanged');
+ near(stale.proposed.annotations.find(x=>x.kind==='diameter').value_mm,10,'updated 3D diameter');
+ near(stale.proposed.annotations.find(x=>x.kind==='center_distance').value_mm,Math.hypot(80,30),'same centre distance');
+ check(stale.proposed.label_positions[diaId][0]===18&&stale.proposed.label_positions[distId][1]===70,'manual labels retained');
+ check(stale.proposed.annotations.every(x=>x.reference_status==='resolved'),'face identity remains verified');
+ const accepted=await app.execute('drawing.preview',{body:'Plate',previous:original,accept:true});
+ await app.execute('document.metadata.set',{key,value:accepted.drawing});
+ check((await app.execute('drawing.preview',{body:'Plate',previous:accepted.drawing})).status==='current','confirmed update current');
+ return {test:'RFC860 two similar bores, selected diameter and centre distance, stable labels, defer/accept and saved data',result:'passed'};
+})()
