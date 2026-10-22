@@ -726,7 +726,8 @@ mod tests {
         assert_eq!(notes[0]["reference_status"],"resolved");
         assert_eq!(notes[0]["value_mm"].as_f64(),Some(8.0));
         let id=notes[0]["id"].as_str().unwrap().to_string();
-        let old=saved["label_positions"][&id].clone();
+        let old=saved["label_positions"][id.as_str()].clone();
+        let expected_face=notes[0]["face_name"].clone();
         let at=handle_at(&format!("drawing:label:{id}"))
             .expect("the linked diameter has a draggable screen target");
         let r=h.call("ui.drag",json!({
@@ -735,8 +736,8 @@ mod tests {
         assert_eq!(r["ok"],true,"{r}");
         h.frames(4);
         let updated=h.app.session.doc.metadata.get(KEY).unwrap();
-        assert_ne!(updated["label_positions"][&id],old);
-        assert_eq!(updated["annotations"][0]["face_name"],notes[0]["face_name"]);
+        assert_ne!(updated["label_positions"][id.as_str()],old);
+        assert_eq!(updated["annotations"][0]["face_name"],expected_face);
     }
 
     #[test]
