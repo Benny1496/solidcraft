@@ -19,6 +19,7 @@
  check(callout.reference_status==='resolved'&&callout.face_name===face,'verified face stored');
  near(callout.value_mm,8,'initial Ø');
  check(old.label_positions[callout.id][0]===45,'manual label placement stored');
+ check(old.svg.includes('Ø8.00'),'placed diameter leader is rendered into the SVG drawing');
  const key='org.solidcraft.experimental_drawing';
  await app.execute('document.metadata.set',{key,value:old});
  await app.execute('parameters.change',{name:'Dia',expression:'12 mm'});
@@ -34,6 +35,7 @@
  const updated=await app.execute('drawing.preview',{body:'Plate',previous:saved,accept:true});
  check(updated.status==='updated','confirmed change');
  near(updated.drawing.annotations[0].value_mm,12,'accepted Ø');
+ check(updated.drawing.svg.includes('Ø12.00'),'SVG reflects the accepted 3D diameter change');
  await app.execute('document.metadata.set',{key,value:updated.drawing});
  check((await app.execute('drawing.preview',{body:'Plate',previous:updated.drawing})).status==='current',
    'updated associated drawing is current');
