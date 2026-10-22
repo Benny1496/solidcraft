@@ -254,9 +254,8 @@ fn render_plate(ui: &mut egui::Ui, drawing: &mut Value, editable: bool) -> bool 
     stopped
 }
 
-/// Show measured Ø and edge offsets, but intentionally without a persistent
-/// bore identifier. This is a read-only measured-geometry table, not an
-/// associative manufacturing callout selection.
+/// Show measured cylinder Ø and XY offsets. Users may select dimensions
+/// only when a cylindrical face has a verified, unambiguous historical name.
 fn render_cylinder_measurements(
     ui: &mut egui::Ui, drawing: &Value, can_add: bool,
 ) -> Option<(String,String)> {
@@ -265,7 +264,7 @@ fn render_cylinder_measurements(
     if values.is_empty() { return None; }
     ui.separator();
     ui.label(RichText::new("Aus 3D gemessene Zylindermaße (vorläufig)").strong());
-    ui.label(RichText::new("X ab linker Hüllrahmenkante, Y ab unterer Hüllrahmenkante. Zylinder sind noch nicht als Bohrungen zertifiziert; keine dauerhafte Maßreferenz.").small());
+    ui.label(RichText::new("X ab linker Hüllrahmenkante, Y ab unterer Hüllrahmenkante. Setzbare Maße sind mit einer eindeutig bestätigten 3D-Flächenreferenz verknüpft; Zylinder sind nicht automatisch als Bohrungen klassifiziert.").small());
     egui::ScrollArea::vertical().max_height(145.0).show(ui, |ui| {
         egui::Grid::new("drawing_measured_cylinders").striped(true).show(ui, |ui| {
             for title in ["Nr.", "Durchmesser", "X", "Y", "Bemaßung"] {
@@ -385,7 +384,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 state.layout_changed=true;
             }
             request_annotation = render_cylinder_measurements(ui, &drawing,editable);
-            ui.label(RichText::new("Außenmaßtexte sind verschiebbar. Ø- und X/Y-Zylindermaße werden aus der 3D-Geometrie gemessen, aber noch nicht als sichere Fertigungsmaße referenziert.").small().color(t.text_dim));
+            ui.label(RichText::new("Außenmaße und gesetzte Ø-/X-/Y-Maße sind verschiebbar. Bei Verlust der 3D-Flächenreferenz bleibt das Maß sichtbar, aber ungeklärt.").small().color(t.text_dim));
             ui.horizontal(|ui| {
                 if state.snapshot.is_none() {
                     if ui.button("Zeichnung im Modell speichern").clicked() {
