@@ -195,7 +195,7 @@ fn annotation_add(s: &mut Session, p: &Value) -> Result<Value> {
 // A limited, geometrically scaled SVG view for the same verified XY envelope.
 // Width/height use physical millimetres. Geometry is not a true occlusion/HLR
 // projection; the drawing contract states the supported subset explicitly.
-fn svg_preview(min: &[f64], max: &[f64], cylinders: &[[f64; 3]], labels: &Value) -> String {
+fn svg_preview(min: &[f64], max: &[f64], cylinders: &[[f64; 3]], labels: &Value, annotations: &[Value]) -> String {
     let w = mm(max[0] - min[0]);
     let h = mm(max[1] - min[1]);
     let view_w = w + 48.0;
@@ -222,6 +222,30 @@ fn svg_preview(min: &[f64], max: &[f64], cylinders: &[[f64; 3]], labels: &Value)
         "<path stroke=\"#65748b\" stroke-width=\"0.15\" d=\"M {start_x} {bottom} V {dim_y} M {right} {bottom} V {dim_y} M {start_x} {start_y} H {dim_x} M {start_x} {bottom} H {dim_x}\"/>"
     ));
     svg.push_str("</g>");
+    // A saved user-selected annotation has an actual placed leader and text
+    // in the exported SVG; only its measured number is trusted as drawing
+    // content (never interpolate an untrusted face name into XML).
+    for a in annotations {
+        let Some(id)=a["id"].as_str() else { continue };
+        let Some(from)=coords(&a["center_mm"],2) else { continue };
+        let Some(at)=labels.get(id).and_then(|v| coords(v,2)) else { continue };
+        let (x0,y0)=map(&from);
+        let (x1,y1)=map(&at);
+        let resolved=a["reference_status"] == "resolved";
+        let color=if resolved {"#12283c"} else {"#b44c24"};
+        let historic=a["value_mm"].as_f64().or_else(||a["last_value_mm"].as_f64())
+            .filter(|v|v.is_finite()).unwrap_or(0.0);
+        let prefix=if resolved {""} else {"? "};
+        let label=match a["kind"].as_str() {
+            Some("diameter")=>format!("{prefix}Ø{historic:.2}"),
+            Some("x_from_left")=>format!("{prefix}X {historic:.2}"),
+            Some("y_from_bottom")=>format!("{prefix}Y {historic:.2}"),
+            _=>continue,
+        };
+        svg.push_str(&format!(
+            "<path stroke=\"{color}\" stroke-width=\"0.17\" d=\"M {x0} {y0} L {x1} {y1}\"/><text x=\"{x1}\" y=\"{y1}\" font-family=\"sans-serif\" font-size=\"3.5\" fill=\"{color}\" text-anchor=\"middle\">{label}</text>"
+        ));
+    }
     svg.push_str(&format!(
         "<g fill=\"#12283c\" font-family=\"sans-serif\" font-size=\"4\" text-anchor=\"middle\"><text x=\"{lx}\" y=\"{ly}\">{w:.3} mm</text><text x=\"{wx}\" y=\"{wy}\">{h:.3} mm</text></g></svg>"
     ));
@@ -383,7 +407,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
             {"id":"overall_x","kind":"horizontal","value_mm":dimensions[0]},
             {"id":"overall_y","kind":"vertical","value_mm":dimensions[1]}
         ],
-        "svg": svg_preview(&min, &max, &holes, &layout),
+        "svg": svg_preview(&min, &max, &holes, &layout, &annotated),
         "annotations": annotated,
         "label_positions": layout,
         "warnings": if !holes.is_empty() {
