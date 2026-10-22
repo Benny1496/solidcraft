@@ -738,4 +738,61 @@ mod tests {
         assert!(super::resolve_annotations(Some(&oversized),refs.as_array().unwrap()).is_err());
     }
 
+    #[test]
+    fn user_selected_3d_hole_face_creates_real_named_dimension_and_follows_parameter_change() {
+        let mut session = Session::default();
+        session.execute("parameters.add",&json!({"name":"DrillDiameter","expression":"8 mm"})).unwrap();
+        session.execute("solid.box",&json!({"length":120,"width":60,"height":8,
+            "name":"BaseStock","body_name":"Plate"})).unwrap();
+        session.execute("solid.hole",&json!({"name":"ReferenceDrill",
+            "position":[18,22,8],"diameter":"DrillDiameter"})).unwrap();
+        let original=preview(&mut session,&json!({"body":"Plate"})).unwrap()["drawing"].clone();
+        let face=original["geometry"]["cylinder_dimensions"].as_array().unwrap().iter()
+            .filter_map(|d| d["eligible_face_name"].as_str()).next()
+            .expect("the drill cylinder must expose a unique history-verified face").to_string();
+        let added=super::annotation_add(&mut session,&json!({
+            "body":"Plate","previous":original,"face_name":face,
+            "kind":"diameter","position_mm":[43,39]
+        })).unwrap();
+        assert_eq!(added["status"],"annotated");
+        let old=added["drawing"].clone();
+        assert_eq!(old["annotations"].as_array().unwrap().len(),1);
+        assert_eq!(old["annotations"][0]["reference_status"],"resolved");
+        assert_eq!(old["annotations"][0]["value_mm"].as_f64(),Some(8.0));
+        let id=added["annotation_id"].as_str().unwrap();
+        assert_eq!(super::coords(&old["label_positions"][id],2),Some(vec![43.0,39.0]));
+        session.execute("parameters.change",&json!({
+            "name":"DrillDiameter","expression":"10 mm"
+        })).unwrap();
+        let pending=preview(&mut session,&json!({"body":"Plate","previous":old})).unwrap();
+        assert_eq!(pending["status"],"stale");
+        assert_eq!(pending["drawing"]["annotations"][0]["value_mm"].as_f64(),Some(8.0));
+        assert_eq!(pending["proposed"]["annotations"][0]["reference_status"],"resolved");
+        assert_eq!(pending["proposed"]["annotations"][0]["value_mm"].as_f64(),Some(10.0));
+        let accepted=preview(&mut session,&json!({
+            "body":"Plate","previous":old,"accept":true
+        })).unwrap();
+        assert_eq!(accepted["status"],"updated");
+        assert_eq!(accepted["drawing"]["annotations"][0]["value_mm"].as_f64(),Some(10.0));
+        assert_eq!(accepted["drawing"]["label_positions"][id].as_array().unwrap().len(),2);
+        assert!(super::annotation_add(&mut session,&json!({
+            "body":"Plate","previous":accepted["drawing"],
+            "face_name":face,"kind":"diameter"
+        })).is_err(),"a duplicate of the same dimension must be rejected");
+    }
+
+    #[test]
+    fn lost_annotation_historical_dimension_survives_repeated_preview_and_accept() {
+        let old=json!([{"id":"linked_cyl_1","face_name":"F15:inner",
+            "kind":"diameter","center_mm":[18,16],"reference_status":"resolved",
+            "value_mm":8,"last_value_mm":8}]);
+        let empty:Vec<Value>=Vec::new();
+        let first=super::resolve_annotations(Some(&old),&empty).unwrap();
+        assert_eq!(first[0]["reference_status"],"missing_reference");
+        assert_eq!(first[0]["last_value_mm"].as_f64(),Some(8.0));
+        let again=super::resolve_annotations(Some(&json!(first)),&empty).unwrap();
+        assert_eq!(again[0]["last_value_mm"].as_f64(),Some(8.0));
+        assert!(again[0]["value_mm"].is_null());
+    }
+
 }
