@@ -206,3 +206,26 @@ The existing manual `.github/workflows/solidcraft-browser-test.yml` already has 
 ### Home Assistant project status
 
 The requested Home Assistant project file is `/share/GitHub SolidCraft/PROJEKTSTATUS.md`. Previous Home Assistant connector access had been denied; this GitHub document remains the actual written progress record. **After the next run**, recheck whether the connector is accessible without retrying a previously explicitly refused tool path unless access is reauthorized. If reauthorized, reconcile the HA project status with the GitHub log and CI results; do not claim an HA update until its write succeeds.
+
+## Verified success: named-face drawing annotations — Run #19 (22 October 2026)
+
+[GitHub Actions Run #19](https://github.com/Benny1496/solidcraft/actions/runs/39731900004), commit `3c665607fa3a045a9293ee0c1ef330c4651e5286` on `feature/browser-automation`, finished **SUCCESS** at `2026-10-22 06:52:05 UTC`. The full execution logs confirm:
+
+| Group | Result |
+| --- | --- |
+| Named browser CAD scenarios | **23/23 PASS** |
+| Browser API smoke + real four-hole reference plate | **2/2 PASS** |
+| Actual egui GUI drawing tests | **11/11 PASS** |
+| Native Rust engine drawing tests | **14/14 PASS** |
+| **Independent checks total** | **50/50 PASS** |
+| JavaScript syntax / WebAssembly build / consolidated summary | **All PASS; 0 nonpassing groups** |
+
+In particular, all four new browser scripts passed: `linked-face-diameter` (same exact face from Ø8 to Ø12 after model changes), `linked-face-dimensions` (three separate Ø/X/Y annotations), `linked-face-removed` (deleted 3D hole leaves a safely unresolved manual annotation) and `linked-face-rejections` (eight invalid/duplicate/stale requests refused). Their actual egui widget tests and Rust disk save/reopen tests passed too.
+
+**This validates the implemented, expressly limited prototype behavior, not a finished manufacturing drawing suite.** The XY bounding rectangle is still only an envelope; real silhouette projection, free direct selection of arbitrary edges/points, midpoint-to-midpoint and angle/radius dimensions, robust all-topology provenance, title blocks, multi-view layout and production export remain open.
+
+### Continuous chat handoff
+
+A root-level [`Chatlauf.md`](../Chatlauf.md) has now been added to the same development branch. It consolidates the project goals, conversation decisions, implementation status, tested GitHub runs, non-fail-fast CI policy, next tasks, the user's preferred GitHub-only workflow, and instructions for seamlessly continuing in a new conversation. **Update `Chatlauf.md` as well as this technical document after major future commits and verified runs.**
+
+The separate Home Assistant file `/share/GitHub SolidCraft/PROJEKTSTATUS.md` remains **unverified/unsynchronized**. A prior connector request to that file was explicitly denied; obtain renewed authorization before attempting the prohibited file-access path again.
