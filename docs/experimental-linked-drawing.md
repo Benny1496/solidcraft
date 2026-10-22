@@ -333,3 +333,22 @@ Tests prepared in the existing non-fail-fast workflow:
 - Two real egui tests: two-circle mouse selection, label drag, closing before a 3D edit, popup on reopening, declining/reopening/accepting; clearing/stale selection reset.
 
 Expected bundle: **30 browser checks (28 named + 2 base), 17 GUI, 18 Rust = 65 checks**. Existing 60 tests and workflow continuation rules retained. JavaScript syntax checked with Node; source diff reviewed. Rust compilation, full tests and visual validation remain pending on GitHub (no local Rust toolchain). A pending design-format note records the new persisted annotation fields; no migration of older drawings is needed. Run a new manual workflow on `feature/browser-automation`.
+
+
+## Verified success: centre-distance and confirmation workflow — Run #22
+
+[Run #22](https://github.com/Benny1496/solidcraft/actions/runs/39759469065) completed **successfully** on 22 October 2026 at 10:26:10 UTC, tested commit `4b878cc724b79a8c3a98e52e710b1bc3308b5c10` on `feature/browser-automation`. Job `119759751940`, all steps and its execution log were checked.
+
+| Group | Result |
+| --- | --- |
+| Named browser CAD scenarios | 28/28 PASS |
+| Browser API smoke + four-hole reference plate | 2/2 PASS |
+| Real egui drawing interactions | 17/17 PASS |
+| Native Rust drawing core | 18/18 PASS |
+| **Total** | **65/65 PASS** |
+
+Syntax, WASM build, artifact upload and final consolidated summary also passed (zero nonpassing groups). All five new tests pass: browser centre-distance scenario; GUI two-point selection and label drag with close/edit/reopen/decline/reopen/accept, GUI stale/cleared anchor; Rust dual-identity/missing-reference handling and real save/open followed by an edit.
+
+This confirms that a model edit leaves the stored drawing unchanged until explicit acceptance, reopening displays the update prompt, closed drawings do not interrupt 3D work, and acceptance preserves both references and manual label placement. The previous pending-CI notice is superseded for this tested SHA.
+
+Scope remains an experimental XY bounding-envelope drawing with verified cylinder references and straight-line centre distances, not a finished multi-view manufacturing drawing system or exhaustive validation of SolidCraft. True contours/hidden edges, broader dimension types, annotation editing/deletion, sheets/title blocks/scales, production PDF/DXF and manual visual evaluation remain open. This result update changes documentation only.
