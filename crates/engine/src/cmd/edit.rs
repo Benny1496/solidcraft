@@ -94,7 +94,15 @@ fn redo(s: &mut Session, _p: &Value) -> Result<Value> {
 fn go_to(s: &mut Session, snap: Snapshot) -> Snapshot {
     let was = Snapshot { label: snap.label, doc: s.doc.clone(), active_sketch: s.active_sketch, pending_moves: s.pending_moves.clone() };
     let same = std::sync::Arc::ptr_eq(&s.doc, &snap.doc);
+    // A new feature after Undo must not reuse the identity of the undone feature.
+    // Face names are derived from feature ids, and drawings/other references may
+    // still point to the historical face. Keep the allocation high-water mark
+    // across undo and redo even though the rest of the document is a snapshot.
+    let next_id = s.doc.next_id;
     s.doc = snap.doc;
+    if s.doc.next_id < next_id {
+        std::sync::Arc::make_mut(&mut s.doc).next_id = next_id;
+    }
     s.active_sketch = snap.active_sketch;
     s.pending_moves = snap.pending_moves;
     s.selection.clear();
