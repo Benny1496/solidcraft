@@ -707,4 +707,65 @@ mod tests {
             "saving the dragged drawing safely upgrades its measured 3D geometry table");
     }
 
+    #[test]
+    fn real_drawing_window_adds_3d_verified_diameter_dimension_and_drags_its_label() {
+        let mut h = drawing_harness();
+        h.app.run("solid.hole",json!({
+            "name":"VerifiedHole","position":[16,14,8],"diameter":8
+        })).unwrap();
+        h.frames(3);
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.frames(3);
+        assert!(h.widget("Ø setzen").is_some(),
+            "the real drawing table offers the diameter of a history-verified 3D cylinder");
+        h.step(&json!({"widget":"Ø setzen"})).unwrap();
+        h.frames(3);
+        let saved=h.app.session.doc.metadata.get(KEY).unwrap();
+        let notes=saved["annotations"].as_array().unwrap();
+        assert_eq!(notes.len(),1);
+        assert_eq!(notes[0]["reference_status"],"resolved");
+        assert_eq!(notes[0]["value_mm"].as_f64(),Some(8.0));
+        let id=notes[0]["id"].as_str().unwrap().to_string();
+        let old=saved["label_positions"][&id].clone();
+        let at=handle_at(&format!("drawing:label:{id}"))
+            .expect("the linked diameter has a draggable screen target");
+        let r=h.call("ui.drag",json!({
+            "x0":at.x,"y0":at.y,"x1":at.x+24.0,"y1":at.y-12.0,"steps":12
+        }));
+        assert_eq!(r["ok"],true,"{r}");
+        h.frames(4);
+        let updated=h.app.session.doc.metadata.get(KEY).unwrap();
+        assert_ne!(updated["label_positions"][&id],old);
+        assert_eq!(updated["annotations"][0]["face_name"],notes[0]["face_name"]);
+    }
+
+    #[test]
+    fn linked_3d_dimension_requires_user_confirmation_before_changing_value() {
+        let mut h=drawing_harness();
+        h.app.run("solid.hole",json!({
+            "name":"NamedHole","position":[16,14,8],"diameter":6
+        })).unwrap();
+        h.frames(3);
+        h.step(&json!({"widget":"Zeichnung im Modell speichern"})).unwrap();
+        h.frames(2);
+        assert!(h.widget("Ø setzen").is_some());
+        h.step(&json!({"widget":"Ø setzen"})).unwrap();
+        h.frames(3);
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["annotations"][0]["value_mm"].as_f64(),Some(6.0));
+        h.app.run("solid.hole",json!({
+            "name":"AnotherHole","position":[70,30,8],"diameter":10
+        })).unwrap();
+        h.frames(3);
+        assert!(h.widget("Zeichnung aktualisieren").is_some());
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["annotations"][0]["value_mm"].as_f64(),Some(6.0));
+        h.step(&json!({"widget":"Zeichnung aktualisieren"})).unwrap();
+        h.frames(3);
+        assert_eq!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["annotations"][0]["reference_status"],"resolved");
+        assert!(h.app.session.doc.metadata.get(KEY).unwrap()
+            ["annotations"][0]["face_name"].as_str().is_some());
+    }
+
 }
