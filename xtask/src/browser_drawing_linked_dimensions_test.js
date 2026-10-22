@@ -18,6 +18,8 @@
       Math.abs(added.value_mm-values[kind])<.02,'correct 3D value of '+kind);
  }
  ok(new Set(ids).size===3,'each dimension must have a unique id');
+ ok(v.svg.includes('Ø6.00')&&v.svg.includes('X 18.00')&&v.svg.includes('Y 24.00'),
+   'three distinct manually selected dimension types appear in SVG');
  ok(Object.keys(v.label_positions).filter(x=>x.startsWith('linked_cyl_')).length===3,
    'all manual placements persisted');
  const same=await sc.execute('drawing.preview',{body:'Panel',previous:v});
