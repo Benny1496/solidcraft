@@ -112,6 +112,10 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("drawing-bad-inputs", include_str!("browser_drawing_bad_inputs_test.js")),
         ("drawing-snapshot-undo", include_str!("browser_drawing_snapshot_undo_test.js")),
         ("drawing-batch-bodies", include_str!("browser_drawing_batch_bodies_test.js")),
+        ("drawing-dim-transfer", include_str!("browser_drawing_dim_transfer_test.js")),
+        ("drawing-dim-offset", include_str!("browser_drawing_dim_offset_test.js")),
+        ("drawing-dim-mutations", include_str!("browser_drawing_dim_mutations_test.js")),
+        ("drawing-dim-many", include_str!("browser_drawing_dim_many_test.js")),
     ];
     let scenario_count = scenarios.len();
     let mut failures = Vec::new();
