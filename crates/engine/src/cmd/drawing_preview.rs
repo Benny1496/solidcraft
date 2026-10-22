@@ -819,4 +819,55 @@ mod tests {
         assert!(again[0]["value_mm"].is_null());
     }
 
+    #[test]
+    fn selected_face_annotation_survives_actual_solidcraft_save_and_reopen() {
+        let path=std::env::temp_dir().join(format!(
+            "solidcraft-linked-drawing-test-{}.solidcraft",std::process::id()));
+        let mut session=Session::default();
+        session.execute("parameters.add",&json!({
+            "name":"DrillD","expression":"8 mm"})).unwrap();
+        session.execute("solid.box",&json!({
+            "length":110,"width":55,"height":8,"body_name":"Plate"
+        })).unwrap();
+        session.execute("solid.hole",&json!({
+            "name":"Bore","position":[18,21,8],"diameter":"DrillD"
+        })).unwrap();
+        let first=preview(&mut session,&json!({"body":"Plate"})).unwrap();
+        let candidate=first["drawing"]["geometry"]["cylinder_dimensions"]
+            .as_array().unwrap().iter().find_map(|d|
+                d["eligible_face_name"].as_str())
+            .expect("must have history-verified source cylinder");
+        let accepted=super::annotation_add(&mut session,&json!({
+            "body":"Plate","previous":first["drawing"],
+            "face_name":candidate,"kind":"diameter","position_mm":[43,43]
+        })).unwrap();
+        session.execute("document.metadata.set",&json!({
+            "key":"org.solidcraft.experimental_drawing","value":accepted["drawing"]
+        })).unwrap();
+        session.execute("file.save_as",&json!({
+            "path":path,"format":"container"
+        })).unwrap();
+        let mut opened=Session::default();
+        opened.execute("doc.open",&json!({"path":path})).unwrap();
+        let saved=opened.doc.metadata.get("org.solidcraft.experimental_drawing")
+            .expect("linked drawing persists in real .solidcraft archive").clone();
+        assert_eq!(saved["annotations"][0]["reference_status"],"resolved");
+        assert_eq!(saved["annotations"][0]["value_mm"].as_f64(),Some(8.0));
+        let same=preview(&mut opened,&json!({
+            "body":"Plate","previous":saved
+        })).unwrap();
+        assert_eq!(same["status"],"current");
+        assert_eq!(same["drawing"]["annotations"][0]["reference_status"],"resolved");
+        opened.execute("parameters.change",&json!({
+            "name":"DrillD","expression":"10 mm"
+        })).unwrap();
+        let pending=preview(&mut opened,&json!({
+            "body":"Plate","previous":saved
+        })).unwrap();
+        assert_eq!(pending["status"],"stale");
+        assert_eq!(pending["proposed"]["annotations"][0]["reference_status"],"resolved");
+        assert_eq!(pending["proposed"]["annotations"][0]["value_mm"].as_f64(),Some(10.0));
+        let _=std::fs::remove_file(path);
+    }
+
 }
