@@ -306,13 +306,22 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         } else {
             ui.label("Noch kein Zeichnungsblatt gespeichert.");
         }
-        // Prefer the recomputed read-only view when the stored snapshot is still
-        // current (including older files with fewer measured dimension fields).
-        // For a stale sheet, always show the original until confirmation.
-        let displayed = if state.proposed.is_some() {
-            state.snapshot.clone()
+        // The saved snapshot owns manual label placements. A recomputed draft
+        // must NOT replace it each frame: otherwise a drag is reverted before
+        // its position is committed to document metadata. Older snapshots can
+        // still gain the newly introduced read-only measurement table without
+        // discarding their manually edited dimension positions.
+        let displayed = if let Some(mut saved) = state.snapshot.clone() {
+            if state.proposed.is_none()
+                && saved["geometry"].get("cylinder_dimensions").is_none()
+                && let Some(current) = &state.draft
+            {
+                saved["geometry"]["cylinder_dimensions"] =
+                    current["geometry"]["cylinder_dimensions"].clone();
+            }
+            Some(saved)
         } else {
-            state.draft.clone().or_else(|| state.snapshot.clone())
+            state.draft.clone()
         };
         if let Some(mut drawing) = displayed {
             ui.separator();
