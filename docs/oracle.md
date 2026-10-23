@@ -9,8 +9,6 @@ Where the expected values come from (the **Source** column):
 
 No expected value comes from a commercial CAD product.
 
-**Validation note (case 33):** The analytic centre-of-mass reference below was corrected independently. The listed pass result is from the previous replay; rerun `cargo xtask oracle` to verify this revised reference with SolidCraft.
-
 **83 / 83 cases pass**; sources: 62 analytic, 21 freecad. 0 known failure(s) tracked in issues; 0 case(s) without expected values yet.
 
 | Case | Source | Result | Surface distance mm (max / mean) | Method | Notes |
