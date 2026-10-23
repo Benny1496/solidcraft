@@ -178,6 +178,9 @@ pub fn run_api(site: &str) -> Result<(), String> {
         ("upstream-pair-storage", include_str!("browser_drawing_upstream_pair_storage_test.js")),
         ("w23-m2-exact-acceptance", include_str!("browser_drawing_m2_acceptance_test.js")),
         ("w23-identity-replacement", include_str!("browser_drawing_reference_replacement_test.js")),
+        ("drawing-external-snapshots", include_str!("browser_drawing_external_snapshots_test.js")),
+        ("drawing-closed-handoff", include_str!("browser_drawing_closed_handoff_test.js")),
+        ("drawing-identity-branches", include_str!("browser_drawing_identity_branches_test.js")),
     ];
     let scenario_count = scenarios.len();
     let mut passed = 0;
