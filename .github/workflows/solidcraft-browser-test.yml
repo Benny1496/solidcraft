@@ -150,7 +150,7 @@ jobs:
           key: workshop-oracle-4950
       - name: Compile SolidCraft's native oracle CLI
         run: cargo build -p solidcraft-cli --profile ci --locked
-      - name: Replay ALL SolidCraft oracle models including 12 new #4950 cases
+      - name: Replay ALL SolidCraft oracle models including 7 reviewed #4950 cases
         run: cargo xtask oracle --cli target/ci/solidcraft-cli
       - name: Save oracle output report
         if: always()
