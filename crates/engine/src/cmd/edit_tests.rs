@@ -869,3 +869,83 @@ fn undo_then_replacement_hole_gets_fresh_feature_and_face_identity() {
     let reopened = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap();
     assert!(reopened.next_id > id_replacement);
 }
+
+
+/// The future separate Drawing file has its own serialized record, independent
+/// of the design's JSON. This tests the existing engine handoff across a REAL
+/// model-document serialization/reopen, but not the future drawing file format
+/// or filesystem commands proposed in #3890.
+#[test]
+fn external_drawing_payload_survives_model_reopen_and_lost_reference() {
+    use solidcraft_doc::Document;
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({
+        "length": 100, "width": 80, "height": 20, "body_name": "Plate"
+    }));
+    run(&mut s, "solid.hole", json!({
+        "name": "BoreA", "position": [20, 20, 20], "diameter": 10
+    }));
+    run(&mut s, "solid.hole", json!({
+        "name": "BoreB", "position": [60, 50, 20], "diameter": 10
+    }));
+    let initial = run(&mut s, "drawing.preview", json!({"body": "Plate"}))["drawing"].clone();
+    let bores = initial["geometry"]["cylinder_dimensions"].as_array().unwrap();
+    let a = bores.iter().find(|b| b["center_mm"][0].as_f64() == Some(20.0)).unwrap();
+    let b = bores.iter().find(|b| b["center_mm"][0].as_f64() == Some(60.0)).unwrap();
+    let face_a = a["eligible_face_name"].as_str().unwrap();
+    let face_b = b["eligible_face_name"].as_str().unwrap();
+    assert_ne!(face_a, face_b, "model features have independent source identities");
+    let first = run(&mut s, "drawing.annotation.add", json!({
+        "body": "Plate", "previous": initial, "face_name": face_a,
+        "kind": "diameter", "position_mm": [20, 95]
+    }));
+    let a_id = first["annotation_id"].as_str().unwrap().to_owned();
+    let second = run(&mut s, "drawing.annotation.add", json!({
+        "body": "Plate", "previous": first["drawing"], "face_name": face_a,
+        "second_face_name": face_b, "kind": "center_distance",
+        "position_mm": [72, 103]
+    }));
+    let dist_id = second["annotation_id"].as_str().unwrap().to_owned();
+    let original_sheet = second["drawing"].clone();
+
+    // These independent strings intentionally model the serialization boundary:
+    // the model is a genuine SolidCraft document; the Drawing record is a
+    // separately transported JSON payload, not document.metadata.
+    let design_json = s.doc.to_json();
+    let sheet_json = serde_json::to_string(&original_sheet).unwrap();
+    let mut reopened = Session::new(Document::from_json(&design_json).unwrap());
+    let external_sheet: Value = serde_json::from_str(&sheet_json).unwrap();
+    let current = run(&mut reopened, "drawing.preview", json!({
+        "body": "Plate", "previous": external_sheet
+    }));
+    assert_eq!(current["status"], "current", "same geometry after real model reopen");
+
+    run(&mut reopened, "timeline.delete", json!({"feature": "BoreA"}));
+    let pending = run(&mut reopened, "drawing.preview", json!({
+        "body": "Plate", "previous": external_sheet
+    }));
+    assert_eq!(pending["status"], "stale", "closed sheet is not silently updated");
+    assert_eq!(pending["drawing"], original_sheet, "external original is unchanged");
+    let notes = pending["proposed"]["annotations"].as_array().unwrap();
+    let lost_diameter = notes.iter().find(|x| x["id"] == a_id).unwrap();
+    let lost_pair = notes.iter().find(|x| x["id"] == dist_id).unwrap();
+    assert_eq!(lost_diameter["reference_status"], "missing_reference");
+    assert_eq!(lost_diameter["last_value_mm"].as_f64(), Some(10.0));
+    assert!(lost_diameter["value_mm"].is_null());
+    assert_eq!(lost_pair["reference_status"], "missing_reference");
+    assert_eq!(lost_pair["last_value_mm"].as_f64(), Some(50.0));
+    assert!(lost_pair["value_mm"].is_null());
+    assert_eq!(pending["proposed"]["label_positions"][&a_id], json!([20.0,95.0]));
+    assert_eq!(pending["proposed"]["label_positions"][&dist_id], json!([72.0,103.0]));
+
+    run(&mut reopened, "edit.undo", json!({}));
+    let restored = run(&mut reopened, "drawing.preview", json!({
+        "body": "Plate", "previous": external_sheet
+    }));
+    assert_eq!(restored["status"], "current", "Undo restores original source");
+    run(&mut reopened, "edit.redo", json!({}));
+    let again = run(&mut reopened, "drawing.preview", json!({
+        "body": "Plate", "previous": external_sheet
+    }));
+    assert_eq!(again["status"], "stale", "Redo invalidates the external drawing again");
+}
