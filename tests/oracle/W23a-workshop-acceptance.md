@@ -61,14 +61,18 @@ precision follow their eventual upstream owners (#4813 and #4896).
 Every independent edit starts from case 84; the cases in this table are
 **reference states**, not a claim that these drawing commands exist today.
 
-| Step / intended command | Resulting oracle state | Expected drawing measurements and labels |
-| --- | --- | --- |
-| Create geometry from recipe, add diameter on `Bore1`, centre-distance and plate-width dimensions; move labels in paper mm; save and reopen | 84 | Ø10, 50, width 80; every label at its user-chosen paper coordinate |
-| `parameters.change` `width` 80 → 100 | 85 | Width becomes 100; Ø10 and centre distance 50 remain; all label positions unchanged |
-| `parameters.change` `bore1_d` 10 → 12 | 86 | `Bore1` becomes Ø12; centre distance 50 and width 80 remain; labels unchanged |
-| `timeline.delete Bore1` | 87 | `Bore2` remains Ø10 with its original identity. `Bore1` diameter and linked centre-distance dimensions become **lost, kept with their last values**; no silent transfer to `Bore2` |
-| `edit.undo` immediately after any individual edit | 84 | Baseline measurements Ø10 / 50 / width 80 and original reference state restored |
-| `edit.redo` following that undo | 85, 86, or 87, matching the undone edit | Edited measurements and corresponding lost/valid reference state restored; manually placed labels retain their paper positions |
+| Step / intended command | Owning session | Resulting source oracle state | Expected drawing measurements and labels (after Update if deferred) |
+| --- | --- | --- | --- |
+| Create baseline geometry from the case 84 recipe | **Source design** | 84 | Two independent bores and the original width 80 geometry |
+| Add a `Bore1` diameter, centre-distance and plate-width dimension | **Drawing** | 84 (unchanged) | Ø10, 50, width 80 |
+| Move the dimension labels to chosen paper-mm coordinates; save and reopen the drawing | **Drawing** | 84 (unchanged) | Every label remains at its user-chosen paper coordinate |
+| `parameters.change` `width` 80 → 100 | **Source design** | 85 | Width becomes 100; Ø10 and centre distance 50 remain; all label positions unchanged |
+| `parameters.change` `bore1_d` 10 → 12 | **Source design** | 86 | `Bore1` becomes Ø12; centre distance 50 and width 80 remain; labels unchanged |
+| `timeline.delete Bore1` | **Source design** | 87 | `Bore2` remains Ø10 with its original identity. `Bore1` diameter and linked centre-distance dimensions become **lost, kept with their last values**; no silent transfer to `Bore2` |
+| `edit.undo` immediately after any individual source edit | **Source design** | 84 | Baseline measurements Ø10 / 50 / width 80 and original reference state, after drawing Update |
+| `edit.redo` following that source undo | **Source design** | 85, 86 or 87, matching the undone edit | Edited measurements and corresponding lost/valid reference state, after drawing Update; manually placed labels retain their paper positions |
+| Update an out-of-date view in deferred mode | **Drawing** (cache update; **no new undo step**) | No source change | Drawing displays the current source state; label positions remain unchanged |
+| Undo/redo a label move or an explicit reference repair | **Drawing** | No source change | Reverts/reapplies only the drawing edit; must never undo a source model change |
 
 Both **open-drawing** and **closed-drawing** deferred-update sequences must
 be tested when the shared drawing commands land:
@@ -79,11 +83,16 @@ be tested when the shared drawing commands land:
 2. **Drawing closed:** Save and close the drawing, change the 3D model, then
    reopen it. The saved drawing still appears out of date until Update;
    updating does not reset manual label positions.
-3. Repeat both sequences for bore changes, deletion and undo/redo. With a
-   lost reference, retain the last measured value explicitly as historical
-   instead of reporting it as a current measurement. A replacement bore
-   at the same XY and diameter must not silently restore old source identity;
-   reference repair is a distinct explicit operation.
+3. Repeat both sequences for bore changes, deletion and **source-design**
+   undo/redo. Each source change, including its undo/redo, leaves a deferred
+   drawing **out of date until Update**; Update refreshes the view cache
+   without creating an undo step in either session. With a lost reference,
+   retain the last measured value explicitly as historical instead of
+   reporting it as a current measurement. A replacement bore at the same XY
+   and diameter must not silently restore old source identity; reference
+   repair is an explicit **drawing-session** operation.
+4. Undo/redo drawing-session label moves and reference repairs separately;
+   neither action may undo a source design's parameter edit or deletion.
 
 The coordinated drawing design allows **automatic and deferred** update
 modes (#4892). Do not introduce a separate rejected-update contract here.
@@ -99,6 +108,8 @@ plates, volume is `LWT − Σπ(d/2)²T`, and surface area includes exposed
 hole walls minus circles on both stock faces. For the four vertical R10
 rounds, the section loses `(4−π)R²`; the boundary becomes
 `P = 2(L+W)−8R+2πR`. A 2 mm upper tangent-loop chamfer removes
-`(c²/2)[P−2πc/3]` of material; its removed volume centroid has
-`z=T−c/3`. Surface and first moments follow the same exact construction.
+`V_c=Pc²/2−πc³/3` of material. The depth first moment is
+`Pc³/6−πc⁴/12`, so its removed-volume centroid is
+`z=T−(Pc³/6−πc⁴/12)/V_c`; the inward-offset perimeter shrinks with depth.
+Surface and first moments follow this exact construction.
 Calculations are regenerated by `tools/oracle-analytic/cases_workshop.py`.

@@ -59,15 +59,16 @@ def one(case):
         perimeter -= 8 * r - 2 * PI * r
 
     if chamfer is not None:
-        # Constant-distance top chamfer propagated along the entire tangent
-        # perimeter. The triangular cut has section area c*c/2 and sweeps at
-        # its centroid, inset c/3; an inset convex loop loses 2*pi*inset in
-        # perimeter (Steiner's formula). A complete loop is essential.
+        # Constant-distance top chamfer around the entire rounded perimeter.
+        # At depth y below the top, the removed band has area
+        # P*(c-y) - pi*(c-y)^2: the inset perimeter shortens with depth.
+        # Integrate this band for exact removed volume and Z first moment.
         c = float(chamfer["distance"])
         assert rounded is not None and 0 < c < rounded["radius"]
-        removed = c * c / 2 * (perimeter - 2 * PI * c / 3)
+        removed = perimeter * c ** 2 / 2 - PI * c ** 3 / 3
+        mean_depth = (perimeter * c ** 3 / 6 - PI * c ** 4 / 12) / removed
         solid -= MP.at(removed, [length / 2, width / 2,
-                                 thickness - c / 3])
+                                 thickness - mean_depth])
         area = (2 * top_area + perimeter * thickness
                 - c * perimeter + PI * c * c
                 - c * perimeter + math.sqrt(2) * c * (perimeter - PI * c))
@@ -96,7 +97,8 @@ def one(case):
                    "rounded perimeter P=2(L+W)-8R+2pi*R")
     if chamfer:
         method += ("; upper tangent chamfer subtracts volume "
-                   "(c²/2)*(P-2pi*c/3) at (L/2,W/2,T-c/3); "
+                   "Vc=P*c²/2-pi*c³/3 at "
+                   "(L/2,W/2,T-(P*c³/6-pi*c⁴/12)/Vc); "
                    "area from upper inset face, side strips and "
                    "sqrt(2)*c*(P-pi*c) bevel surface")
     # Every curved corner is one new vertical side face, in addition to

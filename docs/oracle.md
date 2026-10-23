@@ -11,6 +11,8 @@ No expected value comes from a commercial CAD product.
 
 **90 / 90 cases pass**; sources: 69 analytic, 21 freecad. 0 known failure(s) tracked in issues; 0 case(s) without expected values yet.
 
+**Validation note:** Case 95's analytic centre-of-mass reference was corrected after the above successful run. Its previous pass status is historical and requires a new oracle replay against the corrected reference.
+
 | Case | Source | Result | Surface distance mm (max / mean) | Method | Notes |
 |---|---|---|---|---|---|
 | 01-box | analytic | pass |  | box 40 x 30 x 20 from the origin: V = abc, A = 2(ab + bc + ca) |  |
@@ -102,7 +104,7 @@ No expected value comes from a commercial CAD product.
 | 87-plate-bore1-deleted | analytic | pass |  | Plate L=100, W=80, T=20 mm; Bore2 at (60,50) Ø10. Box minus independently located through-cylinders: V=LWT-sum(pi*d²*T/4), area=2(LW+LT+WT)+sum(pi*d*T-pi*d²/2), mass moments from exact box minus cylinders. Shape: rectangular |  |
 | 88-plate-four-bores | analytic | pass |  | Plate L=150, W=80, T=10 mm; Bore1 at (15,15) Ø8; Bore2 at (135,15) Ø8; Bore3 at (15,65) Ø8; Bore4 at (135,65) Ø8. Box minus independently located through-cylinders: V=LWT-sum(pi*d²*T/4), area=2(LW+LT+WT)+sum(pi*d*T-pi*d²/2), mass moments from exact box minus cylinders. Shape: rectangular |  |
 | 94-plate-four-rounded-corners | analytic | pass |  | Plate L=100, W=80, T=20 mm; Bore1 at (20,20) Ø10; Bore2 at (60,50) Ø10. Box minus independently located through-cylinders: V=LWT-sum(pi*d²*T/4), area=2(LW+LT+WT)+sum(pi*d*T-pi*d²/2), mass moments from exact box minus cylinders. Shape: four exterior vertical R10 corner rounds; four corner spandrels subtract volume T*(4-pi)*R² at symmetric centroid (L/2,W/2,T/2); rounded perimeter P=2(L+W)-8R+2pi*R |  |
-| 95-plate-rounded-top-chamfer | analytic | pass |  | Plate L=100, W=80, T=20 mm; Bore1 at (20,20) Ø10; Bore2 at (60,50) Ø10. Box minus independently located through-cylinders: V=LWT-sum(pi*d²*T/4), area=2(LW+LT+WT)+sum(pi*d*T-pi*d²/2), mass moments from exact box minus cylinders. Shape: four exterior vertical R10 corner rounds; full upper tangent loop 2 mm chamfer; four corner spandrels subtract volume T*(4-pi)*R² at symmetric centroid (L/2,W/2,T/2); rounded perimeter P=2(L+W)-8R+2pi*R; upper tangent chamfer subtracts volume (c²/2)*(P-2pi*c/3) at (L/2,W/2,T-c/3); area from upper inset face, side strips and sqrt(2)*c*(P-pi*c) bevel surface |  |
+| 95-plate-rounded-top-chamfer | analytic | pass |  | Plate L=100, W=80, T=20 mm; Bore1 at (20,20) Ø10; Bore2 at (60,50) Ø10. Box minus independently located through-cylinders: V=LWT-sum(pi*d²*T/4), area=2(LW+LT+WT)+sum(pi*d*T-pi*d²/2), mass moments from exact box minus cylinders. Shape: four exterior vertical R10 corner rounds; full upper tangent loop 2 mm chamfer; four corner spandrels subtract volume T*(4-pi)*R² at symmetric centroid (L/2,W/2,T/2); rounded perimeter P=2(L+W)-8R+2pi*R; upper tangent chamfer subtracts volume Vc=P*c²/2-pi*c³/3 at (L/2,W/2,T-(P*c³/6-pi*c⁴/12)/Vc); area from upper inset face, side strips and sqrt(2)*c*(P-pi*c) bevel surface |  |
 
 ## Not covered by a reference case
 
