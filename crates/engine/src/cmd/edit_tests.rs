@@ -927,16 +927,16 @@ fn external_drawing_payload_survives_model_reopen_and_lost_reference() {
     assert_eq!(pending["status"], "stale", "closed sheet is not silently updated");
     assert_eq!(pending["drawing"], original_sheet, "external original is unchanged");
     let notes = pending["proposed"]["annotations"].as_array().unwrap();
-    let lost_diameter = notes.iter().find(|x| x["id"] == a_id).unwrap();
-    let lost_pair = notes.iter().find(|x| x["id"] == dist_id).unwrap();
+    let lost_diameter = notes.iter().find(|x| x["id"].as_str() == Some(a_id.as_str())).unwrap();
+    let lost_pair = notes.iter().find(|x| x["id"].as_str() == Some(dist_id.as_str())).unwrap();
     assert_eq!(lost_diameter["reference_status"], "missing_reference");
     assert_eq!(lost_diameter["last_value_mm"].as_f64(), Some(10.0));
     assert!(lost_diameter["value_mm"].is_null());
     assert_eq!(lost_pair["reference_status"], "missing_reference");
     assert_eq!(lost_pair["last_value_mm"].as_f64(), Some(50.0));
     assert!(lost_pair["value_mm"].is_null());
-    assert_eq!(pending["proposed"]["label_positions"][&a_id], json!([20.0,95.0]));
-    assert_eq!(pending["proposed"]["label_positions"][&dist_id], json!([72.0,103.0]));
+    assert_eq!(pending["proposed"]["label_positions"][a_id.as_str()], json!([20.0,95.0]));
+    assert_eq!(pending["proposed"]["label_positions"][dist_id.as_str()], json!([72.0,103.0]));
 
     run(&mut reopened, "edit.undo", json!({}));
     let restored = run(&mut reopened, "drawing.preview", json!({
