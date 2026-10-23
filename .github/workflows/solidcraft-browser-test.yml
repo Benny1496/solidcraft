@@ -81,6 +81,7 @@ jobs:
         run: |
           cargo test -p solidcraft-engine drawing_preview --lib -- --nocapture
           cargo test -p solidcraft-engine undo_then_replacement_hole_gets_fresh_feature_and_face_identity --lib -- --nocapture
+          cargo test -p solidcraft-engine external_drawing_payload_survives_model_reopen_and_lost_reference --lib -- --nocapture
       - name: Save built web app even when a CAD test fails
         if: always()
         uses: actions/upload-artifact@v4
