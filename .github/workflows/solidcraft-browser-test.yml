@@ -74,11 +74,13 @@ jobs:
         if: ${{ !cancelled() }}
         continue-on-error: true
         run: cargo test -p solidcraft-ui-egui drawing_ui::tests --lib -- --nocapture
-      - name: Test drawing geometry signatures and invalid snapshots in Rust engine
+      - name: Test drawing geometry and unique replacement identities in Rust engine
         id: engine
         if: ${{ !cancelled() }}
         continue-on-error: true
-        run: cargo test -p solidcraft-engine drawing_preview --lib -- --nocapture
+        run: |
+          cargo test -p solidcraft-engine drawing_preview --lib -- --nocapture
+          cargo test -p solidcraft-engine undo_then_replacement_hole_gets_fresh_feature_and_face_identity --lib -- --nocapture
       - name: Save built web app even when a CAD test fails
         if: always()
         uses: actions/upload-artifact@v4
