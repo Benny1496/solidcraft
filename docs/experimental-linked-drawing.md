@@ -53,6 +53,64 @@ The standard distributed SolidCraft release does not automatically
 include fork development-branch changes. The full native drawing workspace
 and production-quality sheets/exports remain to be implemented.
 
+## W23 experimental test #31 — independent Drawing payload handoff (not an upstream file format)
+
+Following the all-green [test #30](https://github.com/Benny1496/solidcraft/actions/runs/39860032217)
+(64/64 browser checks, 25/25 egui checks, 35/35 selected Rust engine
+checks, plus 90/90 separate official oracle models), the browser-linked
+Drawing prototype is extended with a **new, not-yet-executed #31 test
+matrix**. The previously unrun native Rust replacement-ID test is now
+included explicitly in the workflow, together with another native test.
+
+The three new end-to-end browser scenarios are registered in
+`xtask/src/web_offline_test.rs`:
+
+1. `drawing-external-snapshots`: two independently serialized snapshots
+   of one design, distinct linked cylinder annotations and manually moved
+   labels; update Drawing A while Drawing B deliberately stays stale, then
+   edit the diameter and update B while A remains stale. No snapshot is
+   written into `document.metadata`.
+2. `drawing-closed-handoff`: retain a separately serialized JSON Drawing
+   payload while changing the model, deserialize it afterward and verify
+   deferred review, exact width/diameter/centre-distance numbers, all label
+   coordinates, Undo/Redo and a deleted selected bore retaining historical
+   values without hijacking the surviving bore.
+3. `drawing-identity-branches`: branch three times from an undone bore
+   operation, each time adding geometrically identical replacement at the
+   same XY and diameter. Verify fresh face IDs on **every** branch, retained
+   lost annotation and pair measurement, stable unaffected neighbour and
+   manual labels, and proper Undo/Redo semantics.
+
+Native Rust tests now explicitly invoked by the manual fork CI:
+
+- `undo_then_replacement_hole_gets_fresh_feature_and_face_identity`:
+  genuine high-watermark allocator test from the #30 fix.
+- `external_drawing_payload_survives_model_reopen_and_lost_reference`:
+  serialize the **real SolidCraft model document**, reopen a new engine
+  session, deserialize an independent Drawing JSON payload, verify the
+  matching unchanged state, then deletion/lost reference/last value, and
+  Undo/Redo recovery.
+
+**Scope boundary (important):** these are interoperability **contract
+pretests**. The Drawing payload is transported as a separately serialized
+JSON string in a browser or Rust test, **not yet** saved or reopened as
+a real on-disk `.solidcraft-drawing` file. We do not create an unofficial
+format, mock a fictional `drawing.save` API, or claim cross-file crash
+recovery/Relink works. The upstream design under #3890 specifies separate
+versioned Drawing documents, relative design paths, independently versioned
+undo and optional JSON form; the exact object-ID format is still discussed.
+These tests will be migrated to genuine separate file/session integration
+when the shared APIs land, without copying the provisional
+`document.metadata` storage model.
+
+Expected #31 full-workflow counts, **not results**: 65 independent CAD
+scenarios plus 2 browser baselines = **67 browser checks**; 25 egui
+checks; 35 existing Drawing Rust checks plus **2** explicitly selected
+Rust tests = **37 Rust checks**; **129 experimental checks in total**,
+plus a separate 90-case oracle job on the official contribution branch.
+The test must be run manually with `oracle_only=false`. Test failures
+must be investigated rather than silently excluded.
+
 ## Regression: replacement bore after Undo (W23 identity)
 
 Test #28 reached **63/64 browser CAD checks** and exposed a genuine history
