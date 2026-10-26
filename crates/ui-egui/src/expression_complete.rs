@@ -206,7 +206,7 @@ mod tests {
         fn frame(&mut self, events: Vec<egui::Event>) {
             self.accepted = false;
             self.leaked.clear();
-            let _ = self.ctx.run_ui(
+            let mut output = self.ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0))),
                     events,
@@ -229,6 +229,8 @@ mod tests {
                     });
                 },
             );
+            // Test-only context: no renderer consumes font texture uploads.
+            output.textures_delta.clear();
         }
 
         fn key(&mut self, key: Key) {

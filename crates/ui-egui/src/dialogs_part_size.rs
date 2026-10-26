@@ -342,7 +342,10 @@ mod tests {
         assert_eq!(app.session.undo.len(), undo + 1);
         let after = app.session.doc.clone();
         app.run("edit.undo", json!({})).unwrap();
-        assert_eq!(app.session.doc, before);
+        let mut undo_doc = (*app.session.doc).clone();
+        assert!(undo_doc.next_id >= before.next_id, "undo must retain the allocator high-water mark");
+        undo_doc.next_id = before.next_id;
+        assert_eq!(undo_doc, *before);
         app.run("edit.redo", json!({})).unwrap();
         assert_eq!(app.session.doc, after);
     }

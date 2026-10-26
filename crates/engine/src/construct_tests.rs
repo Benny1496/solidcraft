@@ -401,7 +401,7 @@ fn disambiguated_top_plane_pocket_survives_undo_and_cold_reopen() {
     let measured = run(&mut s, "inspect.measure", json!({}));
     assert!((measured["total"]["volume_mm3"].as_f64().unwrap() - expected).abs() < 1e-6, "{measured}");
     run(&mut s, "edit.undo", json!({}));
-    assert_eq!(s.doc.to_json(), before);
+    crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
     run(&mut s, "edit.redo", json!({}));
     assert_eq!(s.doc.to_json(), saved);
     let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());

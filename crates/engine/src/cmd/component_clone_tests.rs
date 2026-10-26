@@ -548,7 +548,7 @@ fn frozen_r6_bore_copy_uses_current_geometry_despite_mesh_measure_bias() {
     check(&s);
     check(&Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap()));
     run(&mut s, "edit.undo", json!({}));
-    assert_eq!(s.doc.to_json(), before);
+    crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
     run(&mut s, "edit.redo", json!({}));
     check(&s);
 }

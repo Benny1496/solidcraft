@@ -72,7 +72,7 @@ fn side_edge_flanges_across_a_bend_keep_their_relief_through_rebuild_and_reopen(
             let body = &s.model.state().bodies[0].body;
             assert!(body.validity().is_empty() && body.shell_count() == 1);
             run(&mut s, "edit.undo", json!({}));
-            assert_eq!(s.doc.to_json(), before);
+            crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
             run(&mut s, "edit.redo", json!({}));
             assert!((volume(&mut s) - formed).abs() < 1e-6);
             for command in ["sheet.unfold", "sheet.refold"] {

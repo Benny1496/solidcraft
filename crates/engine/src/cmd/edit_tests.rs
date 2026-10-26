@@ -286,7 +286,7 @@ fn redefine_keeps_allocator_above_component_and_occurrence_ids() {
     assert_eq!(s.world_state().body("Base").unwrap().component, 0, "the result transfers only AFTER Combine");
     run(&mut s, "edit.undo", json!({}));
     run(&mut s, "edit.undo", json!({}));
-    assert_eq!(*s.doc, *original);
+    crate::assert_undo_document_except_allocator(&s.doc, &original);
     run(&mut s, "edit.redo", json!({}));
     let reopened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
     assert_eq!(reopened.world_state().body("Base").unwrap().component, destination);

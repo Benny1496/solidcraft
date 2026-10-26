@@ -162,7 +162,7 @@ fn draw_label(
     {
         drawing["label_positions"][id] = json!([f64::from(x + d.x / scale), f64::from(y - d.y / scale)]);
     }
-    ui.painter().text(at, Align2::CENTER_CENTER, text, FontId::proportional(16.0), text_color);
+    ui.painter().text(at, Align2::CENTER_CENTER, text, FontId::proportional(Tokens::get().font_heading), text_color);
     response.drag_stopped()
 }
 
@@ -233,7 +233,7 @@ fn render_plate(ui: &mut egui::Ui, drawing: &mut Value, editable: bool, selected
                     let leader_end = leader_start + vec2(13.0, -14.0);
                     ui.painter().line_segment([leader_start, leader_end], Stroke::new(0.7,t.text_dim));
                     ui.painter().text(leader_end + vec2(2.0,-1.0), Align2::LEFT_BOTTOM,
-                        format!("Ø{d:.2}"),FontId::proportional(11.0),t.text_dim);
+                        format!("Ø{d:.2}"),FontId::proportional(t.font_micro),t.text_dim);
                 }
             }
         }
@@ -340,7 +340,7 @@ fn render_reference_views(ui: &mut egui::Ui, drawing: &Value) {
                 }
                 ui.painter().text(pos2(rect.center().x,rect.bottom()-8.0),
                     Align2::CENTER_CENTER,format!("{w:.2} × {h:.2} mm"),
-                    FontId::proportional(11.0),t.text_dim);
+                    FontId::proportional(t.font_micro),t.text_dim);
             });
         }
     });
@@ -419,13 +419,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             ui.label("3D-Körper:");
             let mut chosen=state.body.clone();
-            egui::ComboBox::from_id_salt("sc_drawing_body")
-                .selected_text(&state.body)
-                .show_ui(ui, |ui| {
-                    for n in &names {
-                        ui.selectable_value(&mut chosen,n.clone(),n);
-                    }
-                });
+            // Preserve user-chosen body names verbatim; the UI kit owns the selector.
+            crate::ui_kit::dropdown_names(ui, "sc_drawing_body", &mut chosen, &names);
             if chosen != state.body {
                 state.selected_face = None;
                 state.distance_anchor = None;

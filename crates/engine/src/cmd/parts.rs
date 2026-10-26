@@ -625,10 +625,10 @@ mod tests {
         assert_eq!(s.active_occurrence_path, Some(path.clone()));
         let after = s.doc.clone();
         run(&mut s, "edit.undo", json!({}));
-        assert_eq!(s.doc, before);
+        crate::assert_undo_document_except_allocator(&s.doc, &before);
         let redo = s.redo.len();
         assert!(s.execute("parts.resize", &json!({"component":id,"length":0})).is_err());
-        assert_eq!(s.doc, before);
+        crate::assert_undo_document_except_allocator(&s.doc, &before);
         assert_eq!(s.redo.len(), redo);
         assert_eq!(s.active_occurrence_path, Some(path));
         run(&mut s, "edit.redo", json!({}));

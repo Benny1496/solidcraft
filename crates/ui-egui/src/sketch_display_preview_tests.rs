@@ -205,9 +205,11 @@ fn slot_preview_matches_every_committed_side_and_cap() {
             .unwrap_or_else(|| panic!("{command}: no slot outline before the width click"));
         let ctx = egui::Context::default();
         let proj = projection(2.0);
-        let output = ctx.run_ui(egui::RawInput { screen_rect: Some(proj.rect), ..Default::default() }, |ui| {
+        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(proj.rect), ..Default::default() }, |ui| {
             super::paint_preview_curve(preview.clone(), &Plane::XY, ui.painter(), &proj, egui::Stroke::new(1.5, egui::Color32::WHITE), 0);
         });
+        // Test-only context has no renderer for font texture uploads.
+        output.textures_delta.clear();
         assert_eq!(
             output.shapes.iter().filter(|shape| matches!(shape.shape, egui::Shape::Path(_))).count(),
             4,
@@ -249,7 +251,9 @@ fn typed_small_slot_width_preview_matches_the_final_click() {
         let proj = projection(2_000_000.0);
         let input = || egui::RawInput { screen_rect: Some(proj.rect), ..Default::default() };
         let output = ctx.run_ui(input(), |ui| super::preview(&h.app, &t, ui.painter(), &proj));
-        let paths = |output: egui::FullOutput| {
+        let paths = |mut output: egui::FullOutput| {
+            // Only shapes are compared; the headless test discards texture updates.
+            output.textures_delta.clear();
             output
                 .shapes
                 .into_iter()

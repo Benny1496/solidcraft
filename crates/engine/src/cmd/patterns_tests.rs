@@ -70,7 +70,7 @@ fn feature_rectangular_center_flip_and_oblique_direction_keep_source_and_recompu
         assert!(rel(volume(&mut s), 120.0 * 120.0 * 5.0 - 8.0 * PI * 5.0) < 1e-5);
         let saved = s.doc.to_json();
         run(&mut s, "edit.undo", json!({}));
-        assert_eq!(s.doc.to_json(), before);
+        crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
         run(&mut s, "edit.redo", json!({}));
         assert_eq!(s.doc.to_json(), saved);
         let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());
@@ -173,7 +173,7 @@ fn circular_numeric_axis_origin_preserves_hole_geometry_and_reopens() {
         assert!(rel(volume(&mut s), expected) < 1e-4);
         let saved = s.doc.to_json();
         run(&mut s, "edit.undo", json!({}));
-        assert_eq!(s.doc.to_json(), before);
+        crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
         run(&mut s, "edit.redo", json!({}));
         assert_eq!(s.doc.to_json(), saved);
         let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());

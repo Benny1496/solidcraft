@@ -108,7 +108,7 @@ fn generated_profiles_and_press_pull_convert_rotated_occurrence_picks_once() {
         check(&mut s, area * height, hole, height);
         let after_cut = s.doc.to_json();
         run(&mut s, "edit.undo", json!({}));
-        assert_eq!(s.doc.to_json(), before_cut);
+        crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before_cut);
         check(&mut s, area * 35.0, hole, 35.0);
         run(&mut s, "edit.redo", json!({}));
         assert_eq!(s.doc.to_json(), after_cut);

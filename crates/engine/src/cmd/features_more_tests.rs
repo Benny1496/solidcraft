@@ -116,7 +116,7 @@ fn separated_profile_cut_preserves_participants_and_removes_only_consumed_bodies
         check(&s);
         check(&Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap()));
         run(&mut s, "edit.undo", json!({}));
-        assert_eq!(s.doc.to_json(), before);
+        crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
         run(&mut s, "edit.redo", json!({}));
         check(&s);
     }
@@ -644,7 +644,7 @@ fn cylinder_auto_inference_saves_a_profile_anchor_and_replays_both_depth_signs()
             mode == "emboss"
         );
         run(&mut s, "edit.undo", json!({}));
-        assert_eq!(s.doc.to_json(), initial);
+        crate::assert_undo_json_except_allocator(&s.doc.to_json(), &initial);
         run(&mut s, "edit.redo", json!({}));
         assert_eq!(s.doc.find_feature("Auto Badge").unwrap().kind, feature.kind);
         let mut loaded = Session { doc: solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap().into(), ..Default::default() };

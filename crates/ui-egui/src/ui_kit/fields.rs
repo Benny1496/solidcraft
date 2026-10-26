@@ -191,6 +191,17 @@ pub(crate) fn dropdown_menu(ui: &mut Ui, id: impl egui::AsIdSalt, current: &str,
     response
 }
 
+/// Body-name dropdown: unlike UI command labels, user-provided names stay verbatim.
+/// Uses the shared kit's menu styling and keeps the same value/selection semantics.
+pub(crate) fn dropdown_names(ui: &mut Ui, id: &str, selected: &mut String, options: &[String]) -> Response {
+    let current = selected.clone();
+    dropdown_menu(ui, id, &current, |ui| {
+        for option in options {
+            ui.selectable_value(selected, option.clone(), option.as_str());
+        }
+    })
+}
+
 /// Selection target state; filled targets retain their reserved trailing space.
 pub(crate) struct Selection {
     pub active: bool,

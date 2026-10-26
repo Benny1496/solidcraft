@@ -1,0 +1,379 @@
+diff --git a/assets/locales/en.json b/assets/locales/en.json
+index 842513fc882c94d601abe0ab54da8f68b4e1a263..d2f59497938ce295caa012e7e5f02f4704c787f1 100644
+--- a/assets/locales/en.json
++++ b/assets/locales/en.json
+@@ -4,6 +4,7 @@
+   "1. Open GitHub draft below. Your title and report will be filled in.": "1. Open GitHub draft below. Your title and report will be filled in.",
+   "2. Attach your screenshot: copy and paste it, or save and upload the PNG.": "2. Attach your screenshot: copy and paste it, or save and upload the PNG.",
+   "2D": "2D",
++  "2D Drawing": "2D Drawing",
+   "3. Click Submit new issue on GitHub to send your report.": "3. Click Submit new issue on GitHub to send your report.",
+   "A new configuration, a copy of the active one": "A new configuration, a copy of the active one",
+   "ARRANGE": "ARRANGE",
+@@ -17,6 +18,7 @@
+   "Add Key": "Add Key",
+   "Add Mid Radius": "Add Mid Radius",
+   "Add Row": "Add Row",
++  "Add Verified Drawing Dimension": "Add Verified Drawing Dimension",
+   "Add condition": "Add condition",
+   "Add or edit rule": "Add or edit rule",
+   "Against": "Against",
+@@ -103,6 +105,7 @@
+   "Curvature (G2)": "Curvature (G2)",
+   "Curvature change (G3)": "Curvature change (G3)",
+   "Customize Toolbar": "Customize Toolbar",
++  "DRAWING": "DRAWING",
+   "Delete": "Delete",
+   "Delete all": "Delete all",
+   "Delete rule": "Delete rule",
+@@ -127,6 +130,7 @@
+   "Enabled": "Enabled",
+   "End bulge": "End bulge",
+   "End continuity": "End continuity",
++  "Experimental XY Edge Projection": "Experimental XY Edge Projection",
+   "Explode": "Explode",
+   "Explode Text": "Explode Text",
+   "Export Animation…": "Export Animation…",
+@@ -265,6 +269,7 @@
+   "Position (G0)": "Position (G0)",
+   "Position along the edge, 0 at the start end, 1 at the other": "Position along the edge, 0 at the start end, 1 at the other",
+   "Preferences › Design turns the offer back on": "Preferences › Design turns the offer back on",
++  "Preview Drawing": "Preview Drawing",
+   "Preview Row": "Preview Row",
+   "Preview leaves the current design unchanged.": "Preview leaves the current design unchanged.",
+   "Profiles/Curves": "Profiles/Curves",
+diff --git a/crates/engine/src/cmd/component_clone_tests.rs b/crates/engine/src/cmd/component_clone_tests.rs
+index 081d4038576ada4e96d6d099d42f7ff7d19b054e..4143154036a0054db0bf50534a57e06f8f6cb5a0 100644
+--- a/crates/engine/src/cmd/component_clone_tests.rs
++++ b/crates/engine/src/cmd/component_clone_tests.rs
+@@ -548,7 +548,7 @@ fn frozen_r6_bore_copy_uses_current_geometry_despite_mesh_measure_bias() {
+     check(&s);
+     check(&Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap()));
+     run(&mut s, "edit.undo", json!({}));
+-    assert_eq!(s.doc.to_json(), before);
++    crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
+     run(&mut s, "edit.redo", json!({}));
+     check(&s);
+ }
+diff --git a/crates/engine/src/cmd/edit_tests.rs b/crates/engine/src/cmd/edit_tests.rs
+index 0eb2091acc862dac093bf6387ef87871e879f572..a0579beabbfe3843aa115f9cd62350553dcfd5d2 100644
+--- a/crates/engine/src/cmd/edit_tests.rs
++++ b/crates/engine/src/cmd/edit_tests.rs
+@@ -286,7 +286,7 @@ fn redefine_keeps_allocator_above_component_and_occurrence_ids() {
+     assert_eq!(s.world_state().body("Base").unwrap().component, 0, "the result transfers only AFTER Combine");
+     run(&mut s, "edit.undo", json!({}));
+     run(&mut s, "edit.undo", json!({}));
+-    assert_eq!(*s.doc, *original);
++    crate::assert_undo_document_except_allocator(&s.doc, &original);
+     run(&mut s, "edit.redo", json!({}));
+     let reopened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+     assert_eq!(reopened.world_state().body("Base").unwrap().component, destination);
+diff --git a/crates/engine/src/cmd/face_tests.rs b/crates/engine/src/cmd/face_tests.rs
+index 73c02e39b7306acebe0be48187c3844ffbf9eaab..ab661dde51d19cdb36b2d49e7d47b96877652745 100644
+--- a/crates/engine/src/cmd/face_tests.rs
++++ b/crates/engine/src/cmd/face_tests.rs
+@@ -108,7 +108,7 @@ fn generated_profiles_and_press_pull_convert_rotated_occurrence_picks_once() {
+         check(&mut s, area * height, hole, height);
+         let after_cut = s.doc.to_json();
+         run(&mut s, "edit.undo", json!({}));
+-        assert_eq!(s.doc.to_json(), before_cut);
++        crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before_cut);
+         check(&mut s, area * 35.0, hole, 35.0);
+         run(&mut s, "edit.redo", json!({}));
+         assert_eq!(s.doc.to_json(), after_cut);
+diff --git a/crates/engine/src/cmd/features_more_tests.rs b/crates/engine/src/cmd/features_more_tests.rs
+index ced142f4a29477375890f4a20d77077f1304c3ce..d582ae3d8fceb30dd74049cc1ff5b78ff635442d 100644
+--- a/crates/engine/src/cmd/features_more_tests.rs
++++ b/crates/engine/src/cmd/features_more_tests.rs
+@@ -116,7 +116,7 @@ fn separated_profile_cut_preserves_participants_and_removes_only_consumed_bodies
+         check(&s);
+         check(&Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap()));
+         run(&mut s, "edit.undo", json!({}));
+-        assert_eq!(s.doc.to_json(), before);
++        crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
+         run(&mut s, "edit.redo", json!({}));
+         check(&s);
+     }
+@@ -644,7 +644,7 @@ fn cylinder_auto_inference_saves_a_profile_anchor_and_replays_both_depth_signs()
+             mode == "emboss"
+         );
+         run(&mut s, "edit.undo", json!({}));
+-        assert_eq!(s.doc.to_json(), initial);
++        crate::assert_undo_json_except_allocator(&s.doc.to_json(), &initial);
+         run(&mut s, "edit.redo", json!({}));
+         assert_eq!(s.doc.find_feature("Auto Badge").unwrap().kind, feature.kind);
+         let mut loaded = Session { doc: solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap().into(), ..Default::default() };
+diff --git a/crates/engine/src/cmd/parts.rs b/crates/engine/src/cmd/parts.rs
+index 5ded0ce2988a895dda95d96c88301431644387e8..3241ae21e22591893571b4056da6b4d185992736 100644
+--- a/crates/engine/src/cmd/parts.rs
++++ b/crates/engine/src/cmd/parts.rs
+@@ -625,10 +625,10 @@ mod tests {
+         assert_eq!(s.active_occurrence_path, Some(path.clone()));
+         let after = s.doc.clone();
+         run(&mut s, "edit.undo", json!({}));
+-        assert_eq!(s.doc, before);
++        crate::assert_undo_document_except_allocator(&s.doc, &before);
+         let redo = s.redo.len();
+         assert!(s.execute("parts.resize", &json!({"component":id,"length":0})).is_err());
+-        assert_eq!(s.doc, before);
++        crate::assert_undo_document_except_allocator(&s.doc, &before);
+         assert_eq!(s.redo.len(), redo);
+         assert_eq!(s.active_occurrence_path, Some(path));
+         run(&mut s, "edit.redo", json!({}));
+diff --git a/crates/engine/src/cmd/patterns_tests.rs b/crates/engine/src/cmd/patterns_tests.rs
+index 4d4a7e56f351314361f2544293f0eb78588bf8c1..75f8359be58e97204559384932e4d4ad7ef87eea 100644
+--- a/crates/engine/src/cmd/patterns_tests.rs
++++ b/crates/engine/src/cmd/patterns_tests.rs
+@@ -70,7 +70,7 @@ fn feature_rectangular_center_flip_and_oblique_direction_keep_source_and_recompu
+         assert!(rel(volume(&mut s), 120.0 * 120.0 * 5.0 - 8.0 * PI * 5.0) < 1e-5);
+         let saved = s.doc.to_json();
+         run(&mut s, "edit.undo", json!({}));
+-        assert_eq!(s.doc.to_json(), before);
++        crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
+         run(&mut s, "edit.redo", json!({}));
+         assert_eq!(s.doc.to_json(), saved);
+         let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());
+@@ -173,7 +173,7 @@ fn circular_numeric_axis_origin_preserves_hole_geometry_and_reopens() {
+         assert!(rel(volume(&mut s), expected) < 1e-4);
+         let saved = s.doc.to_json();
+         run(&mut s, "edit.undo", json!({}));
+-        assert_eq!(s.doc.to_json(), before);
++        crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
+         run(&mut s, "edit.redo", json!({}));
+         assert_eq!(s.doc.to_json(), saved);
+         let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());
+diff --git a/crates/engine/src/cmd/sheet_tests.rs b/crates/engine/src/cmd/sheet_tests.rs
+index 174ed759225c40a59a28663d7547fc5914c4083b..44efc914a4c0aece67aa29e04cf50913c35dcf0e 100644
+--- a/crates/engine/src/cmd/sheet_tests.rs
++++ b/crates/engine/src/cmd/sheet_tests.rs
+@@ -72,7 +72,7 @@ fn side_edge_flanges_across_a_bend_keep_their_relief_through_rebuild_and_reopen(
+             let body = &s.model.state().bodies[0].body;
+             assert!(body.validity().is_empty() && body.shell_count() == 1);
+             run(&mut s, "edit.undo", json!({}));
+-            assert_eq!(s.doc.to_json(), before);
++            crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
+             run(&mut s, "edit.redo", json!({}));
+             assert!((volume(&mut s) - formed).abs() < 1e-6);
+             for command in ["sheet.unfold", "sheet.refold"] {
+diff --git a/crates/engine/src/cmd/sketch_face_tests.rs b/crates/engine/src/cmd/sketch_face_tests.rs
+index c21ba0739fba8ee62586e48f2ae2b20f651f94dc..4810a5e2d2b7846f557e7102cf3abf08da8050cb 100644
+--- a/crates/engine/src/cmd/sketch_face_tests.rs
++++ b/crates/engine/src/cmd/sketch_face_tests.rs
+@@ -185,7 +185,7 @@ fn exact_nested_source_and_cross_owner_pending_paths_capture_only_involved_posit
+     assert!(s.pending_moves.contains_key(&unrelated["occurrence"].as_u64().unwrap()));
+     let saved = s.doc.to_json();
+     run(&mut s, "edit.undo", json!({}));
+-    assert_eq!(s.doc.to_json(), before);
++    crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
+     assert_eq!(s.pending_moves, pending);
+     run(&mut s, "edit.redo", json!({}));
+     let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());
+diff --git a/crates/engine/src/construct_tests.rs b/crates/engine/src/construct_tests.rs
+index 157324a053a8ad8a2abb4c911386a8df14423cd5..71fe25096e512291a0246b8dcf7b6ced2dd812b0 100644
+--- a/crates/engine/src/construct_tests.rs
++++ b/crates/engine/src/construct_tests.rs
+@@ -401,7 +401,7 @@ fn disambiguated_top_plane_pocket_survives_undo_and_cold_reopen() {
+     let measured = run(&mut s, "inspect.measure", json!({}));
+     assert!((measured["total"]["volume_mm3"].as_f64().unwrap() - expected).abs() < 1e-6, "{measured}");
+     run(&mut s, "edit.undo", json!({}));
+-    assert_eq!(s.doc.to_json(), before);
++    crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
+     run(&mut s, "edit.redo", json!({}));
+     assert_eq!(s.doc.to_json(), saved);
+     let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());
+diff --git a/crates/engine/src/lib.rs b/crates/engine/src/lib.rs
+index 6cde8bd05a73144f32dcf99f54c1d93e49d0692b..23358a42bf1b4a3f01dd5aefb9dc0b1865ed6aac 100644
+--- a/crates/engine/src/lib.rs
++++ b/crates/engine/src/lib.rs
+@@ -1170,6 +1170,29 @@ mod profile_refs_tests;
+ mod sketch_edit_removed_tests;
+ #[cfg(test)]
+ mod split_face_tests;
++/// Test-only snapshot comparison: undo preserves a high-water ID allocator to keep
++/// historical face and feature identities from being reused by later edits.
++#[cfg(test)]
++pub(crate) fn assert_undo_document_except_allocator(actual: &Document, expected: &Document) {
++    assert!(actual.next_id >= expected.next_id, "undo must not lower the next feature ID");
++    let mut adjusted = actual.clone();
++    adjusted.next_id = expected.next_id;
++    assert_eq!(adjusted, *expected, "undo changed persisted document content beyond the allocator watermark");
++}
++
++/// Compare every serialized JSON field, but treat a higher `next_id` after undo
++/// as intentional and required for stable drawing references.
++#[cfg(test)]
++pub(crate) fn assert_undo_json_except_allocator(actual_json: &str, expected_json: &str) {
++    let mut actual: serde_json::Value = serde_json::from_str(actual_json).expect("actual JSON");
++    let expected: serde_json::Value = serde_json::from_str(expected_json).expect("expected JSON");
++    let observed_id = actual.get("next_id").and_then(serde_json::Value::as_u64).expect("actual next_id");
++    let earlier_id = expected.get("next_id").and_then(serde_json::Value::as_u64).expect("earlier next_id");
++    assert!(observed_id >= earlier_id, "undo must not lower the next feature ID");
++    actual["next_id"] = expected["next_id"].clone();
++    assert_eq!(actual, expected, "undo changed JSON fields beyond the allocator watermark");
++}
++
+ #[cfg(test)]
+ mod tests;
+ #[cfg(test)]
+diff --git a/crates/ui-egui/src/browser/features.rs b/crates/ui-egui/src/browser/features.rs
+index dd73cb438c668b639b0d8fe074a115ec328b9f72..8c4a3b793d4ad0a7986162336fae39d6db908ec7 100644
+--- a/crates/ui-egui/src/browser/features.rs
++++ b/crates/ui-egui/src/browser/features.rs
+@@ -109,7 +109,9 @@ mod tests {
+         h.app.tree.expanded.insert("c0/features".into());
+         DRAWN.with(|d| d.borrow_mut().clear());
+         let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))), ..Default::default() };
+-        let _ = h.ctx.run_ui(raw, |ui| rows(&mut h.app, ui, 0, &[], 0, &mut Actions::default()));
++        let mut output = h.ctx.run_ui(raw, |ui| rows(&mut h.app, ui, 0, &[], 0, &mut Actions::default()));
++        // Test-only context: deliberately discard pending font texture uploads.
++        output.textures_delta.clear();
+         drawn_rows().into_iter().map(|(label, ..)| label).collect()
+     }
+ 
+diff --git a/crates/ui-egui/src/dialogs_part_size.rs b/crates/ui-egui/src/dialogs_part_size.rs
+index 4f252d66c79b85e22bfd60d7e9ed31fc65b5a0a3..58649c2460810bc11d49874e14a9e0f7bbeb0937 100644
+--- a/crates/ui-egui/src/dialogs_part_size.rs
++++ b/crates/ui-egui/src/dialogs_part_size.rs
+@@ -342,7 +342,10 @@ mod tests {
+         assert_eq!(app.session.undo.len(), undo + 1);
+         let after = app.session.doc.clone();
+         app.run("edit.undo", json!({})).unwrap();
+-        assert_eq!(app.session.doc, before);
++        let mut undo_doc = (*app.session.doc).clone();
++        assert!(undo_doc.next_id >= before.next_id, "undo must retain the allocator high-water mark");
++        undo_doc.next_id = before.next_id;
++        assert_eq!(undo_doc, *before);
+         app.run("edit.redo", json!({})).unwrap();
+         assert_eq!(app.session.doc, after);
+     }
+diff --git a/crates/ui-egui/src/drawing_ui.rs b/crates/ui-egui/src/drawing_ui.rs
+index 4bced2c26a7d2880312bc5544d900b1d7126b6a0..bae4f69144e8cc72b47b9d71c5f91a5cf7b015fe 100644
+--- a/crates/ui-egui/src/drawing_ui.rs
++++ b/crates/ui-egui/src/drawing_ui.rs
+@@ -162,7 +162,7 @@ fn draw_label(
+     {
+         drawing["label_positions"][id] = json!([f64::from(x + d.x / scale), f64::from(y - d.y / scale)]);
+     }
+-    ui.painter().text(at, Align2::CENTER_CENTER, text, FontId::proportional(16.0), text_color);
++    ui.painter().text(at, Align2::CENTER_CENTER, text, FontId::proportional(Tokens::get().font_heading), text_color);
+     response.drag_stopped()
+ }
+ 
+@@ -233,7 +233,7 @@ fn render_plate(ui: &mut egui::Ui, drawing: &mut Value, editable: bool, selected
+                     let leader_end = leader_start + vec2(13.0, -14.0);
+                     ui.painter().line_segment([leader_start, leader_end], Stroke::new(0.7,t.text_dim));
+                     ui.painter().text(leader_end + vec2(2.0,-1.0), Align2::LEFT_BOTTOM,
+-                        format!("Ø{d:.2}"),FontId::proportional(11.0),t.text_dim);
++                        format!("Ø{d:.2}"),FontId::proportional(t.font_micro),t.text_dim);
+                 }
+             }
+         }
+@@ -340,7 +340,7 @@ fn render_reference_views(ui: &mut egui::Ui, drawing: &Value) {
+                 }
+                 ui.painter().text(pos2(rect.center().x,rect.bottom()-8.0),
+                     Align2::CENTER_CENTER,format!("{w:.2} × {h:.2} mm"),
+-                    FontId::proportional(11.0),t.text_dim);
++                    FontId::proportional(t.font_micro),t.text_dim);
+             });
+         }
+     });
+@@ -419,13 +419,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
+         ui.horizontal(|ui| {
+             ui.label("3D-Körper:");
+             let mut chosen=state.body.clone();
+-            egui::ComboBox::from_id_salt("sc_drawing_body")
+-                .selected_text(&state.body)
+-                .show_ui(ui, |ui| {
+-                    for n in &names {
+-                        ui.selectable_value(&mut chosen,n.clone(),n);
+-                    }
+-                });
++            // Preserve user-chosen body names verbatim; the UI kit owns the selector.
++            crate::ui_kit::dropdown_names(ui, "sc_drawing_body", &mut chosen, &names);
+             if chosen != state.body {
+                 state.selected_face = None;
+                 state.distance_anchor = None;
+diff --git a/crates/ui-egui/src/expression_complete.rs b/crates/ui-egui/src/expression_complete.rs
+index 0ef4f7de6ba18775b06874e9097d5981dc17080e..32f6c8688759c94c716722877d864989b8f56135 100644
+--- a/crates/ui-egui/src/expression_complete.rs
++++ b/crates/ui-egui/src/expression_complete.rs
+@@ -206,7 +206,7 @@ mod tests {
+         fn frame(&mut self, events: Vec<egui::Event>) {
+             self.accepted = false;
+             self.leaked.clear();
+-            let _ = self.ctx.run_ui(
++            let mut output = self.ctx.run_ui(
+                 egui::RawInput {
+                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0))),
+                     events,
+@@ -229,6 +229,8 @@ mod tests {
+                     });
+                 },
+             );
++            // Test-only context: no renderer consumes font texture uploads.
++            output.textures_delta.clear();
+         }
+ 
+         fn key(&mut self, key: Key) {
+diff --git a/crates/ui-egui/src/sketch_display_preview_tests.rs b/crates/ui-egui/src/sketch_display_preview_tests.rs
+index 06e54483b4ccfd91e20cad88919063f0c29317ba..3ce989dcecd28192aff5ea72613342cd8bb7c21c 100644
+--- a/crates/ui-egui/src/sketch_display_preview_tests.rs
++++ b/crates/ui-egui/src/sketch_display_preview_tests.rs
+@@ -205,9 +205,11 @@ fn slot_preview_matches_every_committed_side_and_cap() {
+             .unwrap_or_else(|| panic!("{command}: no slot outline before the width click"));
+         let ctx = egui::Context::default();
+         let proj = projection(2.0);
+-        let output = ctx.run_ui(egui::RawInput { screen_rect: Some(proj.rect), ..Default::default() }, |ui| {
++        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(proj.rect), ..Default::default() }, |ui| {
+             super::paint_preview_curve(preview.clone(), &Plane::XY, ui.painter(), &proj, egui::Stroke::new(1.5, egui::Color32::WHITE), 0);
+         });
++        // Test-only context has no renderer for font texture uploads.
++        output.textures_delta.clear();
+         assert_eq!(
+             output.shapes.iter().filter(|shape| matches!(shape.shape, egui::Shape::Path(_))).count(),
+             4,
+@@ -249,7 +251,9 @@ fn typed_small_slot_width_preview_matches_the_final_click() {
+         let proj = projection(2_000_000.0);
+         let input = || egui::RawInput { screen_rect: Some(proj.rect), ..Default::default() };
+         let output = ctx.run_ui(input(), |ui| super::preview(&h.app, &t, ui.painter(), &proj));
+-        let paths = |output: egui::FullOutput| {
++        let paths = |mut output: egui::FullOutput| {
++            // Only shapes are compared; the headless test discards texture updates.
++            output.textures_delta.clear();
+             output
+                 .shapes
+                 .into_iter()
+diff --git a/crates/ui-egui/src/ui_kit/fields.rs b/crates/ui-egui/src/ui_kit/fields.rs
+index 2c4b832b6d4be48a79504f19f9471e919b7e06d3..1438f46d1b823d9d0b45b5d2c829df79636203bc 100644
+--- a/crates/ui-egui/src/ui_kit/fields.rs
++++ b/crates/ui-egui/src/ui_kit/fields.rs
+@@ -191,6 +191,17 @@ pub(crate) fn dropdown_menu(ui: &mut Ui, id: impl egui::AsIdSalt, current: &str,
+     response
+ }
+ 
++/// Body-name dropdown: unlike UI command labels, user-provided names stay verbatim.
++/// Uses the shared kit's menu styling and keeps the same value/selection semantics.
++pub(crate) fn dropdown_names(ui: &mut Ui, id: &str, selected: &mut String, options: &[String]) -> Response {
++    let current = selected.clone();
++    dropdown_menu(ui, id, &current, |ui| {
++        for option in options {
++            ui.selectable_value(selected, option.clone(), option.as_str());
++        }
++    })
++}
++
+ /// Selection target state; filled targets retain their reserved trailing space.
+ pub(crate) struct Selection {
+     pub active: bool,
+diff --git a/crates/ui-egui/src/workspace.rs b/crates/ui-egui/src/workspace.rs
+index 29ab45b4786688aa9bbd2feef9d2e2664e12cf3d..b98041049f18887a88c1c44d794a12228a85474e 100644
+--- a/crates/ui-egui/src/workspace.rs
++++ b/crates/ui-egui/src/workspace.rs
+@@ -279,6 +279,7 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
+     ("contact.enable_sets", "Contact Sets"),
+     ("document.inspect", "Inspect"),
+     ("document.units", "Units"),
++    ("drawing.preview", "2D Drawing"),
+     ("inspect.accessibility", "Access"),
+     ("inspect.center_of_mass", "Mass Center"),
+     ("inspect.curvature_comb", "Curv. Comb"),

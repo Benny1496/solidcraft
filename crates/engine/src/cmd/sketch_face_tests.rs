@@ -185,7 +185,7 @@ fn exact_nested_source_and_cross_owner_pending_paths_capture_only_involved_posit
     assert!(s.pending_moves.contains_key(&unrelated["occurrence"].as_u64().unwrap()));
     let saved = s.doc.to_json();
     run(&mut s, "edit.undo", json!({}));
-    assert_eq!(s.doc.to_json(), before);
+    crate::assert_undo_json_except_allocator(&s.doc.to_json(), &before);
     assert_eq!(s.pending_moves, pending);
     run(&mut s, "edit.redo", json!({}));
     let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());

@@ -1170,6 +1170,29 @@ mod profile_refs_tests;
 mod sketch_edit_removed_tests;
 #[cfg(test)]
 mod split_face_tests;
+/// Test-only snapshot comparison: undo preserves a high-water ID allocator to keep
+/// historical face and feature identities from being reused by later edits.
+#[cfg(test)]
+pub(crate) fn assert_undo_document_except_allocator(actual: &Document, expected: &Document) {
+    assert!(actual.next_id >= expected.next_id, "undo must not lower the next feature ID");
+    let mut adjusted = actual.clone();
+    adjusted.next_id = expected.next_id;
+    assert_eq!(adjusted, *expected, "undo changed persisted document content beyond the allocator watermark");
+}
+
+/// Compare every serialized JSON field, but treat a higher `next_id` after undo
+/// as intentional and required for stable drawing references.
+#[cfg(test)]
+pub(crate) fn assert_undo_json_except_allocator(actual_json: &str, expected_json: &str) {
+    let mut actual: serde_json::Value = serde_json::from_str(actual_json).expect("actual JSON");
+    let expected: serde_json::Value = serde_json::from_str(expected_json).expect("expected JSON");
+    let observed_id = actual.get("next_id").and_then(serde_json::Value::as_u64).expect("actual next_id");
+    let earlier_id = expected.get("next_id").and_then(serde_json::Value::as_u64).expect("earlier next_id");
+    assert!(observed_id >= earlier_id, "undo must not lower the next feature ID");
+    actual["next_id"] = expected["next_id"].clone();
+    assert_eq!(actual, expected, "undo changed JSON fields beyond the allocator watermark");
+}
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
