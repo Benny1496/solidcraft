@@ -315,7 +315,7 @@ fn hostile_moves_copies_and_reused_ids_do_not_leak_state() {
     run(&mut s, "edit.undo", json!({}));
     assert!(s.pending_moves.is_empty());
     let (_, other) = created(&mut s, "Other");
-    assert_eq!(first, other);
+    assert_ne!(first, other, "undo must not reuse occurrence IDs");
     assert_eq!(s.occurrence_placement(&[other]).unwrap().world[3][0], 0.0);
     run(&mut s, "occurrence.move", json!({"occurrence":other,"translate":[20,0,0],"capture":false}));
     run(&mut s, "component.capture_position", json!({}));
