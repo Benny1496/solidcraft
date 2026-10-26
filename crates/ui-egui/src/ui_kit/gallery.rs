@@ -340,6 +340,11 @@ const ELEMENTS: &[Element] = &[
             list_picker(ui, "preset", "Preset", true);
         });
     }),
+    element!("dropdown_names", |ui, _| {
+        let mut selected = "Body 1".to_owned();
+        let options = ["Body 1".to_owned(), "Body 2".to_owned()];
+        dropdown_names(ui, "gallery_body_names", &mut selected, &options);
+    }),
     element!("message_field", |ui, s| {
         message_field(ui, ui.id().with("message"), &mut s.value, "Message");
     }),
