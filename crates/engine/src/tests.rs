@@ -3230,8 +3230,11 @@ fn computed_import_preserves_file_and_earlier_undo_history() {
     assert!(s.is_dirty());
     assert_eq!(s.model.state().bodies.len(), 2);
     run(&mut s, "edit.undo", json!({}));
-    assert!(std::sync::Arc::ptr_eq(&saved, &s.doc));
-    assert!(!s.is_dirty());
+    // The undo restores the saved design, but keeps the allocation high-water mark
+    // to prevent historical feature IDs from being reused.
+    crate::assert_undo_document_except_allocator(&s.doc, &saved);
+    assert!(s.doc.next_id > saved.next_id, "computed import must retain allocated IDs");
+    assert!(s.is_dirty(), "the higher persistent allocator must be saved");
     run(&mut s, "edit.undo", json!({}));
     assert!(s.model.state().bodies.is_empty());
 }
