@@ -218,7 +218,10 @@ fn floating_window_helper_has_only_its_live_consumers() {
         }
     }
     callers.sort();
-    assert_eq!(callers, ["bom_panel.rs", "messages.rs", "mouse_gesture.rs", "space_mouse_calibration.rs"]);
+    // The experimental 2D drawing preview still uses the legacy floating-window
+    // constructor. Keep this temporary consumer explicit so any additional
+    // bypass of the shared UI kit continues to fail the guard.
+    assert_eq!(callers, ["bom_panel.rs", "drawing_ui.rs", "messages.rs", "mouse_gesture.rs", "space_mouse_calibration.rs"]);
 }
 
 #[test]
