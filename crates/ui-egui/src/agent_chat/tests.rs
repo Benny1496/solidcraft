@@ -598,7 +598,11 @@ fn an_interrupted_turns_changes_undo_as_one_step() {
     // The steered message is on its own turn.
     assert!(app.agent_chat.turn.as_ref().is_some_and(|t| t.label.contains("stop, make it one") && t.changes == 0));
     undo_changes(&mut app, n);
-    assert!(Arc::ptr_eq(&app.session.doc, &before));
+    // Undo restores all document content but retains the ID allocator watermark.
+    let mut restored = (*app.session.doc).clone();
+    assert!(restored.next_id >= before.next_id, "undo must not reuse feature IDs");
+    restored.next_id = before.next_id;
+    assert_eq!(restored, *before, "interrupted turn must restore the previous design");
 }
 
 /// The same with a real agent process speaking ACP: `session/cancel` goes out, the agent answers
