@@ -108,7 +108,11 @@ fn a_messages_changes_undo_as_one_step() {
     assert!(app.session.undo.last().is_some_and(|s| s.label.contains("two boxes")));
     let n = app.agent_chat.items.iter().rposition(|i| matches!(i, Item::Changes { steps: 3, .. })).expect("the changes are listed");
     undo_changes(&mut app, n);
-    assert!(Arc::ptr_eq(&app.session.doc, &before), "back to the design before the message");
+    // Undo retains the ID allocator high-water mark; a different Arc is expected.
+    let mut restored = (*app.session.doc).clone();
+    assert!(restored.next_id >= before.next_id, "undo must not reuse feature IDs");
+    restored.next_id = before.next_id;
+    assert_eq!(restored, *before, "undo must restore the complete previous design");
     assert!(matches!(app.agent_chat.items[n], Item::Changes { undone: true, .. }));
 }
 
