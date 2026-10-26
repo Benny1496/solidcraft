@@ -382,7 +382,7 @@ fn render_cylinder_measurements(
                             let already = drawing["annotations"].as_array().is_some_and(|list|
                                 list.iter().any(|a| a["face_name"].as_str() == Some(face)
                                     && a["kind"].as_str() == Some(kind)));
-                            if !already && ui.button(caption).clicked() {
+                            if !already && crate::ui_kit::button(ui, caption, crate::ui_kit::Button::Normal).clicked() {
                                 request = Some((face.to_string(),kind.to_string()));
                             }
                         }
@@ -494,12 +494,12 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                                 let exists=drawing["annotations"].as_array().is_some_and(|list|
                                     list.iter().any(|a| a["face_name"].as_str() == Some(face.as_str())
                                         && a["kind"].as_str() == Some(kind)));
-                                if exists {ui.add_enabled(false,egui::Button::new(format!("{caption} ✓")));}
-                                else if ui.button(caption).clicked() {
+                                if exists {crate::ui_kit::button(ui, format!("{caption} ✓"), crate::ui_kit::Button::Enabled(false));}
+                                else if crate::ui_kit::button(ui, caption, crate::ui_kit::Button::Normal).clicked() {
                                     request_annotation=Some((face.to_string(),kind.to_string()));
                                 }
                             }
-                            if ui.button("Ersten Mittelpunkt merken").clicked() {
+                            if crate::ui_kit::button(ui, "Ersten Mittelpunkt merken", crate::ui_kit::Button::Normal).clicked() {
                                 state.distance_anchor=Some(face.clone());
                             }
                             if let Some(first) = state.distance_anchor.clone() {
@@ -509,13 +509,12 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                                             && a["second_face_name"].as_str() == Some(face.as_str()))
                                             || (a["face_name"].as_str() == Some(face.as_str())
                                             && a["second_face_name"].as_str() == Some(first.as_str())))));
-                                if ui.add_enabled(first != face && !exists,
-                                    egui::Button::new("Mitte-zu-Mitte setzen")).clicked() {
+                                if crate::ui_kit::button(ui, "Mitte-zu-Mitte setzen", crate::ui_kit::Button::Enabled(first != face && !exists)).clicked() {
                                     request_annotation=Some((first,"center_distance".to_string()));
                                     request_second_face=Some(face.clone());
                                 }
                             }
-                            if ui.button("Auswahl aufheben").clicked() {
+                            if crate::ui_kit::button(ui, "Auswahl aufheben", crate::ui_kit::Button::Normal).clicked() {
                                 state.distance_anchor=None;
                                 state.selected_face=None;
                             }
@@ -542,14 +541,14 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             ui.label(RichText::new("Außenmaße und gesetzte Ø-/X-/Y-/Mitte-zu-Mitte-Maße sind verschiebbar. Bei Verlust der 3D-Flächenreferenz bleibt das Maß sichtbar, aber ungeklärt.").small().color(t.text_dim));
             ui.horizontal(|ui| {
                 if state.snapshot.is_none() {
-                    if ui.button("Zeichnung im Modell speichern").clicked() {
+                    if crate::ui_kit::button(ui, "Zeichnung im Modell speichern", crate::ui_kit::Button::Normal).clicked() {
                         request_save=Some(drawing.clone());
                     }
                 } else if state.proposed.is_none() {
-                    if ui.button("Zeichnung prüfen").clicked() {
+                    if crate::ui_kit::button(ui, "Zeichnung prüfen", crate::ui_kit::Button::Normal).clicked() {
                         refresh(app,&mut state);
                     }
-                    if state.layout_changed && ui.button("Maßpositionen speichern").clicked() {
+                    if state.layout_changed && crate::ui_kit::button(ui, "Maßpositionen speichern", crate::ui_kit::Button::Normal).clicked() {
                         request_layout_save=true;
                     }
                 } else {
@@ -591,10 +590,10 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 ui.label(RichText::new("Bisherige Maßtextpositionen bleiben erhalten. Nicht eindeutig zuordenbare Bohrungsmaße werden nicht automatisch übertragen.").small().color(t.text_dim));
                 ui.separator();
                 ui.horizontal(|ui|{
-                    if ui.button("Zeichnung aktualisieren").clicked() {
+                    if crate::ui_kit::button(ui, "Zeichnung aktualisieren", crate::ui_kit::Button::Normal).clicked() {
                         accept(app,&mut state);
                     }
-                    if ui.button("Alte Zeichnung beibehalten").clicked() {
+                    if crate::ui_kit::button(ui, "Alte Zeichnung beibehalten", crate::ui_kit::Button::Normal).clicked() {
                         state.dismissed_revision=Some(app.session.revision);
                     }
                 });
