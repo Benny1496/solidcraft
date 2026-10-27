@@ -808,32 +808,48 @@ fn renaming_a_feature_evaluates_nothing() {
     assert_eq!(failed(&s), failed(&fresh));
 }
 
- 
 /// A feature created after Undo is a new historical object even if its geometry
 /// equals the deleted feature. Its face name must not silently revalidate a
 /// previously saved Drawing annotation; see the W23 replacement-bore test.
 #[test]
 fn undo_then_replacement_hole_gets_fresh_feature_and_face_identity() {
     let mut s = Session::default();
-    run(&mut s, "solid.box", json!({
-        "length": 150, "width": 80, "height": 10, "body_name": "Plate"
-    }));
-    run(&mut s, "solid.hole", json!({
-        "name": "B", "position": [70, 50, 10], "diameter": 8
-    }));
-    run(&mut s, "solid.hole", json!({
-        "name": "A", "position": [30, 20, 10], "diameter": 8
-    }));
+    run(
+        &mut s,
+        "solid.box",
+        json!({
+            "length": 150, "width": 80, "height": 10, "body_name": "Plate"
+        }),
+    );
+    run(
+        &mut s,
+        "solid.hole",
+        json!({
+            "name": "B", "position": [70, 50, 10], "diameter": 8
+        }),
+    );
+    run(
+        &mut s,
+        "solid.hole",
+        json!({
+            "name": "A", "position": [30, 20, 10], "diameter": 8
+        }),
+    );
     let id_a = s.doc.find_feature("A").unwrap().id;
     let first = run(&mut s, "drawing.preview", json!({"body": "Plate"}));
     let original = first["drawing"].clone();
     let face_a = original["geometry"]["cylinder_dimensions"].as_array().unwrap()
         .iter().find(|c| c["center_mm"][0].as_f64() == Some(30.0))
         .unwrap()["eligible_face_name"].as_str().unwrap().to_string();
-    let saved = run(&mut s, "drawing.annotation.add", json!({
-        "body": "Plate", "previous": original,
-        "face_name": face_a, "kind": "diameter", "position_mm": [20, 90]
-    }))["drawing"].clone();
+    let saved = run(
+        &mut s,
+        "drawing.annotation.add",
+        json!({
+            "body": "Plate", "previous": original,
+            "face_name": face_a, "kind": "diameter", "position_mm": [20, 90]
+        }),
+    )["drawing"]
+        .clone();
 
     run(&mut s, "edit.undo", json!({}));
     assert!(s.doc.find_feature("A").is_none(), "Undo removes A");
@@ -847,17 +863,23 @@ fn undo_then_replacement_hole_gets_fresh_feature_and_face_identity() {
     assert_eq!(s.doc.find_feature("A").unwrap().id, id_a);
     run(&mut s, "edit.undo", json!({}));
 
-    run(&mut s, "solid.hole", json!({
-        "name": "ReplacementA", "position": [30, 20, 10], "diameter": 8
-    }));
+    run(
+        &mut s,
+        "solid.hole",
+        json!({
+            "name": "ReplacementA", "position": [30, 20, 10], "diameter": 8
+        }),
+    );
     let id_replacement = s.doc.find_feature("ReplacementA").unwrap().id;
     assert!(id_replacement > id_a, "feature ids are never recycled after Undo");
     let pending = run(&mut s, "drawing.preview", json!({"body": "Plate", "previous": saved}));
     assert_eq!(pending["status"], "stale", "identical geometry must still stale the Drawing");
-    let replacement_face = pending["proposed"]["geometry"]["cylinder_dimensions"]
-        .as_array().unwrap().iter()
-        .find(|c| c["center_mm"][0].as_f64() == Some(30.0))
-        .unwrap()["eligible_face_name"].as_str().unwrap().to_string();
+    let replacement_face =
+        pending["proposed"]["geometry"]["cylinder_dimensions"].as_array().unwrap().iter().find(|c| c["center_mm"][0].as_f64() == Some(30.0)).unwrap()
+            ["eligible_face_name"]
+            .as_str()
+            .unwrap()
+            .to_string();
     assert_ne!(replacement_face, face_a, "new feature must have a new face name");
     let annotation = &pending["proposed"]["annotations"][0];
     assert_eq!(annotation["reference_status"], "missing_reference");
@@ -870,7 +892,6 @@ fn undo_then_replacement_hole_gets_fresh_feature_and_face_identity() {
     assert!(reopened.next_id > id_replacement);
 }
 
-
 /// The future separate Drawing file has its own serialized record, independent
 /// of the design's JSON. This tests the existing engine handoff across a REAL
 /// model-document serialization/reopen, but not the future drawing file format
@@ -879,15 +900,27 @@ fn undo_then_replacement_hole_gets_fresh_feature_and_face_identity() {
 fn external_drawing_payload_survives_model_reopen_and_lost_reference() {
     use solidcraft_doc::Document;
     let mut s = Session::default();
-    run(&mut s, "solid.box", json!({
-        "length": 100, "width": 80, "height": 20, "body_name": "Plate"
-    }));
-    run(&mut s, "solid.hole", json!({
-        "name": "BoreA", "position": [20, 20, 20], "diameter": 10
-    }));
-    run(&mut s, "solid.hole", json!({
-        "name": "BoreB", "position": [60, 50, 20], "diameter": 10
-    }));
+    run(
+        &mut s,
+        "solid.box",
+        json!({
+            "length": 100, "width": 80, "height": 20, "body_name": "Plate"
+        }),
+    );
+    run(
+        &mut s,
+        "solid.hole",
+        json!({
+            "name": "BoreA", "position": [20, 20, 20], "diameter": 10
+        }),
+    );
+    run(
+        &mut s,
+        "solid.hole",
+        json!({
+            "name": "BoreB", "position": [60, 50, 20], "diameter": 10
+        }),
+    );
     let initial = run(&mut s, "drawing.preview", json!({"body": "Plate"}))["drawing"].clone();
     let bores = initial["geometry"]["cylinder_dimensions"].as_array().unwrap();
     let a = bores.iter().find(|b| b["center_mm"][0].as_f64() == Some(20.0)).unwrap();
@@ -895,16 +928,24 @@ fn external_drawing_payload_survives_model_reopen_and_lost_reference() {
     let face_a = a["eligible_face_name"].as_str().unwrap();
     let face_b = b["eligible_face_name"].as_str().unwrap();
     assert_ne!(face_a, face_b, "model features have independent source identities");
-    let first = run(&mut s, "drawing.annotation.add", json!({
-        "body": "Plate", "previous": initial, "face_name": face_a,
-        "kind": "diameter", "position_mm": [20, 95]
-    }));
+    let first = run(
+        &mut s,
+        "drawing.annotation.add",
+        json!({
+            "body": "Plate", "previous": initial, "face_name": face_a,
+            "kind": "diameter", "position_mm": [20, 95]
+        }),
+    );
     let a_id = first["annotation_id"].as_str().unwrap().to_owned();
-    let second = run(&mut s, "drawing.annotation.add", json!({
-        "body": "Plate", "previous": first["drawing"], "face_name": face_a,
-        "second_face_name": face_b, "kind": "center_distance",
-        "position_mm": [72, 103]
-    }));
+    let second = run(
+        &mut s,
+        "drawing.annotation.add",
+        json!({
+            "body": "Plate", "previous": first["drawing"], "face_name": face_a,
+            "second_face_name": face_b, "kind": "center_distance",
+            "position_mm": [72, 103]
+        }),
+    );
     let dist_id = second["annotation_id"].as_str().unwrap().to_owned();
     let original_sheet = second["drawing"].clone();
 
@@ -915,15 +956,23 @@ fn external_drawing_payload_survives_model_reopen_and_lost_reference() {
     let sheet_json = serde_json::to_string(&original_sheet).unwrap();
     let mut reopened = Session::new(Document::from_json(&design_json).unwrap());
     let external_sheet: Value = serde_json::from_str(&sheet_json).unwrap();
-    let current = run(&mut reopened, "drawing.preview", json!({
-        "body": "Plate", "previous": external_sheet
-    }));
+    let current = run(
+        &mut reopened,
+        "drawing.preview",
+        json!({
+            "body": "Plate", "previous": external_sheet
+        }),
+    );
     assert_eq!(current["status"], "current", "same geometry after real model reopen");
 
     run(&mut reopened, "timeline.delete", json!({"feature": "BoreA"}));
-    let pending = run(&mut reopened, "drawing.preview", json!({
-        "body": "Plate", "previous": external_sheet
-    }));
+    let pending = run(
+        &mut reopened,
+        "drawing.preview",
+        json!({
+            "body": "Plate", "previous": external_sheet
+        }),
+    );
     assert_eq!(pending["status"], "stale", "closed sheet is not silently updated");
     assert_eq!(pending["drawing"], original_sheet, "external original is unchanged");
     let notes = pending["proposed"]["annotations"].as_array().unwrap();
@@ -935,17 +984,25 @@ fn external_drawing_payload_survives_model_reopen_and_lost_reference() {
     assert_eq!(lost_pair["reference_status"], "missing_reference");
     assert_eq!(lost_pair["last_value_mm"].as_f64(), Some(50.0));
     assert!(lost_pair["value_mm"].is_null());
-    assert_eq!(pending["proposed"]["label_positions"][a_id.as_str()], json!([20.0,95.0]));
-    assert_eq!(pending["proposed"]["label_positions"][dist_id.as_str()], json!([72.0,103.0]));
+    assert_eq!(pending["proposed"]["label_positions"][a_id.as_str()], json!([20.0, 95.0]));
+    assert_eq!(pending["proposed"]["label_positions"][dist_id.as_str()], json!([72.0, 103.0]));
 
     run(&mut reopened, "edit.undo", json!({}));
-    let restored = run(&mut reopened, "drawing.preview", json!({
-        "body": "Plate", "previous": external_sheet
-    }));
+    let restored = run(
+        &mut reopened,
+        "drawing.preview",
+        json!({
+            "body": "Plate", "previous": external_sheet
+        }),
+    );
     assert_eq!(restored["status"], "current", "Undo restores original source");
     run(&mut reopened, "edit.redo", json!({}));
-    let again = run(&mut reopened, "drawing.preview", json!({
-        "body": "Plate", "previous": external_sheet
-    }));
+    let again = run(
+        &mut reopened,
+        "drawing.preview",
+        json!({
+            "body": "Plate", "previous": external_sheet
+        }),
+    );
     assert_eq!(again["status"], "stale", "Redo invalidates the external drawing again");
 }

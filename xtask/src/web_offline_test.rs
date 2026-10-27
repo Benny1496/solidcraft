@@ -93,10 +93,7 @@ pub fn run_api(site: &str) -> Result<(), String> {
     // are isolated and accumulated in the final failing summary.
     let mut failures: Vec<String> = Vec::new();
     let mut baseline_passed = 0;
-    for (name, script) in [
-        ("api-smoke", API_TEST),
-        ("four-hole-plate", include_str!("browser_plate_test.js")),
-    ] {
+    for (name, script) in [("api-smoke", API_TEST), ("four-hole-plate", include_str!("browser_plate_test.js"))] {
         let started = Instant::now();
         println!("web-api-test {name}: START");
         match cdp.eval(script) {

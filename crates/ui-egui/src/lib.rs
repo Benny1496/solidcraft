@@ -50,12 +50,12 @@ pub mod dim_view;
 mod dimension_create_ui_tests;
 pub mod documents;
 pub mod drag_snap;
+pub mod drawing_ui;
 pub mod edit_clipboard;
 #[cfg(test)]
 mod font_literals_tests;
 pub mod fonts;
 pub mod frame;
-pub mod drawing_ui;
 pub mod frame_rate;
 pub mod gizmo;
 pub mod gpu;
