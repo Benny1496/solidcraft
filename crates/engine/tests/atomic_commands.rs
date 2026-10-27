@@ -26,6 +26,17 @@ fn commands(seed: u64) -> Vec<(String, serde_json::Value)> {
     fuzz::run(seed, 8).steps.into_iter().flat_map(|s| s.commands).collect()
 }
 
+/// Undo/redo restores the full design but must keep the highest allocated ID.
+/// Resetting `next_id` would allow later commands to reuse names and identities.
+fn same_design_without_allocator_reset(actual: &Document, expected: &Document) -> bool {
+    if actual.next_id < expected.next_id {
+        return false;
+    }
+    let mut actual = actual.clone();
+    actual.next_id = expected.next_id;
+    actual == *expected
+}
+
 /// Run the commands. For each failed command, check the design did not change.
 /// Returns the session and a list of contract breaks.
 fn replay(seed: u64, cmds: &[(String, serde_json::Value)]) -> (Session, Vec<String>) {
@@ -58,22 +69,31 @@ fn undo_all_then_redo_all_round_trips() {
     for seed in seeds() {
         let (mut s, _) = replay(seed, &commands(seed));
         let end: Document = (*s.doc).clone();
+        let mut highest_id = end.next_id;
         let mut n = 0;
         while s.execute("edit.undo", &serde_json::Value::Null).is_ok() {
             n += 1;
             assert!(n < 10_000, "seed {seed}: undo never runs out");
+            if s.doc.next_id < highest_id {
+                broken.push(format!("seed {seed}: undo {n} reduced the allocated-ID watermark"));
+            }
+            highest_id = highest_id.max(s.doc.next_id);
         }
-        if *s.doc != empty {
-            broken.push(format!("seed {seed}: after {n} undos the design is not the empty design"));
+        if !same_design_without_allocator_reset(&s.doc, &empty) {
+            broken.push(format!("seed {seed}: after {n} undos the design is not the empty design (apart from the monotonic ID allocator)"));
         }
-        for _ in 0..n {
+        for step in 0..n {
             if let Err(e) = s.execute("edit.redo", &serde_json::Value::Null) {
                 broken.push(format!("seed {seed}: redo failed: {e}"));
                 break;
             }
+            if s.doc.next_id < highest_id {
+                broken.push(format!("seed {seed}: redo {} reduced the allocated-ID watermark", step + 1));
+            }
+            highest_id = highest_id.max(s.doc.next_id);
         }
-        if *s.doc != end {
-            broken.push(format!("seed {seed}: after {n} redos the design is not the design before undo"));
+        if !same_design_without_allocator_reset(&s.doc, &end) {
+            broken.push(format!("seed {seed}: after {n} redos the design is not the design before undo (apart from the monotonic ID allocator)"));
         }
     }
     assert!(broken.is_empty(), "{} contract breaks:\n{}", broken.len(), broken.join("\n"));
