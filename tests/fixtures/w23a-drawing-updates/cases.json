@@ -48,7 +48,8 @@
             95,
             55
           ],
-          "model_value_mm": 10
+          "model_value_mm": 10,
+          "reference_intent": "W20a: circular rim edge, radial diameter dimension"
         },
         {
           "symbolic": "diam_bore2",
@@ -56,7 +57,8 @@
             138,
             74
           ],
-          "model_value_mm": 10
+          "model_value_mm": 10,
+          "reference_intent": "W20a: circular rim edge, radial diameter dimension"
         },
         {
           "symbolic": "centres_1_2",
@@ -64,7 +66,8 @@
             128,
             95
           ],
-          "model_value_mm": 50
+          "model_value_mm": 50,
+          "reference_intent": "R2: Bore1 axis centre to Bore2 axis centre; never W19d corner picks"
         },
         {
           "symbolic": "plate_width",
@@ -72,9 +75,12 @@
             65,
             115
           ],
-          "model_value_mm": 80
+          "model_value_mm": 80,
+          "reference_intent": "R1: opposing planar plate side faces; do not assume corners"
         }
-      ]
+      ],
+      "dimension_text_at_units": "view-relative paper millimetres (offset from actual view centre)",
+      "paper_to_view_text_at_rule": "After placing the real view, compute text.at = authored paper_xy_mm minus the view centre's paper_xy_mm; preserve paper coordinates across model edits and save/reopen."
     }
   },
   "cases": [
@@ -122,34 +128,63 @@
       },
       "drawing_expected": {
         "diam_bore1": {
-          "state": "resolved",
           "model_value_mm": 12,
-          "same_authored_dimension_id": true
+          "same_authored_dimension_id": true,
+          "status": "ok"
         },
         "diam_bore2": {
-          "state": "resolved",
-          "model_value_mm": 10
+          "model_value_mm": 10,
+          "status": "ok"
         },
         "centres_1_2": {
-          "state": "resolved",
-          "model_value_mm": 50
+          "model_value_mm": 50,
+          "status": "ok",
+          "reference_intent": "R2_BORE_AXIS_CENTRES",
+          "must_not_bind_as": "W19d linear corners"
         },
         "plate_width": {
-          "state": "resolved",
-          "model_value_mm": 80
+          "model_value_mm": 80,
+          "status": "ok",
+          "reference_intent": "R1_OPPOSING_PLANAR_FACES"
         },
         "same_manual_label_paper_coordinates": true,
-        "after_deferred_update": "not_current_until_Update"
+        "view_after_deferred_update": "not_current_until_Update",
+        "dimension_inspect_after_source_edit": "immediate_model_read_without_U2"
       },
       "dependencies": [
+        "R1",
         "R2",
         "R3",
         "R5",
         "U2",
-        "W19",
-        "W20"
+        "W19d",
+        "W20a"
       ],
-      "runtime_status": "NOT_RUN"
+      "runtime_status": "NOT_RUN",
+      "early_dimension_inspect": {
+        "runtime_status": "NOT_RUN",
+        "goal": "Bore1 Ø10 -> Ø12 keeps the same authored dimension ID and inspect reads Ø12",
+        "requires": [
+          "W19d",
+          "W20a"
+        ],
+        "does_not_require": [
+          "U2"
+        ],
+        "checks": [
+          "same_actual_dimension_id",
+          "diam_bore1.status == ok",
+          "diam_bore1.model_value_mm == 12",
+          "diam_bore2.status == ok"
+        ],
+        "excludes_until_other_slices": [
+          "R1 plate_width",
+          "R2 centres_1_2",
+          "R5/U2 view publication and deferred update",
+          "view-relative label placement",
+          "save/reopen last_good persistence"
+        ]
+      }
     },
     {
       "id": "W23A-E2E-02",
@@ -188,36 +223,65 @@
       },
       "drawing_expected": {
         "diam_bore1": {
-          "state": "lost reference",
           "historical_last_value_mm": 10,
-          "attached_to_any_other_bore": false
+          "attached_to_any_other_bore": false,
+          "status": "lost"
         },
         "centres_1_2": {
-          "state": "lost reference",
           "historical_last_value_mm": 50,
-          "attached_to_any_other_bore": false
+          "attached_to_any_other_bore": false,
+          "status": "lost",
+          "reference_intent": "R2_BORE_AXIS_CENTRES",
+          "must_not_bind_as": "W19d linear corners"
         },
         "diam_bore2": {
-          "state": "resolved",
           "model_value_mm": 10,
-          "same_original_feature_identity": true
+          "same_original_feature_identity": true,
+          "status": "ok"
         },
         "plate_width": {
-          "state": "resolved",
-          "model_value_mm": 80
+          "model_value_mm": 80,
+          "status": "ok",
+          "reference_intent": "R1_OPPOSING_PLANAR_FACES"
         },
         "same_manual_label_paper_coordinates": true,
-        "no_silent_repair": true
+        "no_silent_repair": true,
+        "dimension_inspect_after_source_edit": "immediate_model_read_without_U2"
       },
       "dependencies": [
+        "R1",
         "R2",
         "R3",
         "R5",
         "U2",
-        "W19",
-        "W20"
+        "W19d",
+        "W20a"
       ],
-      "runtime_status": "NOT_RUN"
+      "runtime_status": "NOT_RUN",
+      "early_dimension_inspect": {
+        "runtime_status": "NOT_RUN",
+        "goal": "Deleting Bore1 makes the original diameter dimension lost, never retargeted to Bore2",
+        "requires": [
+          "W19d",
+          "W20a"
+        ],
+        "does_not_require": [
+          "U2"
+        ],
+        "checks": [
+          "same_actual_dimension_id",
+          "diam_bore1.status == lost",
+          "diam_bore1 never rebinds to Bore2",
+          "diam_bore2.status == ok"
+        ],
+        "excludes_until_other_slices": [
+          "R1 plate_width",
+          "R2 centres_1_2",
+          "R5/U2 view publication and deferred update",
+          "view-relative label placement",
+          "save/reopen last_good persistence"
+        ]
+      }
     },
     {
       "id": "W23A-E2E-03",
@@ -237,7 +301,7 @@
             {
               "state": "86-plate-first-bore-12",
               "diam_bore1_mm": 12,
-              "status": "resolved"
+              "status": "ok"
             },
             {
               "command": "edit.undo",
@@ -245,7 +309,7 @@
               "session": "design",
               "state": "84-plate-two-bores",
               "diam_bore1_mm": 10,
-              "status": "resolved"
+              "status": "ok"
             },
             {
               "command": "edit.redo",
@@ -253,7 +317,7 @@
               "session": "design",
               "state": "86-plate-first-bore-12",
               "diam_bore1_mm": 12,
-              "status": "resolved"
+              "status": "ok"
             }
           ]
         },
@@ -269,7 +333,7 @@
             {
               "state": "87-plate-bore1-deleted",
               "diam_bore1_last_mm": 10,
-              "status": "lost reference"
+              "status": "lost"
             },
             {
               "command": "edit.undo",
@@ -277,7 +341,7 @@
               "session": "design",
               "state": "84-plate-two-bores",
               "diam_bore1_mm": 10,
-              "status": "resolved"
+              "status": "ok"
             },
             {
               "command": "edit.redo",
@@ -285,7 +349,7 @@
               "session": "design",
               "state": "87-plate-bore1-deleted",
               "diam_bore1_last_mm": 10,
-              "status": "lost reference"
+              "status": "lost"
             }
           ]
         }
@@ -297,12 +361,13 @@
         "if_deferred": "source undo and redo each leave drawing out of date until Update; publishing refresh must not add authored undo step"
       },
       "dependencies": [
+        "R1",
         "R2",
         "R3",
         "R5",
         "U2",
-        "W19",
-        "W20"
+        "W19d",
+        "W20a"
       ],
       "runtime_status": "NOT_RUN"
     },
@@ -315,12 +380,12 @@
           "state": "84-plate-two-bores",
           "expect": {
             "diam_bore1": {
-              "state": "resolved",
-              "model_value_mm": 10
+              "model_value_mm": 10,
+              "status": "ok"
             },
             "centres_1_2": {
-              "state": "resolved",
-              "model_value_mm": 50
+              "model_value_mm": 50,
+              "status": "ok"
             }
           }
         },
@@ -336,12 +401,12 @@
           },
           "expect": {
             "diam_bore1": {
-              "state": "resolved",
-              "model_value_mm": 12
+              "model_value_mm": 12,
+              "status": "ok"
             },
             "centres_1_2": {
-              "state": "resolved",
-              "model_value_mm": 50
+              "model_value_mm": 50,
+              "status": "ok"
             }
           }
         },
@@ -356,12 +421,12 @@
           },
           "expect": {
             "diam_bore1": {
-              "state": "lost reference",
-              "historical_last_value_mm": 10
+              "historical_last_value_mm": 10,
+              "status": "lost"
             },
             "centres_1_2": {
-              "state": "lost reference",
-              "historical_last_value_mm": 50
+              "historical_last_value_mm": 50,
+              "status": "lost"
             }
           },
           "notes": "Separate fresh run from 84, not sequentially after state 86."
@@ -377,12 +442,13 @@
         "requires_real_drawing_container_reader_writer": true
       },
       "dependencies": [
+        "R1",
         "R2",
         "R3",
         "R5",
         "U2",
-        "W19",
-        "W20",
+        "W19d",
+        "W20a",
         "K4"
       ],
       "runtime_status": "NOT_RUN"
