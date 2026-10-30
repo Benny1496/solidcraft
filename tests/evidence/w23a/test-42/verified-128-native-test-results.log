@@ -1,0 +1,149 @@
+# Test #42 – verified native results (extracted from the external runner job log)
+#
+# ORIGINAL full GitHub Actions job log (authoritative):
+# https://github.com/Benny1496/ESP32-Victron-SolarSense-Bridge/actions/runs/41134272831
+# Job: 124332720044
+# External runner repository: Benny1496/ESP32-Victron-SolarSense-Bridge
+# Actual checked-out source: Benny1496/solidcraft @ f6dddeccbb29a675a49c4896975c1532d24a4a3b
+# This file is an extracted list of the 128 distinct individual Rust PASS lines.
+# The GitHub job summary prints them twice; duplicates removed, sorted by test name.
+# Not a native Actions execution in the fork, and not the complete 2,306-test library.
+#
+# ORIGINAL job confirmation:
+# TEST42_SUITE_STRUCTURE_OK=128 (32 oracle matrix + 32 targeted + 64 E2E-01/02 dual-view probes)
+# PRODUCTION_SOURCE_UNCHANGED_VS_OFFICIAL_DRAWINGS_BASELINE
+# STATIC CONTRACT PASS: four W23a recipes match source oracle metadata.
+# REAL_ORACLE84_CLI_BASELINE_PASS 156858.92917653147
+# ORACLE85_REFERENCE_PASS
+# NATIVE_W23A_E2E01_02_FORK_PASS=128 FAIL=0
+# test result: ok. 128 passed; 0 failed; 0 ignored; 0 measured; 2178 filtered out; finished in 71.63s
+# Observed unique test cases: 128 (64 preserved baseline + 64 new E2E-01/02 matrix)
+#
+test w23a_t42_integration_tests::w23a_t42_authored_dimension_text_survives_four_width_edits ... ok
+test w23a_t42_integration_tests::w23a_t42_authored_text_edit_does_not_make_unmodified_view_geometry_stale ... ok
+test w23a_t42_integration_tests::w23a_t42_authored_text_record_is_not_undone_by_separate_model_undo ... ok
+test w23a_t42_integration_tests::w23a_t42_bore1_10_to_12_keeps_dimension_id_and_independent_bore2 ... ok
+test w23a_t42_integration_tests::w23a_t42_bore2_last_good_after_width_edits_and_undo ... ok
+test w23a_t42_integration_tests::w23a_t42_deleted_bore1_is_lost_never_bore2_then_undo ... ok
+test w23a_t42_integration_tests::w23a_t42_deleted_bore1_lost_then_undo_then_redo_preserves_authored_text_and_other_hole ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_01_w85_a12_b8_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_02_w85_a12_b8_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_03_w85_a8_b12_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_04_w85_a8_b12_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_05_w85_a14_b6_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_06_w85_a14_b6_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_07_w85_a6_b14_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_08_w85_a6_b14_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_09_w90_a12_b8_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_10_w90_a12_b8_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_11_w90_a8_b12_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_12_w90_a8_b12_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_13_w90_a14_b6_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_14_w90_a14_b6_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_15_w90_a6_b14_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_16_w90_a6_b14_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_17_w95_a12_b8_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_18_w95_a12_b8_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_19_w95_a8_b12_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_20_w95_a8_b12_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_21_w95_a14_b6_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_22_w95_a14_b6_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_23_w95_a6_b14_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_24_w95_a6_b14_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_25_w100_a12_b8_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_26_w100_a12_b8_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_27_w100_a8_b12_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_28_w100_a8_b12_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_29_w100_a14_b6_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_30_w100_a14_b6_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_31_w100_a6_b14_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_32_w100_a6_b14_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_33_w105_a12_b8_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_34_w105_a12_b8_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_35_w105_a8_b12_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_36_w105_a8_b12_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_37_w105_a14_b6_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_38_w105_a14_b6_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_39_w105_a6_b14_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_40_w105_a6_b14_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_41_w110_a12_b8_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_42_w110_a12_b8_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_43_w110_a8_b12_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_44_w110_a8_b12_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_45_w110_a14_b6_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_46_w110_a14_b6_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_47_w110_a6_b14_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_48_w110_a6_b14_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_49_w115_a12_b8_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_50_w115_a12_b8_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_51_w115_a8_b12_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_52_w115_a8_b12_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_53_w115_a14_b6_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_54_w115_a14_b6_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_55_w115_a6_b14_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_56_w115_a6_b14_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_57_w120_a12_b8_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_58_w120_a12_b8_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_59_w120_a8_b12_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_60_w120_a8_b12_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_61_w120_a14_b6_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_62_w120_a14_b6_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_63_w120_a6_b14_del1 ... ok
+test w23a_t42_integration_tests::w23a_t42_e2e_pair_64_w120_a6_b14_del2 ... ok
+test w23a_t42_integration_tests::w23a_t42_equal_volume_swapped_holes_produce_different_two_view_scenes ... ok
+test w23a_t42_integration_tests::w23a_t42_last_good_12_mm_stays_with_lost_dimension_through_delete_undo_redo ... ok
+test w23a_t42_integration_tests::w23a_t42_last_good_replaces_old_12_with_newly_measured_11_before_hole_is_lost ... ok
+test w23a_t42_integration_tests::w23a_t42_last_good_values_stay_separate_across_unrelated_width_edits ... ok
+test w23a_t42_integration_tests::w23a_t42_lost_reference_after_two_model_edits_restored_by_single_undo ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_01_w85_a8_b12 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_02_w85_a12_b8 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_03_w85_a6_b14 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_04_w85_a14_b6 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_05_w95_a8_b14 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_06_w95_a14_b8 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_07_w95_a6_b12 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_08_w95_a12_b6 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_09_w110_a8_b6 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_10_w110_a6_b8 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_11_w110_a12_b14 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_12_w110_a14_b12 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_13_w120_a8_b14 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_14_w120_a14_b8 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_15_w120_a6_b12 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_16_w120_a12_b6 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_17_w90_a6_b8 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_18_w90_a8_b6 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_19_w90_a12_b14 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_20_w90_a14_b12 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_21_w100_a6_b12 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_22_w100_a12_b6 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_23_w100_a8_b14 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_24_w100_a14_b8 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_25_w105_a6_b14 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_26_w105_a14_b6 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_27_w105_a8_b12 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_28_w105_a12_b8 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_29_w115_a6_b8 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_30_w115_a8_b6 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_31_w115_a12_b14 ... ok
+test w23a_t42_integration_tests::w23a_t42_matrix_32_w115_a14_b12 ... ok
+test w23a_t42_integration_tests::w23a_t42_model_change_is_rejected_while_drawing_open_without_mutating_design ... ok
+test w23a_t42_integration_tests::w23a_t42_one_bore_diameter_round_trip_restores_original_two_view_geometry ... ok
+test w23a_t42_integration_tests::w23a_t42_one_design_drawing_record_survives_model_undo_and_redo ... ok
+test w23a_t42_integration_tests::w23a_t42_open_close_open_cycles_keep_one_record_and_dimension_identities ... ok
+test w23a_t42_integration_tests::w23a_t42_oracle85_width_80_to_100_preserves_two_hole_dimensions_and_undo_redo ... ok
+test w23a_t42_integration_tests::w23a_t42_original_oracle84_change_undo_redo_preserves_measure_identity ... ok
+test w23a_t42_integration_tests::w23a_t42_original_oracle84_deleted_bore_rebuilds_lines_and_undo_restores_scene ... ok
+test w23a_t42_integration_tests::w23a_t42_original_oracle84_lines_follow_bore10_to12_when_engine_provider_steps ... ok
+test w23a_t42_integration_tests::w23a_t42_public_drawing_scene_matches_two_views_after_bore_parameter_edit ... ok
+test w23a_t42_integration_tests::w23a_t42_public_drawing_scene_undo_and_redo_return_to_exact_prior_paper_lines ... ok
+test w23a_t42_integration_tests::w23a_t42_public_two_view_delete_undo_redo_stays_lost_without_rebinding ... ok
+test w23a_t42_integration_tests::w23a_t42_repeated_reopen_after_unequal_bore_edits_keeps_scene_and_ids ... ok
+test w23a_t42_integration_tests::w23a_t42_reverse_delete_order_never_attaches_diameter_to_other_hole ... ok
+test w23a_t42_integration_tests::w23a_t42_sequential_width_and_bore_edits_undo_twice_redo_twice_restore_public_views ... ok
+test w23a_t42_integration_tests::w23a_t42_three_model_edits_undo_one_by_one_then_redo_three ... ok
+test w23a_t42_integration_tests::w23a_t42_two_changed_bores_keep_distinct_session_last_good_12_and_8_after_both_are_deleted ... ok
+test w23a_t42_integration_tests::w23a_t42_two_independent_lost_dimensions_undo_in_reverse_order_never_rebind ... ok
+test w23a_t42_integration_tests::w23a_t42_two_view_incremental_updates_match_original_oracle84_after_diameter_edit ... ok
+test w23a_t42_integration_tests::w23a_t42_user_authored_sheet_text_positions_survive_diameter_edit_and_undo_redo ... ok
+test w23a_t42_integration_tests::w23a_t42_width_round_trip_four_changes_restores_original_scene ... ok
