@@ -10,6 +10,17 @@ The source design states are already defined analytically in oracles 84, 86
 and 87 (with 85 retained as a width-change cross-check). Do not duplicate
 those oracle geometry files or their reference-value calculations.
 
+## Runnable engine acceptance subset (31 October 2026)
+
+Following [CamWight's request in #8288](https://github.com/tangency-labs/solidcraft/pull/8288#issuecomment-6541465133), this draft now includes **two Rust engine acceptance tests** in the existing `crates/engine/src/cmd/drawing_dimension_tests.rs`:
+
+- E2E-01: `parameters.change` updates Bore1 from Ø10 to Ø12, preserves its dimension ID, and leaves Bore2 unchanged.
+- E2E-02: `timeline.delete` removes Bore1; its dimension becomes `lost` with a reason, retains its ID, and does not rebind to Bore2.
+
+Both reuse `examples/acceptance/drawing_m2.json` via `Session::run_script`, **owned by draft #9821 (W23-1, stacked on #9254)**. No duplicate model script is introduced. This branch temporarily carries that dependency stack so the checked source compiles together; the upstream dependencies must be reconciled before this PR is merged.
+
+**Verified external native run:** [Test #44](https://github.com/Benny1496/ESP32-Victron-SolarSense-Bridge/actions/runs/41187757318): E2E-01/02 **2 passed, 0 failed**, plus the W23-1 milestone regression **1 passed, 0 failed**, on pinned upstream source `0753096c5856b31f8ec38a4c96ab00e8e4c110f4`. This validates the **engine/dimension-inspection subset only**. The four complete UI/paper E2E acceptance scenarios and U2 automatic redraw remain **NOT RUN**. `cases.json` intentionally retains its recipe-level expectations and pending statuses.
+
 ## Intended user-facing behaviour
 
 On a 100 × 80 × 20 mm workshop plate, `Bore1` at (20,20) and `Bore2`
@@ -53,7 +64,7 @@ The existing `view_after_deferred_update` expectation refers **only to a
 rendered/saved view** awaiting its Update/publication, not to the dimension's
 `inspect` result. The full cases (centre-to-centre, plate width, authored
 label positions and refreshed views) still require their own R1/R2/R3/R5/U2
-slices. All early and full runtime statuses remain **NOT RUN**.
+slices. The two focused E2E-01/02 engine subsets have now passed the external Test #44; all four **complete** drawing/UI acceptance scenarios remain **NOT RUN**.
 
 The `paper_xy_mm` positions in the fixture are **sheet coordinates**.
 The API's dimension-text `text: {at}` uses millimetres **relative to the

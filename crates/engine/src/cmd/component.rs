@@ -4,12 +4,14 @@
 //! share contents, "paste new" copies them) and can be grounded and moved.
 
 use serde_json::{Value, json};
-use solidcraft_doc::{FeatureKind, Mat, Occurrence};
+use solidcraft_doc::bom;
+use solidcraft_doc::metadata::{BOM_QUANTITY, VIRTUAL};
+use solidcraft_doc::{Document, FeatureKind, Mat, Occurrence};
 use solidcraft_geom::Vec3;
 
 use super::CommandSpec;
 use crate::params::{bad, bool_, str_, string_list, vec3};
-use crate::{Result, Session};
+use crate::{EngineError, Result, Session};
 
 #[path = "component_matrix.rs"]
 pub(super) mod matrix;
@@ -27,7 +29,12 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("component.create", "New Component", new_component)
         .at("SOLID", "ASSEMBLE")
         .icon("component")
-        .params("name?, parent?: component id or name (default: the active one); parent_path?: exact parent placement; activate?: bool (default true)"),
+        .params(
+            "name?, parent?: component id or name (default: the active one); parent_path?: exact parent placement; activate?: bool \
+             (default true); bom_quantity?: what one placement means in a bill of materials (component.metadata.set's); \
+             virtual?: true, a component with no geometry (grease, paint, a label): listed in bills of materials with its \
+             quantity, never active (default activate false; true is refused), and nothing can be put in it",
+        ),
     CommandSpec::new("component.from_bodies", "Create Components from Bodies", from_bodies)
         .icon("component")
         .params("bodies: [names] → one new component per body, named after it"),
@@ -38,10 +45,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::new("component.properties", "Component Physical Properties", properties::component)
         .icon("measure").noundo()
-        .params("component?: id or name (default active); descendants?: bool (default true). Measures the first placement, or all placements for root, including pending moves; material-aware mass and center of mass in world coordinates"),
+        .params("component?: id or name (default active); descendants?: bool (default true). Measures the first placement, or all placements for root, including pending moves; material-aware mass and center of mass in world coordinates. A placement inside it that counts as a reference (its occurrence's bom_type, else its component's) adds nothing, nor does anything inside that; the placement measured counts whatever its type"),
     CommandSpec::new("occurrence.properties", "Occurrence Physical Properties", properties::occurrence)
         .icon("measure").noundo()
-        .params("occurrence: id or name; path?: [occurrence ids] (required if nested under multiple instances); descendants?: bool (default true). Physical properties of this placement in world coordinates, including pending moves"),
+        .params("occurrence: id or name; path?: [occurrence ids] (required if nested under multiple instances); descendants?: bool (default true). Physical properties of this placement in world coordinates, including pending moves. A placement inside it that counts as a reference (its occurrence's bom_type, else its component's) adds nothing, nor does anything inside that; this placement counts whatever its type"),
     CommandSpec::new("component.rename", "Rename Component", rename).icon("rename").params("component, name"),
     CommandSpec::new("component.delete", "Delete Component", delete).icon("delete").params("component: deletes it, its subcomponents, occurrences and features"),
     CommandSpec::new("component.unlock", "Unlock Contents", unlock).icon("rigid_group").params(
@@ -73,7 +80,7 @@ fn component(s: &Session, p: &Value, k: &str, cmd: &str) -> Result<u64> {
     s.doc.find_component(&kk).ok_or_else(|| bad(cmd, format!("no component `{kk}`")))
 }
 
-fn occurrence(s: &Session, p: &Value, cmd: &str) -> Result<u64> {
+pub(super) fn occurrence(s: &Session, p: &Value, cmd: &str) -> Result<u64> {
     let kk = key(p.get("occurrence")).ok_or_else(|| bad(cmd, "`occurrence` must be an id or name"))?;
     s.doc.occurrences.iter().find(|o| o.id.to_string() == kk || o.name == kk).map(|o| o.id).ok_or_else(|| bad(cmd, format!("no occurrence `{kk}`")))
 }
@@ -91,6 +98,26 @@ fn move_vector(p: &Value, key: &str, default: Vec3, coordinate: bool, cmd: &str)
         return Err(bad(cmd, format!("{key} exceeds supported numeric range")));
     }
     Ok(v)
+}
+
+fn set_part_property(s: &mut Session, id: u64, key: &str, value: Value) -> Result<()> {
+    if let Some(c) = s.doc_mut().components.iter_mut().find(|c| c.id == id) {
+        c.metadata.set(key, value)?;
+    }
+    Ok(())
+}
+
+/// Refuse a change that puts something into a virtual component (`Document::virtual_holding`),
+/// naming it; one a damaged file already filled is left as it is.
+pub(crate) fn refuse_filled_virtual(before: &Document, after: &Document) -> Result<()> {
+    let held = after.virtual_holding();
+    if held.is_empty() {
+        return Ok(());
+    }
+    let was = before.virtual_holding();
+    let Some(id) = held.into_iter().find(|id| !was.contains(id)) else { return Ok(()) };
+    let name = after.components.iter().find(|c| c.id == id).map_or("", |c| c.name.as_str());
+    Err(EngineError::Other(format!("`{name}` is a virtual component: it can't hold bodies, sketches or components")))
 }
 
 pub(super) fn valid_position(m: &Mat) -> bool {
@@ -129,8 +156,21 @@ pub(super) fn new_component(s: &mut Session, p: &Value) -> Result<Value> {
     if parent_path.len() >= 64 {
         return Err(bad(cmd, "new component exceeds occurrence depth limit"));
     }
+    let made_virtual = p.get("virtual").and_then(Value::as_bool) == Some(true);
+    let activate = p.get("activate").and_then(Value::as_bool);
+    if made_virtual && activate == Some(true) {
+        return Err(bad(cmd, "a virtual component can't be the active component"));
+    }
     let id = s.doc_mut().add_component(str_(p, "name"), parent)?;
-    if p.get("activate").and_then(Value::as_bool).unwrap_or(true) {
+    if let Some(text) = p.get(BOM_QUANTITY).filter(|q| !q.is_null()) {
+        let text = text.as_str().ok_or_else(|| bad(cmd, format!("`{BOM_QUANTITY}` is an expression, as text")))?;
+        bom::amount(&s.doc, text).map_err(|e| bad(cmd, format!("`{BOM_QUANTITY}`: {e}")))?;
+        set_part_property(s, id, BOM_QUANTITY, json!(text))?;
+    }
+    if made_virtual {
+        set_part_property(s, id, VIRTUAL, json!(true))?;
+    }
+    if activate.unwrap_or(!made_virtual) {
         let mut path = parent_path;
         if let Some(o) = s.doc.occurrence_of(id) {
             path.push(o.id);
@@ -149,6 +189,9 @@ fn from_bodies(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn activate(s: &mut Session, p: &Value) -> Result<Value> {
     let id = component(s, p, "component", "component.activate")?;
+    if s.doc.components.iter().any(|c| c.id == id && c.metadata.is_virtual()) {
+        return Err(bad("component.activate", "a virtual component can't be the active component: it holds no geometry"));
+    }
     let path = if p.get("path").is_some() || p.get("occurrence").is_some() {
         let occurrence = occurrence(s, p, "component.activate")?;
         let path = occurrence_path(s, p, occurrence, "component.activate")?;
@@ -177,6 +220,9 @@ fn list(s: &mut Session, p: &Value) -> Result<Value> {
             return json!(o);
         }
         let mut v = json!({"id": o.id, "name": o.name, "parent": o.parent, "grounded": o.grounded});
+        if let Some(t) = o.bom_type {
+            v["bom_type"] = json!(t);
+        }
         if o.transform.iter().flatten().zip(solidcraft_doc::IDENTITY.iter().flatten()).any(|(a, b)| (a - b).abs() > 1e-12) {
             v["transform"] = json!(o.transform);
         }
@@ -372,13 +418,18 @@ fn paste_new(s: &mut Session, p: &Value) -> Result<Value> {
     super::component_clone::paste(s, comp, occ, transform, parent, p)
 }
 
+/// An occurrence path as a command takes it: 1 to 64 occurrence ids.
+pub(crate) fn path_ids(value: &Value) -> std::result::Result<Vec<u64>, &'static str> {
+    value
+        .as_array()
+        .filter(|a| !a.is_empty() && a.len() <= solidcraft_doc::MAX_PLACEMENT_DEPTH)
+        .and_then(|a| a.iter().map(Value::as_u64).collect::<Option<Vec<_>>>())
+        .ok_or("`path` must list 1..64 occurrence ids")
+}
+
 pub(super) fn occurrence_path(s: &Session, p: &Value, id: u64, cmd: &str) -> Result<Vec<u64>> {
     let path = if let Some(value) = p.get("path") {
-        value
-            .as_array()
-            .filter(|a| !a.is_empty() && a.len() <= 64)
-            .and_then(|a| a.iter().map(Value::as_u64).collect::<Option<Vec<_>>>())
-            .ok_or_else(|| bad(cmd, "`path` must list 1..64 occurrence ids"))?
+        path_ids(value).map_err(|e| bad(cmd, e))?
     } else {
         let o = s.doc.occurrences.iter().find(|o| o.id == id).ok_or_else(|| bad(cmd, "no occurrence"))?;
         let mut path = s.doc.first_path(o.parent);

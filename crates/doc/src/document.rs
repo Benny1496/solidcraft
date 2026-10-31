@@ -415,12 +415,7 @@ impl EmbossFace {
 
     /// Resolve this exact placement without expanding every assembly instance.
     pub fn body_frame(&self, doc: &Document, body: &crate::ModelBody) -> Result<crate::Mat> {
-        let owner = doc.model_body_component(body);
-        let mut frame = Self::component_frame(doc, owner, &self.path)?;
-        if let Some(offset) = doc.model_body_offset(body) {
-            frame = crate::mat_mul(&frame, offset);
-        }
-        Ok(frame)
+        doc.body_frame_at(body, &self.path)
     }
 
     /// Resolve one saved component path without expanding other occurrences.
@@ -2486,6 +2481,12 @@ pub struct Document {
     /// a document in a session leaves this empty; the session puts it back when it saves.
     #[serde(default, skip_serializing_if = "Visibility::is_empty")]
     pub visibility: Visibility,
+    /// The design's drawings (#3890), by name, then id ([`crate::drawing::in_design`]), each behind
+    /// its own `Arc`, so an undo step shares every drawing it didn't change. Each is read by its own
+    /// family's rules ([`crate::format::read`]), never as a field of the design; a container keeps
+    /// each in its own entry.
+    #[serde(skip_deserializing, skip_serializing_if = "Vec::is_empty")]
+    pub drawings: Vec<std::sync::Arc<crate::drawing::Drawing>>,
 }
 
 /// Items hidden or shown one by one. Saved with the design, but not an undo step.
@@ -2686,6 +2687,7 @@ impl Document {
             browser_order: Default::default(),
             named_views: Vec::new(),
             visibility: Visibility::default(),
+            drawings: Vec::new(),
         }
     }
 
@@ -2798,21 +2800,56 @@ impl Document {
         *self == normalized
     }
 
-    /// Only components' part properties (metadata and free properties) changed: nothing to
-    /// evaluate. The same whole-Document proof as [`Document::differs_only_in_render`].
+    /// Only part properties changed (components' metadata and free properties, occurrences'
+    /// bill of materials types, saved item numbers): nothing to evaluate. The same whole-Document
+    /// proof as [`Document::differs_only_in_render`].
     pub fn differs_only_in_part_properties(&self, previous: &Document) -> bool {
         if self.components.len() != previous.components.len()
             || self.components.iter().zip(&previous.components).any(|(a, b)| a.id != b.id)
-            || self.components == previous.components
+            || self.occurrences.len() != previous.occurrences.len()
+            || self.occurrences.iter().zip(&previous.occurrences).any(|(a, b)| a.id != b.id)
+            || (self.components == previous.components
+                && self.occurrences == previous.occurrences
+                && self.assembly.item_numbers == previous.assembly.item_numbers)
         {
             return false;
         }
         let mut normalized = previous.clone();
+        normalized.assembly.item_numbers.clone_from(&self.assembly.item_numbers);
         for (n, c) in normalized.components.iter_mut().zip(&self.components) {
             n.metadata = c.metadata.clone();
             n.properties = c.properties.clone();
         }
+        for (n, o) in normalized.occurrences.iter_mut().zip(&self.occurrences) {
+            n.bom_type = o.bom_type;
+        }
         *self == normalized
+    }
+
+    /// Only drawings changed: nothing to evaluate, as a drawing reads the model and never changes
+    /// it. The same whole-Document proof as [`Document::differs_only_in_render`]; a model edit
+    /// shares every drawing's `Arc`, so it costs nothing here.
+    pub fn differs_only_in_drawings(&self, previous: &Document) -> bool {
+        let shared =
+            self.drawings.len() == previous.drawings.len() && self.drawings.iter().zip(&previous.drawings).all(|(a, b)| std::sync::Arc::ptr_eq(a, b));
+        if shared || self.drawings == previous.drawings {
+            return false;
+        }
+        let mut normalized = previous.clone();
+        normalized.drawings = self.drawings.clone();
+        *self == normalized
+    }
+
+    /// The design's drawing `id`.
+    pub fn drawing(&self, id: u64) -> Option<&std::sync::Arc<crate::drawing::Drawing>> {
+        self.drawings.iter().find(|d| d.id == id)
+    }
+
+    /// Put `drawing` in, in place of the one with its id if there is one, in the drawings' order.
+    pub fn put_drawing(&mut self, drawing: std::sync::Arc<crate::drawing::Drawing>) {
+        self.drawings.retain(|d| d.id != drawing.id);
+        self.drawings.push(drawing);
+        crate::drawing::sort(&mut self.drawings);
     }
 
     /// The colour a body is shown and exported in (sRGB as 0–1 fractions): its appearance,
@@ -2842,9 +2879,21 @@ impl Document {
         st
     }
 
-    /// Density of a body's material (g/cm³).
+    /// The material a body's mass is computed with, as the library or this design spells it:
+    /// its assigned material when that is known and has a usable density, else
+    /// [`DEFAULT_MATERIAL`]. The assignment as stored (`materials`) is left as it is.
+    pub fn body_material(&self, body: &str) -> String {
+        self.materials
+            .get(body)
+            .and_then(|m| self.material_name(m))
+            .filter(|m| self.material_density(m).is_some())
+            .unwrap_or_else(|| DEFAULT_MATERIAL.into())
+    }
+
+    /// Density of a body's material (g/cm³): its [`Document::body_material`]'s, so the name a
+    /// body reads and the mass it has never disagree.
     pub fn density(&self, body: &str) -> f64 {
-        self.materials.get(body).and_then(|m| self.material_density(m)).unwrap_or(DEFAULT_DENSITY)
+        self.material_density(&self.body_material(body)).unwrap_or(DEFAULT_DENSITY)
     }
 
     /// A material defined in this design, by name (case-insensitive).
@@ -2905,34 +2954,53 @@ impl Document {
     }
 
     pub fn legacy_body_component(&self, body: &str, feature: u64) -> u64 {
-        self.body_components.get(body).copied().unwrap_or_else(|| self.feature(feature).map(|f| f.component).unwrap_or(0))
+        self.legacy_body_component_with(body, feature, |f| self.feature(f).map(|f| f.component))
     }
 
     /// Ownership in this evaluated timeline state, rather than a later transfer.
     pub fn model_body_component(&self, body: &crate::ModelBody) -> u64 {
-        if body.transferred || body.source_name.is_some() { body.component } else { self.legacy_body_component(&body.name, body.feature) }
+        self.model_body_component_with(body, |f| self.feature(f).map(|f| f.component))
     }
 
-    /// The components that own a body in `state` ([`Document::model_body_component`] of each),
-    /// in one pass: the timeline is looked up once, not once per body.
-    pub fn body_owners(&self, state: &crate::ModelState) -> std::collections::HashSet<u64> {
+    /// The component that owns each body in `state`, in its order ([`Document::model_body_component`]
+    /// of each), in one pass: the timeline is looked up once, not once per body.
+    pub fn body_owners(&self, state: &crate::ModelState) -> Vec<u64> {
         let features: std::collections::HashMap<u64, u64> = self.features.iter().rev().map(|f| (f.id, f.component)).collect();
-        state
-            .bodies
-            .iter()
-            .map(|b| {
-                if b.transferred || b.source_name.is_some() {
-                    b.component
-                } else {
-                    self.body_components.get(&b.name).copied().unwrap_or_else(|| features.get(&b.feature).copied().unwrap_or(0))
-                }
-            })
-            .collect()
+        state.bodies.iter().map(|b| self.model_body_component_with(b, |f| features.get(&f).copied())).collect()
+    }
+
+    /// [`Document::model_body_component`]'s rule, written once: a body the evaluation transferred,
+    /// or placed from a source, keeps the component it was given; any other is
+    /// [`Document::legacy_body_component`]'s. `feature_component` finds a feature's component:
+    /// the timeline for one body, a map built once for many ([`Document::body_owners`]).
+    fn model_body_component_with(&self, body: &crate::ModelBody, feature_component: impl FnOnce(u64) -> Option<u64>) -> u64 {
+        if body.transferred || body.source_name.is_some() {
+            body.component
+        } else {
+            self.legacy_body_component_with(&body.name, body.feature, feature_component)
+        }
+    }
+
+    /// [`Document::legacy_body_component`]'s rule, written once: the component the body was moved
+    /// to, else its feature's, else the root.
+    fn legacy_body_component_with(&self, body: &str, feature: u64, feature_component: impl FnOnce(u64) -> Option<u64>) -> u64 {
+        self.body_components.get(body).copied().unwrap_or_else(|| feature_component(feature).unwrap_or(0))
     }
 
     /// Recorded transfers already converted geometry into the new local frame.
     pub fn model_body_offset(&self, body: &crate::ModelBody) -> Option<&crate::Mat> {
         if body.transferred { None } else { self.body_offsets.get(&body.name) }
+    }
+
+    /// The frame `body`'s geometry is in, placed through the occurrence path `path` (empty: its
+    /// component's own placement): the placement, then the body's offset. One placement, without
+    /// expanding every assembly instance.
+    pub fn body_frame_at(&self, body: &crate::ModelBody, path: &[u64]) -> Result<crate::Mat> {
+        let mut frame = EmbossFace::component_frame(self, self.model_body_component(body), path)?;
+        if let Some(offset) = self.model_body_offset(body) {
+            frame = crate::mat_mul(&frame, offset);
+        }
+        Ok(frame)
     }
 
     /// Add a component under `parent` and return its id.
@@ -3558,10 +3626,10 @@ impl Document {
     }
 }
 
-/// Density of the default material (g/cm³), as the default.
+/// The built-in material library: (name, density), and each material's colour.
 #[path = "../../../assets/materials/library.rs"]
 mod materials;
-pub use materials::{DEFAULT_DENSITY, MATERIALS, material_color};
+pub use materials::{DEFAULT_DENSITY, DEFAULT_MATERIAL, MATERIALS, material_color};
 
 /// A physical material defined in a design (`material.create`): its name, its density and,
 /// optionally, the look it gives bodies without an appearance of their own.

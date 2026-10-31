@@ -1,0 +1,773 @@
+//! `drawing.view.snapshot` (W07, #5866): one orthographic view of the design, worked out and
+//! returned without saving anything. It reads the evaluated model and changes nothing.
+//!
+//! `drawing.view.inspect` and `drawing.view.edit` (W17c, #4816) read and change a saved view of a
+//! drawing: each setting with where its value comes from ([`solidcraft_doc::drawing::Drawing::resolve_view`])
+//! and where the view sits on its sheet ([`crate::drawing_view::on_sheet`]), and a change as one
+//! undo step that evaluates no model.
+//!
+//! `drawing.view.move_to_sheet` and `drawing.view.copy_to_sheet` (#4816) put a saved view on a
+//! sheet: the views lined up with it go with it, and keep their places beside it. A copy is
+//! independent of the views it was copied from (Cameron, 2026-10-26). Each lists the views it puts
+//! outside the sheet's drawing space and moves none back in (#3875 S5).
+//!
+//! `drawing.view.base` and `drawing.view.projected` (#4816) make a saved view: a base view of the
+//! drawing's design on a sheet, or a view projected from another, lined up with it a gap past its
+//! boundary unless placed. Each is one undo step, refused whole by the record's rules, and lists
+//! itself when it lies outside the sheet's drawing space.
+//!
+//! The view's settings are `doc::drawing_view::ViewSettings`; its basis, scale and map onto
+//! paper are `geom::drawing_view`'s. Without a scale it takes the largest ISO 5455 scale at
+//! which the view, centred where it goes, lies inside the sheet's drawing border.
+
+use std::sync::Arc;
+
+use serde::Serialize;
+use serde_json::Value;
+use solidcraft_doc::drawing::Drawing;
+use solidcraft_doc::drawing::balloon::Balloon;
+use solidcraft_doc::drawing::dimension::Dimension;
+use solidcraft_doc::drawing::view::{ResolvedView, SetBy, Setting, View, ViewKind, ViewPlace};
+use solidcraft_doc::drawing_view::{Looking, TangentEdges, ViewDirection, ViewOverrides};
+use solidcraft_doc::ids;
+use solidcraft_geom::Plane;
+use solidcraft_geom::drawing_sheet::{DrawingBorderProfile, Sheet};
+use solidcraft_geom::drawing_view::{NamedView, PRESETS, ProjectedSide, Scale};
+use solidcraft_geom::hlr::{Source, Visibility};
+use solidcraft_geom::paper::MAX_COORDINATE_MM;
+use solidcraft_geom::section::CurveAccuracy;
+use solidcraft_geom::{Aabb2, Vec2};
+use solidcraft_render::VisualStyle;
+
+use super::CommandSpec;
+use crate::drawing_view::{CHORD_RANGE, Extents, Lines, MAX_PATH_IDS, MAX_PATHS, OnSheet, ShownSet, Unmeasured};
+use crate::params::bad;
+use crate::schema::drawing_view::{
+    AccuracyResult, BaseParams, BoxResult, ChoicesResult, CopyParams, CreateResult, DPI_RANGE, EditParams, EditResult, ExtentsResult, FromResult,
+    InspectParams, InspectResult, LineResult, LineSourceResult, LinesStatusResult, MoveParams, OutsideResult, PathSegResult, PieceResult, PlaceParam,
+    ProjectedParams, ScaleResult, SceneResult, SettingResult, SettingsResult, SnapshotParams, SnapshotResult, SourceResult, ToSheetResult,
+    ViewResult, ViewSet,
+};
+use crate::schema::{TypedContract, output_schema_for};
+use crate::{Result, Session};
+
+const CMD: &str = "drawing.view.snapshot";
+const CONTRACT: TypedContract<SnapshotParams> = TypedContract::new();
+const INSPECT: &str = "drawing.view.inspect";
+const INSPECT_CONTRACT: TypedContract<InspectParams> = TypedContract::new();
+const EDIT: &str = "drawing.view.edit";
+const EDIT_CONTRACT: TypedContract<EditParams> = TypedContract::new();
+const MOVE: &str = "drawing.view.move_to_sheet";
+const MOVE_CONTRACT: TypedContract<MoveParams> = TypedContract::new();
+const COPY: &str = "drawing.view.copy_to_sheet";
+const COPY_CONTRACT: TypedContract<CopyParams> = TypedContract::new();
+const BASE: &str = "drawing.view.base";
+const BASE_CONTRACT: TypedContract<BaseParams> = TypedContract::new();
+const PROJECTED: &str = "drawing.view.projected";
+const PROJECTED_CONTRACT: TypedContract<ProjectedParams> = TypedContract::new();
+
+/// How far a new projected view's boundary is from its parent's, in paper millimetres, until a
+/// drawing style gives it.
+const DEFAULT_GAP_MM: f64 = 20.0;
+
+pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new(CMD, "Drawing View Snapshot", crate::checked!("drawing.view.snapshot", CONTRACT, snapshot))
+    .icon("export")
+    .noundo()
+    .contract(&CONTRACT)
+    .output(output_schema_for::<SnapshotResult>)
+    .params("view?: front (default), back, top, bottom, left, right, iso (= iso_front_right), iso_front_left, iso_back_right, iso_back_left, or {direction, up, origin?}; scale?: \"paper:model\" such as \"1:2\" (default: the largest ISO 5455 scale that fits the sheet's drawing area); position_mm?: [x, y] for the view's centre on the sheet (default the sheet's centre); sheet?: {size: {standard: a3} or {custom: {sides_mm: [w, h]}}, orientation?: landscape|portrait, dpi?: 25..2400} (default A3 landscape, 300 dpi); display_style?, reference_style?: visible (default) or visible_hidden (the shaded styles aren't supported yet); reference_hides_model?: false; reference_margin_mm?: 0..100000 model mm on every side; tangent_edges?: hide (default) or show; chord_mm?: 0.001..1 paper mm the lines are sampled at (default 0.01); max_error_mm?: the accuracy the lines must certify on paper (refused while they come from the mesh); scene?: true adds the lines as a paper scene of the sheet (visible lines only for now); source?: {occurrences: [[ids…]]}, the occurrence subtrees drawn ([] the design's own bodies; default every body); hide?: [[ids…]], subtrees left out; at most 1000 paths in each and 4096 ids in all. Every body the design places, whatever the browser shows. Returns {view, scale: {text, factor, fitted}, position_mm, sheet, extents (model mm on the view's plane), boundary_mm (on the sheet), lines: [{occurrence, body, reference, source: {kind: edge, edge, tangent} or {kind: silhouette, face}, pieces: [{visibility, path: [paper mm lines, and arcs for circles facing the view], accuracy}]}], status: {lines: approximate, provenance: mesh_projection, chord_mm, model_chord_mm, uncertain_pieces, covered_pieces}, stats, scene (with scene: true: {size_mm, groups: [{object: 0, kind: view, items: [{kind: stroke, path, closed, width_mm}]}]}), source}. Read-only: saves nothing."),
+    CommandSpec::new(INSPECT, "Inspect Drawing View", crate::checked!("drawing.view.inspect", INSPECT_CONTRACT, inspect))
+        .icon("inspect")
+        .in_drawing()
+        .noundo()
+        .doc_only()
+        .contract(&INSPECT_CONTRACT)
+        .output(output_schema_for::<InspectResult>)
+        .params("view: a saved view's id → {view, sheet, kind: base|projected, source, parent?, side?, direction, place: {at: [x, y]} or {aligned: n}, settings: {scale, display_style, reference_style, reference_hides_model, tangent_edges: {value, from: this|parent|default, parent?, set}}, reference_margin_mm, boundary_mm: {min, max} on the sheet (a 20 x 20 mm placeholder round the view's centre when there's nothing to measure), extents: {min, max, error_mm, status: approximate|placeholder, provenance} in model mm on the view's plane, linked? (a projected view's display settings: true, false or \"partly\"), dimensions: [its dimensions' ids, in id order], balloons: [its balloons' ids, in id order], choices: {display_style, scale}}. Read-only; no model is evaluated."),
+    CommandSpec::new(EDIT, "Edit Drawing View", crate::checked!("drawing.view.edit", EDIT_CONTRACT, edit))
+        .icon("edit")
+        .in_drawing()
+        .doc_only()
+        .contract(&EDIT_CONTRACT)
+        .output(output_schema_for::<EditResult>)
+        .params("view: a saved view's id; set: {scale?, display_style?, reference_style?, reference_hides_model?, tangent_edges?: each a value, or null to follow the parent (a base view keeps a scale); reference_margin_mm?; view?: a base view's direction; place?: {at: [x, y]} or {aligned: n}; linked?: a projected view's display settings all following its parent (true) or all its own, as they are now (false)} → {view, changed: [fields], followers: [the views projected from it whose settings changed with it]}. One undo step; no model is evaluated."),
+    CommandSpec::new(MOVE, "Move View to Sheet", crate::checked!("drawing.view.move_to_sheet", MOVE_CONTRACT, move_to_sheet))
+        .icon("move")
+        .in_drawing()
+        .doc_only()
+        .contract(&MOVE_CONTRACT)
+        .output(output_schema_for::<ToSheetResult>)
+        .params("view: a saved view's id; sheet: id or name; position_mm?: [x, y] for its centre (default: where it is, or the sheet's centre for a view lined up with its parent); break_alignment?: true to move a view lined up with its parent, which is then placed apart → {view, sheet, views: [it, then the views lined up with it, which go with it], outside?: [those whose boundary leaves the sheet's drawing space, none moved back in]}. One undo step, none for the sheet it is on."),
+    CommandSpec::new(COPY, "Copy View to Sheet", crate::checked!("drawing.view.copy_to_sheet", COPY_CONTRACT, copy_to_sheet))
+        .icon("copy")
+        .in_drawing()
+        .doc_only()
+        .contract(&COPY_CONTRACT)
+        .output(output_schema_for::<ToSheetResult>)
+        .params("view: a saved view's id; sheet: id or name; position_mm?: [x, y] for the copy's centre (default the sheet's centre); with_linked?: the views lined up with it copied too, lined up with the copy (true), or not (false); needed when it has any → {view: the copy, sheet, views: [the copies, its first], outside?: [those whose boundary leaves the sheet's drawing space]}. A copy follows none of the views it was copied from: a projected view copied alone becomes a base view, looking the way it did, with the settings it had. Each view's dimensions and balloons are copied with it, with ids of their own. One undo step."),
+    CommandSpec::new(BASE, "Base View", crate::checked!("drawing.view.base", BASE_CONTRACT, base))
+        .icon("new")
+        .in_drawing()
+        .doc_only()
+        .contract(&BASE_CONTRACT)
+        .output(output_schema_for::<CreateResult>)
+        .params("sheet: id or name; view?: as drawing.view.snapshot's (front by default); scale?: \"paper:model\" (default: the largest ISO 5455 preset at which it lies inside the sheet's drawing space, centred where it goes, or 1:1 with nothing to measure; saved either way); position_mm?: [x, y] for its centre (default the sheet's centre); display_style?, reference_style?, reference_hides_model?, reference_margin_mm?, tangent_edges?: settings it sets itself (each left out follows the default) → {view, sheet, scale: {text, factor, fitted}, boundary_mm, outside?: [it, when its boundary leaves the sheet's drawing space]}. A view of the drawing's design. One undo step; no model is evaluated."),
+    CommandSpec::new(PROJECTED, "Projected View", crate::checked!("drawing.view.projected", PROJECTED_CONTRACT, projected))
+        .icon("new")
+        .in_drawing()
+        .doc_only()
+        .contract(&PROJECTED_CONTRACT)
+        .output(output_schema_for::<CreateResult>)
+        .params("parent: a saved view's id; side: left, right, above or below, where it sits (the drawing's projection says which side of the model it shows); place?: {at: [x, y]} or {aligned: n} (default: lined up with its parent, its boundary 20 mm past the parent's) → {view, sheet: its parent's, scale: its parent's, boundary_mm, outside?}. Its scale and display settings follow its parent; drawing.view.edit sets its own. One undo step; no model is evaluated."),
+];
+
+fn snapshot(s: &mut Session, p: &Value) -> Result<Value> {
+    let request: SnapshotParams = crate::schema::read(CMD, p)?;
+    let settings = request.settings();
+    let basis = settings.validate().map_err(|e| bad(CMD, e.to_string()))?;
+    if let Some(why) = crate::drawing_view::not_drawable(settings.display_style, settings.reference_style, request.scene) {
+        return Err(bad(CMD, why));
+    }
+    if !(request.sheet.dpi.is_finite() && DPI_RANGE.contains(&request.sheet.dpi)) {
+        return Err(bad(CMD, format!("sheet.dpi is a number from {} to {}", DPI_RANGE.start(), DPI_RANGE.end())));
+    }
+    let chord_mm = request.chord_mm.0;
+    if !(chord_mm.is_finite() && CHORD_RANGE.contains(&chord_mm)) {
+        return Err(bad(CMD, format!("chord_mm is a number from {} to {} (paper mm)", CHORD_RANGE.start(), CHORD_RANGE.end())));
+    }
+    if request.max_error_mm.is_some_and(|e| !(e.is_finite() && e > 0.0)) {
+        return Err(bad(CMD, "max_error_mm is a number above 0 (paper mm)"));
+    }
+    let sheet = Sheet { size: request.sheet.size, orientation: request.sheet.orientation };
+    let paper = sheet.size_mm().map_err(|e| bad(CMD, e.to_string()))?;
+    let border = DrawingBorderProfile::iso().layout(&sheet).map_err(|e| bad(CMD, e.to_string()))?.drawing_border;
+
+    let source = request.source.as_ref().map(|chosen| chosen.occurrences.as_slice());
+    check_paths(s, source, &request.hide)?;
+    let set = crate::drawing_view::shown(s).map_err(|why| bad(CMD, why.to_string()))?.keep(source, &request.hide);
+    if set.bodies.is_empty() {
+        return Err(bad(CMD, "the source and hide leave no bodies to draw"));
+    }
+    let extents = crate::drawing_view::measure(&set, &basis).map_err(|why| bad(CMD, why.to_string()))?;
+    let shown = extents.model.inflated(settings.reference_margin_mm);
+    let position = request.position_mm.map_or(paper * 0.5, |p| p.0);
+    let (scale, fitted) = match settings.scale {
+        Some(scale) => (scale, false),
+        None => (fit(shown.size(), position, border, CMD)?, true),
+    };
+    let frame = crate::drawing_view::frame(basis, scale, &shown, position, CMD)?;
+    let boundary = frame.boundary(&shown).map_err(|e| bad(CMD, e.to_string()))?;
+    let on_paper = [boundary.min, boundary.max].iter().all(|c| c.is_finite() && c.x.abs() <= MAX_COORDINATE_MM && c.y.abs() <= MAX_COORDINATE_MM);
+    if !on_paper {
+        return Err(bad(CMD, format!("at scale {scale} the view reaches past ±{MAX_COORDINATE_MM} mm on paper: choose a smaller scale")));
+    }
+    let hidden = settings.display_style == VisualStyle::VisibleHidden;
+    let drawn = crate::drawing_view::lines(s, &set, &frame, hidden, settings.tangent_edges == TangentEdges::Show, chord_mm, CMD)?;
+    if let Some(max) = request.max_error_mm {
+        certify(&drawn, max, scale)?;
+    }
+    let scene = if request.scene {
+        let scene = solidcraft_geom::paper::Scene { size_mm: paper, groups: vec![crate::drawing_view::paper_group(&drawn, 0)] };
+        scene.validate().map_err(|e| bad(CMD, format!("{e}: raise chord_mm, or choose a smaller view")))?;
+        Some(SceneResult(scene))
+    } else {
+        None
+    };
+
+    let named = match settings.view {
+        ViewDirection::Named(view) => Some(snake_name(view)),
+        ViewDirection::Looking(_) => None,
+    };
+    let reply = SnapshotResult {
+        view: ViewResult {
+            named,
+            // The line of sight, -(x × y), written so no component reads -0.
+            direction: basis.y.cross(basis.x).into(),
+            x: basis.x.into(),
+            y: basis.y.into(),
+            origin: basis.origin.into(),
+        },
+        scale: ScaleResult { text: scale.to_string(), factor: scale.factor(), fitted },
+        position_mm: position.into(),
+        sheet: request.sheet,
+        display_style: snake_name(settings.display_style),
+        reference_style: snake_name(settings.reference_style),
+        extents: extents_result(&extents, None),
+        boundary_mm: BoxResult { min: boundary.min.into(), max: boundary.max.into() },
+        lines: line_results(&set, &drawn),
+        status: LinesStatusResult {
+            lines: "approximate",
+            provenance: "mesh_projection",
+            chord_mm,
+            model_chord_mm: drawn.model_chord_mm,
+            uncertain_pieces: 0,
+            covered_pieces: drawn.covered,
+        },
+        stats: drawn.stats.into(),
+        scene,
+        source: SourceResult { bodies: extents.bodies, timeline_at_end: s.doc.marker.is_none() },
+        param_warnings: Vec::new(),
+    };
+    serde_json::to_value(reply).map_err(|e| crate::EngineError::Other(e.to_string()))
+}
+
+/// `source` and `hide` checked: at most [`MAX_PATHS`] paths in each and [`MAX_PATH_IDS`] ids in all,
+/// each a path `occurrence_placement` takes, with `[]` (the design's own bodies) in `source` only.
+fn check_paths(s: &Session, source: Option<&[Vec<u64>]>, hide: &[Vec<u64>]) -> Result<()> {
+    let lists = [("source.occurrences", source.unwrap_or_default()), ("hide", hide)];
+    let ids: usize = lists.iter().flat_map(|(_, paths)| paths.iter()).map(Vec::len).sum();
+    if lists.iter().any(|(_, paths)| paths.len() > MAX_PATHS) || ids > MAX_PATH_IDS {
+        return Err(bad(CMD, format!("at most {MAX_PATHS} occurrence paths in source.occurrences and in hide, and {MAX_PATH_IDS} ids in all")));
+    }
+    for (name, paths) in lists {
+        for path in paths {
+            if path.is_empty() && name == "hide" {
+                return Err(bad(CMD, "hide [] would leave out the design's own bodies: give source instead"));
+            }
+            if !path.is_empty() {
+                s.occurrence_placement(path).map_err(|e| bad(CMD, format!("{name} path {path:?}: {e}")))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refused unless every piece of `drawn` certifies `max` paper mm at `scale` (the accuracy rule on
+/// #5866): an analytic piece meets any, a bounded one its bound, a sampled one none.
+fn certify(drawn: &Lines, max: f64, scale: Scale) -> Result<()> {
+    let (mut bounded, mut sampled) = (0usize, 0usize);
+    for piece in drawn.lines.iter().flat_map(|l| &l.pieces) {
+        match piece.accuracy {
+            CurveAccuracy::Analytic => {}
+            CurveAccuracy::Bounded { max_deviation_mm } if max_deviation_mm <= max => {}
+            CurveAccuracy::Bounded { .. } => bounded += 1,
+            CurveAccuracy::Sampled { .. } => sampled += 1,
+        }
+    }
+    if bounded + sampled == 0 {
+        return Ok(());
+    }
+    Err(bad(
+        CMD,
+        format!(
+            "accuracy not met: {bounded} bounded and {sampled} sampled pieces can't certify max_error_mm {max} at scale {scale}; the lines come from the mesh until the exact lines (W06) are used"
+        ),
+    ))
+}
+
+/// `drawn`'s lines as the reply gives them, each named by the shown body it is of.
+fn line_results(shown: &ShownSet, drawn: &Lines) -> Vec<LineResult> {
+    let line = |l: &crate::drawing_view::ViewLine| {
+        let body = shown.bodies.get(l.shown);
+        LineResult {
+            occurrence: body.map(|b| b.path.clone()).unwrap_or_default(),
+            body: body.map(|b| b.body.clone()).unwrap_or_default(),
+            reference: false,
+            source: match l.source {
+                Source::Edge { edge, tangent } => LineSourceResult::Edge { edge, tangent },
+                Source::Silhouette { face } => LineSourceResult::Silhouette { face },
+            },
+            pieces: l
+                .pieces
+                .iter()
+                .map(|p| PieceResult {
+                    visibility: if p.visibility == Visibility::Hidden { "hidden" } else { "visible" },
+                    path: p.path.iter().copied().map(PathSegResult).collect(),
+                    accuracy: AccuracyResult(p.accuracy),
+                })
+                .collect(),
+        }
+    };
+    drawn.lines.iter().map(line).collect()
+}
+
+fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
+    let request: InspectParams = crate::schema::read(INSPECT, p)?;
+    let d = s.drawing(INSPECT)?;
+    let view = find(d, request.view.0, INSPECT)?;
+    let resolved = d.resolve_view(view.id).map_err(|e| bad(INSPECT, e.to_string()))?;
+    let placed = crate::drawing_view::on_sheet(s, d, view.id, INSPECT)?;
+    let (parent, side) = match view.kind {
+        ViewKind::Base { .. } => (None, None),
+        ViewKind::Projected { parent, side } => (Some(ids::encode(parent)), Some(snake_name(side))),
+    };
+    let own = view.settings;
+    let reply = InspectResult {
+        view: ids::encode(view.id),
+        sheet: ids::encode(view.sheet),
+        kind: if parent.is_some() { "projected" } else { "base" },
+        source: ids::encode(resolved.source),
+        parent,
+        side,
+        direction: direction(&resolved.basis),
+        place: match view.place {
+            ViewPlace::At(at) => PlaceParam::At(at),
+            ViewPlace::Aligned(along) => PlaceParam::Aligned(along),
+        },
+        settings: SettingsResult {
+            scale: setting(resolved.scale, own.scale, |s| s.to_string()),
+            display_style: setting(resolved.display_style, own.display_style, snake_name),
+            reference_style: setting(resolved.reference_style, own.reference_style, snake_name),
+            reference_hides_model: setting(resolved.reference_hides_model, own.reference_hides_model, |b| b),
+            tangent_edges: setting(resolved.tangent_edges, own.tangent_edges, snake_name),
+        },
+        reference_margin_mm: view.reference_margin_mm,
+        boundary_mm: BoxResult { min: placed.boundary.min.into(), max: placed.boundary.max.into() },
+        extents: extents_result(&placed.extents, placed.unmeasured),
+        linked: matches!(view.kind, ViewKind::Projected { .. }).then(|| match display_set(&own) {
+            0 => Value::Bool(true),
+            DISPLAY_GROUP => Value::Bool(false),
+            _ => Value::String("partly".into()),
+        }),
+        dimensions: d.dimensions.iter().filter(|dimension| dimension.view == view.id).map(|dimension| ids::encode(dimension.id)).collect(),
+        balloons: d.balloons.iter().filter(|balloon| balloon.view == view.id).map(|balloon| ids::encode(balloon.id)).collect(),
+        choices: ChoicesResult {
+            display_style: VisualStyle::ALL.iter().map(|s| snake_name(*s)).collect(),
+            scale: PRESETS.iter().map(ToString::to_string).collect(),
+        },
+        param_warnings: Vec::new(),
+    };
+    serde_json::to_value(reply).map_err(|e| crate::EngineError::Other(e.to_string()))
+}
+
+fn edit(s: &mut Session, p: &Value) -> Result<Value> {
+    let request: EditParams = crate::schema::read(EDIT, p)?;
+    let id = request.view.0;
+    let descendants = descendants(s.drawing(EDIT)?, id, |_| true);
+    let resolve = |d: &Drawing, ids: &[u64]| ids.iter().map(|id| d.resolve_view(*id).ok()).collect::<Vec<Option<ResolvedView>>>();
+    let before = resolve(s.drawing(EDIT)?, &descendants);
+    let changed = s.edit_drawing(EDIT, |d| change(d, id, &request.set))?;
+    let after = resolve(s.drawing(EDIT)?, &descendants);
+    let followers = descendants.iter().zip(before.iter().zip(&after)).filter(|(_, (b, a))| b != a).map(|(id, _)| ids::encode(*id)).collect();
+    let reply = EditResult { view: ids::encode(id), changed, followers, param_warnings: Vec::new() };
+    serde_json::to_value(reply).map_err(|e| crate::EngineError::Other(e.to_string()))
+}
+
+/// The display settings a linked view takes from its parent: every inheritable one but the scale,
+/// which keeps its own switch.
+const DISPLAY_GROUP: usize = 4;
+
+/// How many of the display settings `own` sets itself.
+fn display_set(own: &ViewOverrides) -> usize {
+    [own.display_style.is_some(), own.reference_style.is_some(), own.reference_hides_model.is_some(), own.tangent_edges.is_some()]
+        .into_iter()
+        .filter(|set| *set)
+        .count()
+}
+
+/// View `id` of `d`, for `cmd`.
+fn find<'a>(d: &'a Drawing, id: u64, cmd: &str) -> Result<&'a View> {
+    d.view(id).ok_or_else(|| bad(cmd, format!("the drawing has no view {}", ids::encode(id))))
+}
+
+/// The views projected from view `id`, directly or through others, in the drawing's order: each
+/// one `follows` takes, whose parent is `id` or one of them.
+fn descendants(d: &Drawing, id: u64, follows: impl Fn(&View) -> bool) -> Vec<u64> {
+    let mut found = vec![id];
+    // Each pass adds the views whose parent is found; a chain is at most MAX_VIEW_DEPTH views.
+    for _ in 0..solidcraft_doc::drawing::view::MAX_VIEW_DEPTH {
+        let more: Vec<u64> = d
+            .views
+            .iter()
+            .filter(|v| !found.contains(&v.id) && matches!(v.kind, ViewKind::Projected { parent, .. } if found.contains(&parent)) && follows(v))
+            .map(|v| v.id)
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        found.extend(more);
+    }
+    found.retain(|v| *v != id);
+    d.views.iter().map(|v| v.id).filter(|v| found.contains(v)).collect()
+}
+
+/// `set` made on view `id` of `d`: the fields it changes, by name.
+fn change(d: &mut Drawing, id: u64, set: &ViewSet) -> Result<Vec<String>> {
+    let resolved = d.resolve_view(id).map_err(|e| bad(EDIT, e.to_string()))?;
+    let at = d.view_index(id).ok_or_else(|| bad(EDIT, format!("the drawing has no view {}", ids::encode(id))))?;
+    let Some(view) = d.views.get_mut(at).map(std::sync::Arc::make_mut) else { return Ok(Vec::new()) };
+    let before = view.clone();
+    let base = matches!(view.kind, ViewKind::Base { .. });
+    let own = &mut view.settings;
+    if let Some(linked) = set.linked {
+        if base {
+            return Err(bad(EDIT, "a base view has no parent to follow: `linked` is a projected view's"));
+        }
+        // Following: the display settings cleared. Its own: each at the value it has now.
+        own.display_style = (!linked).then_some(resolved.display_style.value);
+        own.reference_style = (!linked).then_some(resolved.reference_style.value);
+        own.reference_hides_model = (!linked).then_some(resolved.reference_hides_model.value);
+        own.tangent_edges = (!linked).then_some(resolved.tangent_edges.value);
+    }
+    if let Some(scale) = set.scale {
+        if base && scale.is_none() {
+            return Err(bad(EDIT, "a base view has no parent to follow: it keeps a scale"));
+        }
+        own.scale = scale.map(|s| s.0);
+    }
+    if let Some(style) = set.display_style {
+        own.display_style = style.map(|s| s.0);
+    }
+    if let Some(style) = set.reference_style {
+        own.reference_style = style.map(|s| s.0);
+    }
+    if let Some(hides) = set.reference_hides_model {
+        own.reference_hides_model = hides;
+    }
+    if let Some(edges) = set.tangent_edges {
+        own.tangent_edges = edges.map(|e| e.0);
+    }
+    if let Some(margin) = set.reference_margin_mm {
+        view.reference_margin_mm = margin;
+    }
+    if let Some(direction) = set.view {
+        let ViewKind::Base { view: looking, .. } = &mut view.kind else {
+            return Err(bad(EDIT, "a projected view looks from its side of its parent: only a base view's direction changes"));
+        };
+        *looking = direction.0;
+    }
+    if let Some(place) = set.place {
+        view.place = match place {
+            PlaceParam::At(at) => ViewPlace::At(at),
+            PlaceParam::Aligned(along) => ViewPlace::Aligned(along),
+        };
+    }
+    Ok(changed_fields(&before, view))
+}
+
+/// The names of the fields that differ between `a` and `b`, two states of one view.
+fn changed_fields(a: &View, b: &View) -> Vec<String> {
+    let (x, y) = (&a.settings, &b.settings);
+    let fields = [
+        ("scale", x.scale != y.scale),
+        ("display_style", x.display_style != y.display_style),
+        ("reference_style", x.reference_style != y.reference_style),
+        ("reference_hides_model", x.reference_hides_model != y.reference_hides_model),
+        ("tangent_edges", x.tangent_edges != y.tangent_edges),
+        ("reference_margin_mm", a.reference_margin_mm != b.reference_margin_mm),
+        ("view", a.kind != b.kind),
+        ("place", a.place != b.place),
+    ];
+    fields.into_iter().filter(|(_, changed)| *changed).map(|(name, _)| name.to_string()).collect()
+}
+
+/// Extents as the replies give them: measured on the display mesh, or a placeholder's and why.
+/// The views [`crate::drawing_view::outside`] lists, as the commands answer them.
+pub(super) fn outside_results(outside: Vec<(u64, OnSheet)>) -> Vec<OutsideResult> {
+    let result = |(id, placed): (u64, OnSheet)| OutsideResult {
+        view: ids::encode(id),
+        boundary_mm: BoxResult { min: placed.boundary.min.into(), max: placed.boundary.max.into() },
+        unmeasured: placed.unmeasured.map(Unmeasured::name),
+    };
+    outside.into_iter().map(result).collect()
+}
+
+fn extents_result(extents: &Extents, unmeasured: Option<Unmeasured>) -> ExtentsResult {
+    ExtentsResult {
+        min: extents.model.min.into(),
+        max: extents.model.max.into(),
+        error_mm: extents.error_mm,
+        status: if unmeasured.is_some() { "placeholder" } else { "approximate" },
+        provenance: unmeasured.map_or("display_mesh", Unmeasured::name),
+    }
+}
+
+/// A resolved setting as inspect shows it: its value, where it comes from and what the view sets.
+fn setting<T: Copy, U>(resolved: Setting<T>, own: Option<T>, show: impl Fn(T) -> U) -> SettingResult<U> {
+    let (from, parent) = match resolved.set_by {
+        SetBy::This => (FromResult::This, None),
+        SetBy::Parent(id) => (FromResult::Parent, Some(ids::encode(id))),
+        SetBy::Default => (FromResult::Default, None),
+    };
+    SettingResult { value: show(resolved.value), from, parent, set: own.map(&show) }
+}
+
+/// The views lined up with view `id`, directly or through others: the views that go where it goes.
+fn lined_up(d: &Drawing, id: u64) -> Vec<u64> {
+    descendants(d, id, |v| matches!(v.place, ViewPlace::Aligned(_)))
+}
+
+/// `view`'s place moved by `by`: a point moves, and a place lined up with a parent moves along
+/// its free axis, so the views lined up with a moved view stay where they were beside it.
+fn shifted(view: &View, by: Vec2) -> ViewPlace {
+    match (view.place, view.kind) {
+        (ViewPlace::At([x, y]), _) => ViewPlace::At([x + by.x, y + by.y]),
+        (ViewPlace::Aligned(along), ViewKind::Projected { side, .. }) => ViewPlace::Aligned(along + side.along(by)),
+        (ViewPlace::Aligned(along), ViewKind::Base { .. }) => ViewPlace::Aligned(along + by.y),
+    }
+}
+
+/// The sheet `named` names in `d` (its id or its one name), and its centre.
+fn sheet_named(d: &Drawing, named: &str, cmd: &str) -> Result<(u64, Vec2)> {
+    let at = d.sheet_index(named).map_err(|e| bad(cmd, e.to_string()))?;
+    let sheet = d.sheets.get(at).ok_or_else(|| bad(cmd, format!("no sheet `{named}`")))?;
+    Ok((sheet.id, sheet.sheet.size_mm().map_err(|e| bad(cmd, e.to_string()))? * 0.5))
+}
+
+fn move_to_sheet(s: &mut Session, p: &Value) -> Result<Value> {
+    let request: MoveParams = crate::schema::read(MOVE, p)?;
+    let id = request.view.0;
+    let (sheet, views) = s.edit_drawing(MOVE, |d| {
+        let (sheet, middle) = sheet_named(d, &request.sheet, MOVE)?;
+        let view = find(d, id, MOVE)?;
+        if view.sheet == sheet {
+            return Ok((sheet, Vec::new()));
+        }
+        let lined = matches!(view.place, ViewPlace::Aligned(_));
+        if lined && !request.break_alignment {
+            return Err(bad(MOVE, "it is lined up with its parent, which stays on its sheet: give `break_alignment: true` to place it apart"));
+        }
+        let from = d.view_centre(id).map_err(|e| bad(MOVE, e.to_string()))?;
+        let to = match request.position_mm {
+            Some(p) => p.0,
+            None if lined => middle,
+            None => from,
+        };
+        let moved: Vec<u64> = std::iter::once(id).chain(lined_up(d, id)).collect();
+        for view in d.views.iter_mut().filter(|v| moved.contains(&v.id)) {
+            let place = if view.id == id { ViewPlace::At([to.x, to.y]) } else { shifted(view, to - from) };
+            let view = Arc::make_mut(view);
+            view.sheet = sheet;
+            view.place = place;
+        }
+        Ok((sheet, moved))
+    })?;
+    let outside = crate::drawing_view::outside(s, s.drawing(MOVE)?, &views, MOVE)?;
+    to_sheet_answer(id, sheet, &views, outside)
+}
+
+fn copy_to_sheet(s: &mut Session, p: &Value) -> Result<Value> {
+    let request: CopyParams = crate::schema::read(COPY, p)?;
+    let id = request.view.0;
+    let record = s.drawing(COPY)?.clone();
+    find(&record, id, COPY)?;
+    let linked = lined_up(&record, id);
+    let with_linked = match request.with_linked {
+        Some(with) => with,
+        None if linked.is_empty() => false,
+        None => {
+            let names = linked.iter().map(|v| ids::encode(*v)).collect::<Vec<_>>().join(", ");
+            return Err(bad(COPY, format!("views {names} are lined up with it: give `with_linked` (true to copy them too, false for it alone)")));
+        }
+    };
+    let originals: Vec<u64> = std::iter::once(id).chain(linked.into_iter().filter(|_| with_linked)).collect();
+    // Each view's dimensions and balloons are part of what it shows, so they are copied with it.
+    let measured: Vec<u64> = record.dimensions.iter().filter(|d| originals.contains(&d.view)).map(|d| d.id).collect();
+    let ballooned: Vec<u64> = record.balloons.iter().filter(|b| originals.contains(&b.view)).map(|b| b.id).collect();
+    let mut copies = (0..originals.len() + measured.len() + ballooned.len())
+        .map(|_| record.allocate_id(&mut s.ids))
+        .collect::<solidcraft_doc::Result<Vec<u64>>>()
+        .map_err(|e| bad(COPY, e.to_string()))?;
+    let mut dimension_copies = copies.split_off(originals.len());
+    let balloon_copies = dimension_copies.split_off(measured.len());
+    let copy_of = |old: u64| originals.iter().position(|o| *o == old).and_then(|i| copies.get(i)).copied();
+    let sheet = s.edit_drawing(COPY, |d| {
+        let (sheet, middle) = sheet_named(d, &request.sheet, COPY)?;
+        let from = d.view_centre(id).map_err(|e| bad(COPY, e.to_string()))?;
+        let to = request.position_mm.map_or(middle, |p| p.0);
+        let resolved = d.resolve_view(id).map_err(|e| bad(COPY, e.to_string()))?;
+        let mut made = Vec::with_capacity(copies.len());
+        for (old, new) in originals.iter().zip(&copies) {
+            let original = find(d, *old, COPY)?;
+            let mut view = View { id: *new, sheet, ..original.clone() };
+            view.place = shifted(original, to - from);
+            match original.kind {
+                // The copy follows none of the views it came from: a projected view copied alone is
+                // a base view, looking the way it did, with the settings it had as its own.
+                ViewKind::Projected { .. } if *old == id => {
+                    view.kind = ViewKind::Base { source: resolved.source, view: looking(&resolved.basis) };
+                    view.settings = ViewOverrides {
+                        scale: Some(resolved.scale.value),
+                        display_style: Some(resolved.display_style.value),
+                        reference_style: Some(resolved.reference_style.value),
+                        reference_hides_model: Some(resolved.reference_hides_model.value),
+                        tangent_edges: Some(resolved.tangent_edges.value),
+                    };
+                    view.place = ViewPlace::At([to.x, to.y]);
+                }
+                ViewKind::Projected { parent, side } => view.kind = ViewKind::Projected { parent: copy_of(parent).unwrap_or(parent), side },
+                ViewKind::Base { .. } => {}
+            }
+            made.push(Arc::new(view));
+        }
+        d.add_views(made);
+        let copied: Vec<Arc<Dimension>> = measured
+            .iter()
+            .zip(&dimension_copies)
+            .filter_map(|(old, new)| {
+                let original = d.dimension(*old)?;
+                Some(Arc::new(Dimension { id: *new, view: copy_of(original.view)?, ..original.clone() }))
+            })
+            .collect();
+        d.add_dimensions(copied);
+        let copied: Vec<Arc<Balloon>> = ballooned
+            .iter()
+            .zip(&balloon_copies)
+            .filter_map(|(old, new)| {
+                let original = d.balloon(*old)?;
+                Some(Arc::new(Balloon { id: *new, view: copy_of(original.view)?, ..original.clone() }))
+            })
+            .collect();
+        d.add_balloons(copied);
+        Ok(sheet)
+    })?;
+    let first = copies.first().copied().unwrap_or_default();
+    let outside = crate::drawing_view::outside(s, s.drawing(COPY)?, &copies, COPY)?;
+    to_sheet_answer(first, sheet, &copies, outside)
+}
+
+fn base(s: &mut Session, p: &Value) -> Result<Value> {
+    let request: BaseParams = crate::schema::read(BASE, p)?;
+    let record = s.drawing(BASE)?.clone();
+    let (sheet, middle) = sheet_named(&record, &request.sheet, BASE)?;
+    let source = record.sources.first().map(|source| source.id).ok_or_else(|| bad(BASE, "the drawing draws no design"))?;
+    let direction = request.view.unwrap_or_default().0;
+    let position = request.position_mm.map_or(middle, |p| p.0);
+    let id = record.allocate_id(&mut s.ids).map_err(|e| bad(BASE, e.to_string()))?;
+    let settings = ViewOverrides {
+        scale: request.scale.map(|scale| scale.0),
+        display_style: request.display_style.map(|style| style.0),
+        reference_style: request.reference_style.map(|style| style.0),
+        reference_hides_model: request.reference_hides_model,
+        tangent_edges: request.tangent_edges.map(|edges| edges.0),
+    };
+    let place = ViewPlace::At([position.x, position.y]);
+    let kind = ViewKind::Base { source, view: direction };
+    let mut view = View { id, sheet, kind, place, settings, reference_margin_mm: request.reference_margin_mm.unwrap_or(0.0) };
+    let mut fitted = false;
+    if view.settings.scale.is_none() {
+        // The record's rules first, at 1:1, so a bad direction, margin or place is refused as the
+        // record says; then the fitted scale, which is saved. With nothing to measure, 1:1.
+        let one = Scale::new(1.0, 1.0).map_err(|e| bad(BASE, e.to_string()))?;
+        let mut staged = Drawing::clone(&record);
+        staged.add_views([Arc::new(View { settings: ViewOverrides { scale: Some(one), ..view.settings }, ..view.clone() })]);
+        staged.validate().map_err(|e| bad(BASE, e.to_string()))?;
+        let space = crate::drawing_view::sheet(&staged, sheet, BASE)?.drawing_space().map_err(|e| bad(BASE, e.to_string()))?;
+        let basis = staged.resolve_view(id).map_err(|e| bad(BASE, e.to_string()))?.basis;
+        let measured = crate::drawing_view::shown(s).and_then(|set| crate::drawing_view::measure(&set, &basis)).ok();
+        fitted = measured.is_some();
+        view.settings.scale = Some(match measured {
+            Some(extents) => fit(extents.model.inflated(view.reference_margin_mm).size(), position, space, BASE)?,
+            None => one,
+        });
+    }
+    s.edit_drawing(BASE, |d| {
+        d.add_views([Arc::new(view)]);
+        Ok(())
+    })?;
+    created(s, BASE, id, fitted)
+}
+
+fn projected(s: &mut Session, p: &Value) -> Result<Value> {
+    let request: ProjectedParams = crate::schema::read(PROJECTED, p)?;
+    let record = s.drawing(PROJECTED)?.clone();
+    let (parent, sheet) = find(&record, request.parent.0, PROJECTED).map(|v| (v.id, v.sheet))?;
+    let side = request.side.0;
+    let id = record.allocate_id(&mut s.ids).map_err(|e| bad(PROJECTED, e.to_string()))?;
+    let parent_centre = record.view_centre(parent).map_err(|e| bad(PROJECTED, e.to_string()))?;
+    let place = match request.place {
+        Some(PlaceParam::At(at)) => ViewPlace::At(at),
+        Some(PlaceParam::Aligned(along)) => ViewPlace::Aligned(along),
+        None => ViewPlace::Aligned(side.along(parent_centre)),
+    };
+    let kind = ViewKind::Projected { parent, side };
+    let mut view = View { id, sheet, kind, place, settings: ViewOverrides::default(), reference_margin_mm: 0.0 };
+    if request.place.is_none() {
+        // Staged on its parent's centre to measure it, then moved along the free axis until its
+        // boundary is the gap past its parent's.
+        let mut staged = Drawing::clone(&record);
+        staged.add_views([Arc::new(view.clone())]);
+        staged.validate().map_err(|e| bad(PROJECTED, e.to_string()))?;
+        let theirs = crate::drawing_view::on_sheet(s, &staged, parent, PROJECTED)?.boundary;
+        let ours = crate::drawing_view::on_sheet(s, &staged, id, PROJECTED)?.boundary;
+        let half = (side.along(ours.max) - side.along(ours.min)) / 2.0;
+        view.place = ViewPlace::Aligned(match side {
+            ProjectedSide::Right | ProjectedSide::Above => side.along(theirs.max) + DEFAULT_GAP_MM + half,
+            ProjectedSide::Left | ProjectedSide::Below => side.along(theirs.min) - DEFAULT_GAP_MM - half,
+        });
+    }
+    s.edit_drawing(PROJECTED, |d| {
+        d.add_views([Arc::new(view)]);
+        Ok(())
+    })?;
+    created(s, PROJECTED, id, false)
+}
+
+/// The reply for view `id`, just made by `cmd`: its sheet, its scale (`fitted` when worked out),
+/// its boundary, and itself when it leaves its sheet's drawing space.
+fn created(s: &Session, cmd: &str, id: u64, fitted: bool) -> Result<Value> {
+    let d = s.drawing(cmd)?;
+    let sheet_id = find(d, id, cmd)?.sheet;
+    let sheet = crate::drawing_view::sheet(d, sheet_id, cmd)?;
+    let scale = d.resolve_view(id).map_err(|e| bad(cmd, e.to_string()))?.scale.value;
+    let placed = crate::drawing_view::on_sheet(s, d, id, cmd)?;
+    let outside = if crate::drawing_view::leaves(sheet, &placed, cmd)? { vec![(id, placed)] } else { Vec::new() };
+    let reply = CreateResult {
+        view: ids::encode(id),
+        sheet: ids::encode(sheet_id),
+        scale: ScaleResult { text: scale.to_string(), factor: scale.factor(), fitted },
+        boundary_mm: BoxResult { min: placed.boundary.min.into(), max: placed.boundary.max.into() },
+        outside: outside_results(outside),
+        param_warnings: Vec::new(),
+    };
+    serde_json::to_value(reply).map_err(|e| crate::EngineError::Other(e.to_string()))
+}
+
+fn to_sheet_answer(view: u64, sheet: u64, views: &[u64], outside: Vec<(u64, OnSheet)>) -> Result<Value> {
+    let reply = ToSheetResult {
+        view: ids::encode(view),
+        sheet: ids::encode(sheet),
+        views: views.iter().map(|v| ids::encode(*v)).collect(),
+        outside: outside_results(outside),
+        param_warnings: Vec::new(),
+    };
+    serde_json::to_value(reply).map_err(|e| crate::EngineError::Other(e.to_string()))
+}
+
+/// The named view that is exactly `basis`, if one is.
+fn named(basis: &Plane) -> Option<NamedView> {
+    NamedView::ALL.iter().copied().find(|v| v.basis() == *basis)
+}
+
+/// `basis` as a base view saves it: by name when it is exactly a named view's, so nothing rounds;
+/// else its line of sight and up, which give the same basis back to within rounding.
+fn looking(basis: &Plane) -> ViewDirection {
+    named(basis).map_or_else(
+        || ViewDirection::Looking(Looking { direction: basis.y.cross(basis.x).into(), up: basis.y.into(), origin: basis.origin.into() }),
+        ViewDirection::Named,
+    )
+}
+
+/// A basis as the replies give it: its name when it is exactly a named view's.
+fn direction(basis: &Plane) -> ViewResult {
+    ViewResult {
+        named: named(basis).map(snake_name),
+        // The line of sight, -(x × y), written so no component reads -0.
+        direction: basis.y.cross(basis.x).into(),
+        x: basis.x.into(),
+        y: basis.y.into(),
+        origin: basis.origin.into(),
+    }
+}
+
+/// The largest preset scale at which a view `size` (model mm), centred at `position`, lies inside
+/// the drawing border: the room is twice the distance from the position to the nearer side,
+/// each way.
+fn fit(size: Vec2, position: Vec2, border: Aabb2, cmd: &str) -> Result<Scale> {
+    let room =
+        Vec2::new(2.0 * (position.x - border.min.x).min(border.max.x - position.x), 2.0 * (position.y - border.min.y).min(border.max.y - position.y));
+    Scale::fit(size, room).ok_or_else(|| {
+        let name = |s: Option<&Scale>| s.map(|s| s.to_string()).unwrap_or_default();
+        let presets = format!("from {} to {}", name(PRESETS.first()), name(PRESETS.last()));
+        bad(cmd, format!("the view fits the sheet's drawing area at no preset scale {presets} here: give a scale, a position or a larger sheet"))
+    })
+}
+
+/// A unit enum's name as it reads and writes (`iso_front_right`, `visible_hidden`).
+fn snake_name(value: impl Serialize) -> String {
+    serde_json::to_value(value).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
+}
+
+#[cfg(test)]
+#[path = "drawing_view_tests.rs"]
+pub(super) mod tests;

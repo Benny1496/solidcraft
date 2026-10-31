@@ -60,6 +60,8 @@ pub struct ModelBody {
     /// [`Body::outline_bounds`] of `body` (with the body it was measured on), worked out once
     /// and shared by clones.
     outline: Arc<OnceLock<(Body, solidcraft_geom::Aabb3)>>,
+    /// [`ModelBody::volume`] (with the body it was measured on), measured once and shared by clones.
+    volume: Arc<OnceLock<(Body, Option<f64>)>>,
 }
 
 impl ModelBody {
@@ -83,6 +85,19 @@ impl ModelBody {
             bytes: 0,
             source_key: 0,
             outline: Arc::new(OnceLock::new()),
+            volume: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// The body's volume in mm³ ([`kernel::measure_mass`]), measured once and shared by clones: a
+    /// body's measure depends on nothing else, so the bill of materials and the physical
+    /// properties weigh it once however often they are asked. `None` when it can't be measured.
+    pub fn volume(&self) -> Option<f64> {
+        let measure = || kernel::measure_mass(&self.body).ok().map(|m| m.volume);
+        match self.volume.get_or_init(|| (self.body.clone(), measure())) {
+            (measured, v) if measured.same(&self.body) => *v,
+            // The body was replaced in this cell's holder since: measure it again.
+            _ => measure(),
         }
     }
 
@@ -196,6 +211,23 @@ impl ModelBody {
             b.add(crate::apply_point(&m, *p));
             b
         })
+    }
+
+    /// The box of [`ModelBody::mesh`] seen on a plane, in the plane's own coordinates
+    /// ([`Plane::to_local`]): a drawing view's extents (W07), again without making a placement's
+    /// moved copy.
+    pub fn mesh_bounds_in(&self, plane: &Plane) -> solidcraft_geom::Aabb2 {
+        let (mesh, m) = match self.cached_mesh() {
+            Some(mesh) => (mesh, crate::IDENTITY),
+            None => self.mesh_in_place(),
+        };
+        // The placement folded into each of the plane's axes: a mesh point p lands at
+        // p · axis + offset, with no moved copy of the point made first.
+        let [c0, c1, c2, t] = m.map(|r| Vec3::new(r[0], r[1], r[2]));
+        let offset = t - plane.origin;
+        let axis = |a: Vec3| (Vec3::new(c0.dot(a), c1.dot(a), c2.dot(a)), offset.dot(a));
+        let ((ax, ox), (ay, oy)) = (axis(plane.x), axis(plane.y));
+        mesh.positions.iter().map(|p| Vec2::new(p.dot(ax) + ox, p.dot(ay) + oy)).collect()
     }
 
     /// [`ModelBody::plan_mesh_at`] as a shared mesh and the move that places it, as

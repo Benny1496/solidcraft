@@ -4,7 +4,8 @@
 //! revision, author, organization, description, licence) and keeps every other key exactly as
 //! it was through open, edit and save. Other tools keep their own data under one reverse-DNS
 //! key each (`com.example.tool`), holding an object. A component's part properties follow the
-//! same rules, with one more key: its bill of materials type (`bom_type`).
+//! same rules, with four more keys: its bill of materials type (`bom_type`), its static material
+//! (`material`), its quantity (`bom_quantity`) and whether it is virtual (`virtual`).
 //!
 //! Reading never validates: a well-known key holding something other than text is kept as it
 //! is and reads as absent, so a file another tool wrote always opens. Writing through
@@ -37,6 +38,25 @@ pub const WELL_KNOWN: [&str; 7] = [PROJECT, PART_NUMBER, REVISION, AUTHOR, ORGAN
 /// shows [`WELL_KNOWN`]) doesn't list it.
 pub const BOM_TYPE: &str = "bom_type";
 
+/// A component's static material: what its bill of materials rows say it is made of, typed in by
+/// hand in place of the materials worked out from its bodies (any text). It names, it doesn't
+/// weigh: mass still comes from the bodies' materials.
+pub const MATERIAL: &str = "material";
+
+/// What one placement of a component means in a bill of materials: an expression evaluated with
+/// the design's parameters, a length or (without a unit) a number of pieces. Without it, a
+/// placement is one piece. The bill of materials evaluates it (`bom::Amount`).
+pub const BOM_QUANTITY: &str = "bom_quantity";
+
+/// A virtual component: one with no geometry (grease, paint, a label), listed in the bill of
+/// materials with its quantity. It holds `true`; it never holds bodies, sketches or placed
+/// components.
+pub const VIRTUAL: &str = "virtual";
+
+/// The part properties only a component holds: the Design Properties dialog doesn't list them and
+/// `document.metadata.set` refuses them.
+pub const PART_ONLY: [&str; 4] = [BOM_TYPE, MATERIAL, BOM_QUANTITY, VIRTUAL];
+
 /// Longest key, in bytes.
 pub const MAX_KEY_BYTES: usize = 128;
 /// Longest well-known text value, in bytes.
@@ -56,7 +76,7 @@ pub struct Metadata(pub Map<String, Value>);
 
 /// A key SolidCraft reads as a design or part property.
 pub fn is_well_known(key: &str) -> bool {
-    WELL_KNOWN.contains(&key) || key == BOM_TYPE
+    WELL_KNOWN.contains(&key) || PART_ONLY.contains(&key)
 }
 
 /// A reverse-DNS key another tool keeps its data under: two or more dot-separated labels of
@@ -133,6 +153,18 @@ impl Metadata {
     pub fn bom_type(&self) -> BomType {
         self.text(BOM_TYPE).and_then(BomType::parse).unwrap_or_default()
     }
+    /// The component's static material, when one is typed in.
+    pub fn material(&self) -> Option<&str> {
+        self.text(MATERIAL)
+    }
+    /// The component's quantity expression, when it has one.
+    pub fn bom_quantity(&self) -> Option<&str> {
+        self.text(BOM_QUANTITY)
+    }
+    /// The component is virtual: anything but `true` reads as not.
+    pub fn is_virtual(&self) -> bool {
+        self.0.get(VIRTUAL) == Some(&Value::Bool(true))
+    }
 
     /// The keys SolidCraft doesn't read (other tools' data, or keys a newer SolidCraft added),
     /// kept as they are.
@@ -170,6 +202,13 @@ impl Metadata {
 
 /// `value` as `key` may hold it (`None`: remove the key), or why it can't.
 fn check(key: &str, value: Value) -> Result<Option<Value>> {
+    if key == VIRTUAL {
+        return match value {
+            Value::Bool(true) => Ok(Some(value)),
+            Value::Bool(false) | Value::Null => Ok(None),
+            _ => Err(invalid(format!("`{VIRTUAL}` is true or false"))),
+        };
+    }
     if is_well_known(key) {
         return match value {
             Value::Null => Ok(None),
@@ -280,6 +319,56 @@ mod tests {
         assert_eq!(newer.bom_type(), BomType::Normal);
         assert_eq!(newer.get(BOM_TYPE), Some(&json!("kit")));
         assert!(!WELL_KNOWN.contains(&BOM_TYPE), "the Design Properties dialog doesn't list it");
+    }
+
+    #[test]
+    fn a_static_material_takes_any_text_and_reads_as_absent_otherwise() {
+        let mut m = Metadata::default();
+        assert_eq!(m.material(), None);
+        let longest = "é".repeat(MAX_TEXT_BYTES / 2);
+        for text in ["Stainless steel 1.4301", "Mixed: see drawing", "鋼", longest.as_str()] {
+            assert!(m.set(MATERIAL, json!(text)).unwrap(), "{text}");
+            assert_eq!(m.material(), Some(text));
+        }
+        for bad in
+            [json!("x".repeat(MAX_TEXT_BYTES + 1)), json!(7.85), json!({"name": "Steel"}), json!(["Steel"]), json!(format!("a{}b", char::from(7)))]
+        {
+            assert!(m.set(MATERIAL, bad.clone()).is_err(), "{bad}");
+        }
+        assert_eq!(m.material(), Some(longest.as_str()), "a refused value leaves the old one");
+        assert!(m.set(MATERIAL, Value::Null).unwrap(), "null removes it");
+        assert_eq!(m.material(), None);
+        // Another tool's number is kept as it is and reads as no static material.
+        let other: Metadata = serde_json::from_value(json!({"material": 42})).unwrap();
+        assert_eq!((other.material(), other.get(MATERIAL)), (None, Some(&json!(42))));
+        assert!(other.others().next().is_none(), "SolidCraft reads it, so it isn't another tool's key");
+        assert!(!WELL_KNOWN.contains(&MATERIAL), "the Design Properties dialog doesn't list it");
+    }
+
+    #[test]
+    fn virtual_takes_true_or_false_and_a_quantity_takes_text() {
+        let mut m = Metadata::default();
+        assert!(!m.is_virtual());
+        assert!(m.set(VIRTUAL, json!(true)).unwrap());
+        assert!(m.is_virtual());
+        assert_eq!(m.get(VIRTUAL), Some(&json!(true)));
+        for bad in [json!("true"), json!(1), json!({}), json!([true])] {
+            assert!(m.set(VIRTUAL, bad.clone()).is_err(), "{bad}");
+        }
+        assert!(m.is_virtual(), "a refused value leaves the old one");
+        assert!(m.set(VIRTUAL, json!(false)).unwrap(), "false removes it");
+        assert!(!m.set(VIRTUAL, Value::Null).unwrap());
+        assert!(m.get(VIRTUAL).is_none());
+        // Another tool's text is kept and reads as not virtual.
+        let other: Metadata = serde_json::from_value(json!({"virtual": "yes"})).unwrap();
+        assert!(!other.is_virtual());
+        assert!(m.set(BOM_QUANTITY, json!("2 * span + 50 mm")).unwrap());
+        assert_eq!(m.bom_quantity(), Some("2 * span + 50 mm"));
+        assert!(m.set(BOM_QUANTITY, json!(2.5)).is_err(), "an expression is text");
+        assert!(m.set(BOM_QUANTITY, json!("")).unwrap());
+        assert_eq!(m.bom_quantity(), None);
+        assert!(m.others().next().is_none(), "SolidCraft reads both");
+        assert!(!WELL_KNOWN.contains(&VIRTUAL) && !WELL_KNOWN.contains(&BOM_QUANTITY), "the Design Properties dialog lists neither");
     }
 
     #[test]
