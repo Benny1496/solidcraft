@@ -43,8 +43,10 @@ fn w23a_m2_e2e03_undo_redo_deletion_recovers_original_bore_reference() {
     let made=s.run_script(&script).unwrap();
     let view=made.last().unwrap()["view"].clone();
     let drawing=ids::encode(s.drawing("test").unwrap().id);
-    let first=run(&mut s,"drawing.dimension.add",json!({"view":view,"kind":{"radial":{"edge":{"body":"Plate","index":round_index(&s,"Plate",[20.0,20.0,20.0],5.0)}}}}));
-    let second=run(&mut s,"drawing.dimension.add",json!({"view":view,"kind":{"radial":{"edge":{"body":"Plate","index":round_index(&s,"Plate",[60.0,50.0,20.0],5.0)}}}}));
+    let rim1=round_index(&s,"Plate",[20.0,20.0,20.0],5.0);
+    let rim2=round_index(&s,"Plate",[60.0,50.0,20.0],5.0);
+    let first=run(&mut s,"drawing.dimension.add",json!({"view":view,"kind":{"radial":{"edge":{"body":"Plate","index":rim1}}}}));
+    let second=run(&mut s,"drawing.dimension.add",json!({"view":view,"kind":{"radial":{"edge":{"body":"Plate","index":rim2}}}}));
     let id1=first["dimension"].clone();let id2=second["dimension"].clone();
     reads(&first,10.0,"Ø10.00");reads(&second,10.0,"Ø10.00");
     run(&mut s,"drawing.close",json!({}));
