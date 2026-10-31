@@ -285,4 +285,4 @@ fn candidate(c: Candidate) -> CandidateResult {
 
 #[cfg(test)]
 #[path = "drawing_dimension_tests.rs"]
-mod tests;
+pub(crate) mod tests;
