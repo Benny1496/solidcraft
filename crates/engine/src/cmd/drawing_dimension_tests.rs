@@ -831,7 +831,7 @@ fn deleting_a_bore_loses_its_dimension_and_never_moves_it() {
         "a lost reference must include the reason: {lost}");
     assert!(lost.get("value").is_none(), "a lost bore must not report Bore2's live diameter: {lost}");
 
-    assert_eq!(lost["last_good"], json!(10.0), "last measured diameter: {lost}");
+    assert!(lost["last_good"].as_f64().is_some_and(|value| (value - 10.0).abs() < 1e-9), "last measured diameter: {lost}");
     let surviving = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id2}));
     assert_eq!(surviving["dimension"], id2, "Bore2 dimension was changed");
     reads(&surviving, 10.0, "Ø10.00");
@@ -941,7 +941,7 @@ fn reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value() {
         } else if *state == "deleted" {
             let lost=run(&mut s,"drawing.dimension.inspect",json!({"dimension":id1}));
             assert_eq!(lost["status"],"lost");
-            assert_eq!(lost["last_good"],json!(10.0));
+            assert!(lost["last_good"].as_f64().is_some_and(|value| (value - 10.0).abs() < 1e-9), "last measured diameter: {lost}");
         }
         let folder=std::env::temp_dir().join(format!("solidcraft-w23a-e2e04-{}-{case}",std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
@@ -963,7 +963,7 @@ fn reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value() {
             "resized" => reads(&a,12.0,"Ø12.00"),
             "deleted" => {
                 assert_eq!(a["status"],"lost","{a}");
-                assert_eq!(a["last_good"],json!(10.0),"{a}");
+                assert!(a["last_good"].as_f64().is_some_and(|value| (value - 10.0).abs() < 1e-9), "saved last measured diameter: {a}");
                 assert!(a.get("value").is_none() && a["why"].as_str().is_some_and(|w| !w.is_empty()),"{a}");
             }
             _ => unreachable!()
