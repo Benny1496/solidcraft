@@ -1,0 +1,72 @@
+// W23a E2E-03 engine subset; uses W23-1 shared M2 command-script plate.
+// This is an additional independent exploratory check; CamWight specifically
+// reserved E2E-01/02 for our official PR, so E2E03 is not submitted upstream.
+#[test]
+fn w23a_m2_e2e03_undo_redo_model_edit_keeps_dimension_id() {
+    let mut s = Session::default();
+    let script: Value = serde_json::from_str(include_str!("../../../../examples/acceptance/drawing_m2.json")).unwrap();
+    let made = s.run_script(&script).unwrap();
+    let view = made.last().unwrap()["view"].clone();
+    let drawing = ids::encode(s.drawing("test").unwrap().id);
+    let bore1 = json!({"body":"Plate","index":round_index(&s, "Plate", [20.0,20.0,20.0],5.0)});
+    let bore2 = json!({"body":"Plate","index":round_index(&s, "Plate", [60.0,50.0,20.0],5.0)});
+    let first = run(&mut s, "drawing.dimension.add",json!({"view":view,"kind":{"radial":{"edge":bore1}}}));
+    let second = run(&mut s, "drawing.dimension.add",json!({"view":view,"kind":{"radial":{"edge":bore2}}}));
+    let id1=first["dimension"].clone(); let id2=second["dimension"].clone();
+    reads(&first,10.0,"Ø10.00"); reads(&second,10.0,"Ø10.00");
+    run(&mut s,"drawing.close",json!({}));
+    run(&mut s,"parameters.change",json!({"name":"bore1_d","expression":"12 mm"}));
+    run(&mut s,"drawing.open",json!({"drawing":drawing}));
+    let changed=run(&mut s,"drawing.dimension.inspect",json!({"dimension":id1}));
+    assert_eq!(changed["dimension"],id1);
+    reads(&changed,12.0,"Ø12.00");
+    run(&mut s,"drawing.close",json!({}));
+    run(&mut s,"edit.undo",json!({}));
+    run(&mut s,"drawing.open",json!({"drawing":drawing}));
+    let undone=run(&mut s,"drawing.dimension.inspect",json!({"dimension":id1}));
+    assert_eq!(undone["dimension"],id1);
+    reads(&undone,10.0,"Ø10.00");
+    reads(&run(&mut s,"drawing.dimension.inspect",json!({"dimension":id2})),10.0,"Ø10.00");
+    run(&mut s,"drawing.close",json!({}));
+    run(&mut s,"edit.redo",json!({}));
+    run(&mut s,"drawing.open",json!({"drawing":drawing}));
+    let redone=run(&mut s,"drawing.dimension.inspect",json!({"dimension":id1}));
+    assert_eq!(redone["dimension"],id1);
+    reads(&redone,12.0,"Ø12.00");
+    reads(&run(&mut s,"drawing.dimension.inspect",json!({"dimension":id2})),10.0,"Ø10.00");
+}
+
+#[test]
+fn w23a_m2_e2e03_undo_redo_deletion_recovers_original_bore_reference() {
+    let mut s = Session::default();
+    let script: Value = serde_json::from_str(include_str!("../../../../examples/acceptance/drawing_m2.json")).unwrap();
+    let made=s.run_script(&script).unwrap();
+    let view=made.last().unwrap()["view"].clone();
+    let drawing=ids::encode(s.drawing("test").unwrap().id);
+    let first=run(&mut s,"drawing.dimension.add",json!({"view":view,"kind":{"radial":{"edge":{"body":"Plate","index":round_index(&s,"Plate",[20.0,20.0,20.0],5.0)}}}}));
+    let second=run(&mut s,"drawing.dimension.add",json!({"view":view,"kind":{"radial":{"edge":{"body":"Plate","index":round_index(&s,"Plate",[60.0,50.0,20.0],5.0)}}}}));
+    let id1=first["dimension"].clone();let id2=second["dimension"].clone();
+    reads(&first,10.0,"Ø10.00");reads(&second,10.0,"Ø10.00");
+    run(&mut s,"drawing.close",json!({}));
+    run(&mut s,"timeline.delete",json!({"feature":"Bore1"}));
+    run(&mut s,"drawing.open",json!({"drawing":drawing}));
+    let deleted=run(&mut s,"drawing.dimension.inspect",json!({"dimension":id1}));
+    assert_eq!(deleted["status"],"lost");
+    assert_eq!(deleted["dimension"],id1);
+    assert!(deleted.get("value").is_none());
+    reads(&run(&mut s,"drawing.dimension.inspect",json!({"dimension":id2})),10.0,"Ø10.00");
+    run(&mut s,"drawing.close",json!({}));
+    run(&mut s,"edit.undo",json!({}));
+    run(&mut s,"drawing.open",json!({"drawing":drawing}));
+    let recovered=run(&mut s,"drawing.dimension.inspect",json!({"dimension":id1}));
+    assert_eq!(recovered["dimension"],id1);
+    reads(&recovered,10.0,"Ø10.00");
+    run(&mut s,"drawing.close",json!({}));
+    run(&mut s,"edit.redo",json!({}));
+    run(&mut s,"drawing.open",json!({"drawing":drawing}));
+    let lost_again=run(&mut s,"drawing.dimension.inspect",json!({"dimension":id1}));
+    assert_eq!(lost_again["status"],"lost");
+    assert_eq!(lost_again["dimension"],id1);
+    assert!(lost_again.get("value").is_none());
+    reads(&run(&mut s,"drawing.dimension.inspect",json!({"dimension":id2})),10.0,"Ø10.00");
+}
