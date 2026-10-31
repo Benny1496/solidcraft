@@ -781,16 +781,8 @@ fn workshop_plate_dimensions() -> (Session, u64, Value, Value) {
     let drawing = s.drawing("test").unwrap().id;
     let bore1 = json!({"body": "Plate", "index": round_index(&s, "Plate", [20.0, 20.0, 20.0], 5.0)});
     let bore2 = json!({"body": "Plate", "index": round_index(&s, "Plate", [60.0, 50.0, 20.0], 5.0)});
-    let first = run(
-        &mut s,
-        "drawing.dimension.add",
-        json!({"view": top, "kind": {"radial": {"edge": bore1}}, "text": {"at": [12.0, 24.0]}}),
-    );
-    let second = run(
-        &mut s,
-        "drawing.dimension.add",
-        json!({"view": top, "kind": {"radial": {"edge": bore2}}, "text": {"at": [-18.0, 15.0]}}),
-    );
+    let first = run(&mut s, "drawing.dimension.add", json!({"view": top, "kind": {"radial": {"edge": bore1}}, "text": {"at": [12.0, 24.0]}}));
+    let second = run(&mut s, "drawing.dimension.add", json!({"view": top, "kind": {"radial": {"edge": bore2}}, "text": {"at": [-18.0, 15.0]}}));
     reads(&first, 10.0, "Ø10.00");
     reads(&second, 10.0, "Ø10.00");
     assert_ne!(first["dimension"], second["dimension"], "each bore needs its own dimension");
@@ -802,10 +794,7 @@ fn reads_lost_bore(reply: &Value) {
     assert_eq!(reply["status"], "lost", "{reply}");
     assert!(reply.get("value").is_none(), "{reply}");
     assert!(reply["why"].as_str().is_some_and(|why| !why.is_empty()), "{reply}");
-    assert!(
-        reply["last_good"].as_f64().is_some_and(|value| (value - 10.0).abs() < 1e-9),
-        "last measured diameter must stay Ø10: {reply}"
-    );
+    assert!(reply["last_good"].as_f64().is_some_and(|value| (value - 10.0).abs() < 1e-9), "last measured diameter must stay Ø10: {reply}");
 }
 
 /// Changing Bore1's diameter updates its measurement without rebinding the reference.
