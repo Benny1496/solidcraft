@@ -1,0 +1,71 @@
+// W23a: the two runnable model/dimension acceptance slices of the four recipes
+// in draft #8288, following CamWight's 2026-10-31 guidance.
+// These are intended to be inserted into the EXISTING
+// crates/engine/src/cmd/drawing_dimension_tests.rs (not a new test module).
+// W23-1 (#9821) owns drawing_m2.json: use it unchanged in both tests.
+//
+// E2E-01: the same drawing dimension measures Bore1 Ø12 after its parameter
+// changes from Ø10, while Bore2 stays independent.
+#[test]
+fn w23a_m2_e2e01_bore_diameter_update_keeps_dimension_identity() {
+    let mut s = Session::default();
+    let script: Value = serde_json::from_str(include_str!("../../../../examples/acceptance/drawing_m2.json")).unwrap();
+    let made = s.run_script(&script).unwrap();
+    let top = made.last().unwrap()["view"].clone();
+    let drawing = ids::encode(s.drawing("test").unwrap().id);
+    let bore1 = json!({"body": "Plate", "index": round_index(&s, "Plate", [20.0, 20.0, 20.0], 5.0)});
+    let bore2 = json!({"body": "Plate", "index": round_index(&s, "Plate", [60.0, 50.0, 20.0], 5.0)});
+    let added1 = run(&mut s, "drawing.dimension.add", json!({"view": top, "kind": {"radial": {"edge": bore1}}}));
+    reads(&added1, 10.0, "Ø10.00");
+    let id1 = added1["dimension"].clone();
+    let added2 = run(&mut s, "drawing.dimension.add", json!({"view": top, "kind": {"radial": {"edge": bore2}}}));
+    reads(&added2, 10.0, "Ø10.00");
+    let id2 = added2["dimension"].clone();
+    assert_ne!(id1, id2, "the two bores need independent dimension identities");
+
+    run(&mut s, "drawing.close", json!({}));
+    run(&mut s, "parameters.change", json!({"name": "bore1_d", "expression": "12 mm"}));
+    run(&mut s, "drawing.open", json!({"drawing": drawing}));
+
+    let changed = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id1}));
+    assert_eq!(changed["dimension"], id1, "E2E-01 must retain the original dimension ID");
+    reads(&changed, 12.0, "Ø12.00");
+    let other = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id2}));
+    assert_eq!(other["dimension"], id2, "Bore2 reference identity changed");
+    reads(&other, 10.0, "Ø10.00");
+}
+
+// E2E-02: deleting Bore1 must make its own dimension lost, not rebound to the
+// other remaining Ø10 rim. Status is the real inspect API value, not UI wording.
+#[test]
+fn w23a_m2_e2e02_deleted_bore_is_lost_never_rebound() {
+    let mut s = Session::default();
+    let script: Value = serde_json::from_str(include_str!("../../../../examples/acceptance/drawing_m2.json")).unwrap();
+    let made = s.run_script(&script).unwrap();
+    let top = made.last().unwrap()["view"].clone();
+    let drawing = ids::encode(s.drawing("test").unwrap().id);
+    let bore1 = json!({"body": "Plate", "index": round_index(&s, "Plate", [20.0, 20.0, 20.0], 5.0)});
+    let bore2 = json!({"body": "Plate", "index": round_index(&s, "Plate", [60.0, 50.0, 20.0], 5.0)});
+    let added1 = run(&mut s, "drawing.dimension.add", json!({"view": top, "kind": {"radial": {"edge": bore1}}}));
+    reads(&added1, 10.0, "Ø10.00");
+    let id1 = added1["dimension"].clone();
+    let added2 = run(&mut s, "drawing.dimension.add", json!({"view": top, "kind": {"radial": {"edge": bore2}}}));
+    reads(&added2, 10.0, "Ø10.00");
+    let id2 = added2["dimension"].clone();
+    assert_ne!(id1, id2);
+
+    run(&mut s, "drawing.close", json!({}));
+    run(&mut s, "timeline.delete", json!({"feature": "Bore1"}));
+    run(&mut s, "drawing.open", json!({"drawing": drawing}));
+
+    let lost = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id1}));
+    assert_eq!(lost["dimension"], id1, "deleted Bore1's dimension was replaced or rebound");
+    assert_eq!(lost["status"], "lost", "E2E-02 must report the exact 'lost' API status");
+    assert!(lost["why"].as_str().is_some_and(|s| !s.is_empty()),
+        "a lost reference must include the reason: {lost}");
+    assert!(lost.get("value").is_none(), "a lost bore must not report Bore2's live diameter: {lost}");
+
+    let surviving = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id2}));
+    assert_eq!(surviving["dimension"], id2, "Bore2 dimension was changed");
+    reads(&surviving, 10.0, "Ø10.00");
+}
