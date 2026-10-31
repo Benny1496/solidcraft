@@ -10,6 +10,14 @@ The source design states are already defined analytically in oracles 84, 86
 and 87 (with 85 retained as a width-change cross-check). Do not duplicate
 those oracle geometry files or their reference-value calculations.
 
+## CamWight review updates (31 October 2026)
+
+CamWight confirmed E2E-01/02 and requested succinct Rust test names/comments, an extra `last_good == 10` check for E2E-02, and E2E-03/04 test coverage. The five focused test functions in the existing `drawing_dimension_tests.rs` now cover the two accepted cases, two independent undo/redo paths and the three Save/Reopen source states (`unchanged`, `resized`, `deleted`). The latter exercises the historical last value merged in #9764, stable authored text positions and dimensions; **the new integration must pass CI before it is claimed as verified**.
+
+This branch merges the latest `drawings` state while retaining the W23-1 #9821/#9254 view-command dependency until its upstream PRs land. The dependent code remains attributed to those upstream PRs, not a new production contribution here.
+
+The **four complete UI/paper U2 scenarios remain NOT RUN**. This PR's executable tests are **native Engine subsets**, not end-user UI tests. Additional `drawing_scene` work is deliberately deferred until U2 is implemented, following CamWight's review.
+
 ## Runnable engine acceptance subset (31 October 2026)
 
 Following [CamWight's request in #8288](https://github.com/tangency-labs/solidcraft/pull/8288#issuecomment-6541465133), this draft now includes **two Rust engine acceptance tests** in the existing `crates/engine/src/cmd/drawing_dimension_tests.rs`:

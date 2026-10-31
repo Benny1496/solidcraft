@@ -45,7 +45,7 @@ fn plate() -> Drawing {
         excluded: Excluded { count: false, print: true },
     }));
     Arc::make_mut(&mut d.sheets[0]).documents = Some(SheetComponent { source: plate_id, component: 7 });
-    Arc::make_mut(&mut d.properties).set("author", json!("Jane Doe")).unwrap();
+    Arc::make_mut(&mut d.properties).set(crate::metadata::Owner::Design, "author", json!("Jane Doe")).unwrap();
     d.units = Units::Fixed { unit: "in".into() };
     let (assembly, bolt_sheet) = (d.sheets[0].id, d.sheets[1].id);
     let mut add = |d: &mut Drawing, sheet, kind, place, settings, reference_margin_mm| {
@@ -64,7 +64,13 @@ fn plate() -> Drawing {
     let iso = ViewKind::Base { source: plate_id, view: ViewDirection::Named(NamedView::IsoFrontRight) };
     let full_size = ViewOverrides { scale: Some("1:1".parse().unwrap()), tangent_edges: Some(TangentEdges::Show), ..ViewOverrides::default() };
     add(&mut d, bolt_sheet, iso, ViewPlace::At([105.0, 148.5]), full_size, 5.0);
-    let corner = |edges: [&str; 2]| ModelPoint { body: "Plate".into(), origin_feature: 1, edges: edges.map(String::from).to_vec(), path: Vec::new() };
+    let corner = |edges: [&str; 2]| ModelPoint {
+        body: "Plate".into(),
+        origin_feature: 1,
+        edges: edges.map(String::from).to_vec(),
+        centre: false,
+        path: Vec::new(),
+    };
     let edge = |name: &str| ModelEdge { body: "Plate".into(), origin_feature: 1, name: name.into(), path: vec![3, 7] };
     let measures = [
         DimensionKind::Linear {
@@ -79,7 +85,7 @@ fn plate() -> Drawing {
     let texts = [(TextPlace::Centred, None), (TextPlace::At([0.0, -20.0]), None), (TextPlace::At([12.5, 30.0]), Some("≈45°".to_string()))];
     for (kind, (text, override_text)) in measures.into_iter().zip(texts) {
         let id = d.allocate_id(&mut id_source).unwrap();
-        d.add_dimensions([Arc::new(Dimension { id, view: front, kind, offset_mm: -10.0, text, decimals: 1, override_text })]);
+        d.add_dimensions([Arc::new(Dimension { id, view: front, kind, offset_mm: -10.0, text, decimals: 1, override_text, last_good: None })]);
     }
     let id = d.allocate_id(&mut id_source).unwrap();
     d.add_balloons([Arc::new(Balloon { id, view: front, edge: edge("F1:front|F1:top"), at: [60.0, 45.0] })]);
@@ -258,7 +264,7 @@ fn a_fixed_unit_is_a_length_unit_of_the_expression_table() {
         read(&v).map(|d| d.units)
     };
     for (unit, kind, _) in expr::UNITS {
-        assert_eq!(units(json!({"fixed": {"unit": unit}})).is_ok(), kind == expr::Kind::Length, "{unit}");
+        assert_eq!(units(json!({"fixed": {"unit": unit}})).is_ok(), *kind == expr::Kind::Length, "{unit}");
     }
     assert_eq!(units(json!({"fixed": {"unit": "in"}})).unwrap(), Units::Fixed { unit: "in".into() });
     assert_eq!(units(json!("follow_model")).unwrap(), Units::FollowModel);
@@ -690,6 +696,40 @@ fn a_drawing_a_design_cant_read_refuses_the_design() {
     assert_eq!(refused(&|v| v["drawings"][0]["properties"]["com.example"] = json!({"huge": 1e300})), "read 1");
     let out_of_range = refused(&|v| v["drawings"][0]["sheets"][0]["dpi"] = json!(1e300));
     assert!(out_of_range.starts_with("drawing 1: damaged drawing: the number "), "{out_of_range}");
+}
+
+/// A copy that must open again (an autosave, a crash report's design) keeps every drawing a read
+/// takes: one breaking its own rules, the later of two with one id and those past the cap are left
+/// out, each named with its rule.
+#[test]
+fn a_copy_that_must_open_leaves_out_only_the_drawings_a_read_refuses() {
+    let numbered = |id: u64| Arc::new(Drawing { id, name: format!("Plate {id}"), ..plate() });
+    let mut doc = crate::Document::new("Plate");
+    doc.drawings = vec![numbered(1), numbered(2)];
+    assert!(matches!(openable(&doc), (Cow::Borrowed(_), ref left_out) if left_out.is_empty()));
+
+    let broken = Arc::new(Drawing { language: "?".into(), ..(*numbered(3)).clone() });
+    let again = Arc::new(Drawing { name: "Plate 1 again".into(), ..(*numbered(1)).clone() });
+    doc.drawings = vec![numbered(1), broken, again, numbered(4)];
+    let (kept, left_out) = openable(&doc);
+    assert_eq!(kept.drawings, [numbered(1), numbered(4)]);
+    assert_eq!(left_out.len(), 2);
+    let (three, one) = (ids::encode(3), ids::encode(1));
+    assert!(left_out[0].starts_with(&format!(r#"drawing "Plate 3" ({three}) left out: the language is not"#)), "{left_out:?}");
+    assert_eq!(left_out[1], format!(r#"drawing "Plate 1 again" ({one}) left out: two drawings have the id {one}"#));
+
+    // A drawing left out takes no id from a later one.
+    let broken_first = Arc::new(Drawing { language: "?".into(), ..(*numbered(1)).clone() });
+    doc.drawings = vec![broken_first, numbered(1)];
+    let (kept, left_out) = openable(&doc);
+    assert_eq!(kept.drawings, [numbered(1)]);
+    assert_eq!(left_out.len(), 1, "{left_out:?}");
+
+    doc.drawings = (1..=MAX_DRAWINGS as u64 + 2).map(numbered).collect();
+    let (kept, left_out) = openable(&doc);
+    assert_eq!(kept.drawings, doc.drawings[..MAX_DRAWINGS]);
+    let over = |id: u64| format!(r#"drawing "Plate {id}" ({}) left out: a design holds at most {MAX_DRAWINGS} drawings"#, ids::encode(id));
+    assert_eq!(left_out, [over(MAX_DRAWINGS as u64 + 1), over(MAX_DRAWINGS as u64 + 2)]);
 }
 
 /// The number of values in `v`, itself included.

@@ -1,6 +1,6 @@
 //! Autosave and crash recovery.
 //!
-//! Each open design keeps its own recovery entry in the recovery folder: `<id>.solidcraft` (the design
+//! Each open design keeps its own recovery entry in the recovery folder: `<id>.sc` (the design
 //! as of the last autosave), `<id>.json` (its file path, name and time) and `<id>.lock`, which
 //! the app holds locked while it runs. Autosaves are written atomically, only when the design
 //! has unsaved changes it hasn't written yet; a design with nothing unsaved has no entry. An
@@ -8,12 +8,13 @@
 //! the next launch offers to recover it.
 
 use std::fs::{self, File, OpenOptions};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use solidcraft_doc::Document;
+use solidcraft_doc::{Document, drawing};
 
 use crate::{EngineError, Result, Session};
 
@@ -39,9 +40,9 @@ pub fn default_dir() -> Option<PathBuf> {
     };
     let (dir, legacy) = dirs_under(&long_names(&root), cfg!(windows) || cfg!(target_os = "macos"));
     // Compatibility shim (docs/compatibility.md): autosaves made before the rename (or, in the
-    // Flatpak sandbox, under the old app id) are copied to the new folder on first launch; the
+    // Flatpak sandbox, under an earlier app id) are copied to the new folder on first launch; the
     // old folder is left as it was.
-    for old in solidcraft_io::legacy_flatpak_path(&dir).into_iter().chain([legacy]) {
+    for old in solidcraft_io::legacy_flatpak_paths(&dir).into_iter().chain([legacy]) {
         if let Err(e) = solidcraft_io::adopt_legacy_dir(&dir, &old) {
             log::warn!("recovery: could not copy {} to {}: {e}", old.display(), dir.display());
         }
@@ -91,12 +92,32 @@ fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-/// An entry's design: `<id>.solidcraft`, or `<id>.solvecraft` for an autosave copied from a
-/// pre-rename recovery folder (compatibility shim, docs/compatibility.md).
+/// Recovery metadata is small; a damaged or hostile entry must not exhaust memory.
+const MAX_ENTRY_BYTES: usize = 1 << 20;
+
+/// Read only bounded, regular-file metadata. The second type check and bounded read
+/// also protect against files changed while the recovery folder is being scanned.
+fn read_entry(path: &Path) -> Option<Entry> {
+    let metadata = fs::metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_ENTRY_BYTES as u64 {
+        return None;
+    }
+    let file = File::open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_ENTRY_BYTES as u64 + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() > MAX_ENTRY_BYTES {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// An entry's design: `<id>.sc`, or `<id>.solidcraft` / `<id>.solvecraft` for an autosave an
+/// earlier release wrote (compatibility shim, docs/compatibility.md).
 fn design_file(dir: &Path, id: &str) -> PathBuf {
-    let current = file(dir, id, solidcraft_io::DESIGN_EXT);
-    let legacy = file(dir, id, solidcraft_io::LEGACY_DESIGN_EXT);
-    if !current.is_file() && legacy.is_file() { legacy } else { current }
+    solidcraft_io::DESIGN_EXTS.iter().map(|ext| file(dir, id, ext)).find(|p| p.is_file()).unwrap_or_else(|| file(dir, id, solidcraft_io::DESIGN_EXT))
 }
 
 fn file(dir: &Path, id: &str, ext: &str) -> PathBuf {
@@ -114,8 +135,9 @@ pub fn orphans(dir: &Path) -> Vec<Entry> {
             if p.extension().and_then(|x| x.to_str()) != Some("json") {
                 return None;
             }
-            let entry: Entry = serde_json::from_slice(&fs::read(&p).ok()?).ok()?;
-            if !valid_id(&entry.id) || !design_file(dir, &entry.id).is_file() {
+            let id = p.file_stem().and_then(|s| s.to_str())?;
+            let entry = read_entry(&p)?;
+            if !valid_id(id) || entry.id != id || !design_file(dir, id).is_file() {
                 return None;
             }
             // Held by a running app: not an orphan.
@@ -138,26 +160,21 @@ pub fn load(dir: &Path, id: &str) -> Result<(Document, Entry)> {
     if !valid_id(id) {
         return Err(EngineError::Other(format!("no recovered design `{id}`")));
     }
-    let entry: Entry = fs::read(file(dir, id, "json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .ok_or_else(|| EngineError::Other(format!("no recovered design `{id}`")))?;
+    let entry = read_entry(&file(dir, id, "json")).filter(|e| e.id == id).ok_or_else(|| EngineError::Other(format!("no recovered design `{id}`")))?;
     let path = design_file(dir, id);
-    let bytes = solidcraft_io::vfs::read(&path.to_string_lossy(), solidcraft_io::MAX_DESIGN_BYTES)
+    let bytes = solidcraft_io::limits::read(&path.to_string_lossy(), solidcraft_io::limits::Kind::Design)
         .map_err(|e| EngineError::Other(format!("recovered design `{id}`: {e}")))?;
     Ok((solidcraft_io::read_design(&bytes)?, entry))
 }
 
 /// Delete an entry. Only a real one: `<id>.json` must describe entry `id` and its design must
-/// be there, so a folder and id that merely name someone's `part.solidcraft` delete nothing.
+/// be there, so a folder and id that merely name someone's `part.sc` delete nothing.
 pub fn remove(dir: &Path, id: &str) -> Result<()> {
-    let is_entry = valid_id(id)
-        && fs::read(file(dir, id, "json")).ok().and_then(|b| serde_json::from_slice::<Entry>(&b).ok()).is_some_and(|e| e.id == id)
-        && design_file(dir, id).is_file();
+    let is_entry = valid_id(id) && read_entry(&file(dir, id, "json")).is_some_and(|e| e.id == id) && design_file(dir, id).is_file();
     if !is_entry {
         return Err(EngineError::Other(format!("no recovered design `{id}`")));
     }
-    for ext in ["json", solidcraft_io::DESIGN_EXT, solidcraft_io::LEGACY_DESIGN_EXT, "lock"] {
+    for ext in ["json", "lock"].into_iter().chain(solidcraft_io::DESIGN_EXTS) {
         let _ = fs::remove_file(file(dir, id, ext));
     }
     Ok(())
@@ -194,7 +211,7 @@ impl Drop for Autosaver {
 struct Writing {
     doc: Arc<Document>,
     visibility: crate::Visibility,
-    done: std::sync::mpsc::Receiver<Result<()>>,
+    done: std::sync::mpsc::Receiver<Result<Vec<String>>>,
 }
 
 /// What one autosave writes, taken from the session in an instant.
@@ -203,20 +220,18 @@ struct Snapshot {
     id: String,
     doc: Arc<Document>,
     visibility: crate::Visibility,
+    dimension_values: crate::DimensionValues,
     path: Option<String>,
 }
 
 impl Snapshot {
     /// Write the design and its entry (the slow part: serialising and compressing the design).
-    fn write(&self) -> Result<()> {
+    /// Returns a line for each drawing left out, as one breaking a rule would keep the copy from
+    /// opening ([`drawing::openable`]).
+    fn write(&self) -> Result<Vec<String>> {
         let io = |e: std::io::Error| EngineError::Other(format!("autosave: {e}"));
-        let bytes = if self.visibility.is_empty() {
-            solidcraft_io::write_design_container(&self.doc)?
-        } else {
-            let mut doc = (*self.doc).clone();
-            doc.visibility = self.visibility.clone();
-            solidcraft_io::write_design_container(&doc)?
-        };
+        let (doc, left_out) = drawing::openable(&self.doc);
+        let bytes = solidcraft_io::write_design_container(&crate::as_saved(&doc, &self.visibility, &self.dimension_values))?;
         solidcraft_io::write_atomic(&file(&self.dir, &self.id, solidcraft_io::DESIGN_EXT), &bytes, false).map_err(io)?;
         let entry = Entry {
             id: self.id.clone(),
@@ -227,7 +242,7 @@ impl Snapshot {
         };
         let meta = serde_json::to_vec_pretty(&entry).map_err(|e| EngineError::Other(e.to_string()))?;
         solidcraft_io::write_atomic(&file(&self.dir, &self.id, "json"), &meta, false).map_err(io)?;
-        Ok(())
+        Ok(left_out)
     }
 }
 
@@ -280,7 +295,7 @@ impl Autosaver {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let (tx, rx) = std::sync::mpsc::channel();
-            let (doc, visibility) = (snapshot.doc.clone(), snapshot.visibility.clone());
+            let (doc, visibility, dimension_values) = (snapshot.doc.clone(), snapshot.visibility.clone(), snapshot.dimension_values.clone());
             let started = std::thread::Builder::new().name("autosave".into()).spawn(move || {
                 let _ = tx.send(snapshot.write());
             });
@@ -291,7 +306,7 @@ impl Autosaver {
                 }
                 // No thread to write on: write here, as before.
                 Err(_) => {
-                    let snapshot = Snapshot { dir: self.dir.clone(), id: self.id.clone(), doc, visibility, path: s.path.clone() };
+                    let snapshot = Snapshot { dir: self.dir.clone(), id: self.id.clone(), doc, visibility, dimension_values, path: s.path.clone() };
                     let written = snapshot.write();
                     self.written(s, snapshot.doc, snapshot.visibility, written)?;
                     Ok(true)
@@ -312,7 +327,7 @@ impl Autosaver {
         self.last_at = Instant::now();
         if !s.is_dirty() {
             if self.has_entry {
-                for ext in ["json", "solidcraft"] {
+                for ext in ["json"].into_iter().chain(solidcraft_io::DESIGN_EXTS) {
                     let _ = fs::remove_file(file(&self.dir, &self.id, ext));
                 }
                 self.has_entry = false;
@@ -325,7 +340,14 @@ impl Autosaver {
         if self.last.as_ref().is_some_and(|(l, v)| (Arc::ptr_eq(l, &s.doc) || **l == *s.doc) && *v == s.visibility) {
             return None;
         }
-        Some(Snapshot { dir: self.dir.clone(), id: self.id.clone(), doc: s.doc.clone(), visibility: s.visibility.clone(), path: s.path.clone() })
+        Some(Snapshot {
+            dir: self.dir.clone(),
+            id: self.id.clone(),
+            doc: s.doc.clone(),
+            visibility: s.visibility.clone(),
+            dimension_values: s.dimension_values.clone(),
+            path: s.path.clone(),
+        })
     }
 
     /// The running write's outcome, once it has one (`wait`: wait for it). True when no write
@@ -348,9 +370,10 @@ impl Autosaver {
         Ok(true)
     }
 
-    /// A write of `doc` (with `visibility`) ended with `outcome`.
-    fn written(&mut self, s: &Session, doc: Arc<Document>, visibility: crate::Visibility, outcome: Result<()>) -> Result<()> {
-        outcome?;
+    /// A write of `doc` (with `visibility`) ended with `outcome`: written, an error still names
+    /// each drawing it left out.
+    fn written(&mut self, s: &Session, doc: Arc<Document>, visibility: crate::Visibility, outcome: Result<Vec<String>>) -> Result<()> {
+        let left_out = outcome?;
         self.has_entry = true;
         // Crash replays start from this autosave from here, unless the design changed while it
         // was written: the journal then keeps the commands since its older start.
@@ -358,7 +381,7 @@ impl Autosaver {
             crate::crash::rebased(s, Some(&file(&self.dir, &self.id, solidcraft_io::DESIGN_EXT)), true);
         }
         self.last = Some((doc, visibility));
-        Ok(())
+        if left_out.is_empty() { Ok(()) } else { Err(EngineError::Other(left_out.join("; "))) }
     }
 
     /// The user closed this design (saving it or choosing Don't Save): discard only its entry.
@@ -368,7 +391,7 @@ impl Autosaver {
         if let Some(w) = self.writing.take() {
             let _ = w.done.recv();
         }
-        for ext in ["json", solidcraft_io::DESIGN_EXT] {
+        for ext in ["json"].into_iter().chain(solidcraft_io::DESIGN_EXTS) {
             let _ = fs::remove_file(file(&self.dir, &self.id, ext));
         }
         self.lock = None;
@@ -390,19 +413,37 @@ impl Autosaver {
 mod tests {
     #[test]
     fn autosave_from_a_legacy_folder_is_listed_and_loads() {
-        let d = std::env::temp_dir().join(format!("solidcraft-recovery-legacy-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        let id = "1-2-3";
-        let doc = Document::default();
-        fs::write(d.join(format!("{id}.solvecraft")), solidcraft_io::write_design(&doc)).unwrap();
-        let entry = Entry { id: id.into(), path: Some("/d/part.solvecraft".into()), name: "part".into(), saved_at: 1, features: 0 };
-        fs::write(d.join(format!("{id}.json")), serde_json::to_vec(&entry).unwrap()).unwrap();
-        assert_eq!(orphans(&d).iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), [id]);
-        let (_, loaded) = load(&d, id).unwrap();
-        assert_eq!(loaded, entry);
-        remove(&d, id).unwrap();
-        assert!(orphans(&d).is_empty() && !d.join(format!("{id}.solvecraft")).exists());
+        // Autosaves written by earlier releases: `.solvecraft` (before the rename) and
+        // `.solidcraft` (before designs were saved as `.sc`).
+        for ext in solidcraft_io::LEGACY_DESIGN_EXTS {
+            let d = std::env::temp_dir().join(format!("solidcraft-recovery-legacy-{ext}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&d);
+            fs::create_dir_all(&d).unwrap();
+            let id = "1-2-3";
+            let doc = Document::default();
+            fs::write(d.join(format!("{id}.{ext}")), solidcraft_io::write_design(&doc)).unwrap();
+            let entry = Entry { id: id.into(), path: Some(format!("/d/part.{ext}")), name: "part".into(), saved_at: 1, features: 0 };
+            fs::write(d.join(format!("{id}.json")), serde_json::to_vec(&entry).unwrap()).unwrap();
+            assert_eq!(orphans(&d).iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), [id], ".{ext}");
+            let (_, loaded) = load(&d, id).unwrap();
+            assert_eq!(loaded, entry);
+            remove(&d, id).unwrap();
+            assert!(orphans(&d).is_empty() && !d.join(format!("{id}.{ext}")).exists(), ".{ext}");
+            let _ = fs::remove_dir_all(&d);
+        }
+    }
+
+    /// New autosaves are written as `<id>.sc`.
+    #[test]
+    fn autosaves_are_written_as_sc() {
+        let d = dir("sc-ext");
+        let mut s = Session::default();
+        let mut a = Autosaver::new(&d, Duration::ZERO).unwrap();
+        s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        assert!(a.save(&s).unwrap());
+        assert!(d.join(format!("{}.sc", a.id)).is_file());
+        assert!(!d.join(format!("{}.solidcraft", a.id)).exists());
+        a.discard();
         let _ = fs::remove_dir_all(&d);
     }
 
@@ -444,6 +485,104 @@ mod tests {
         assert_eq!(entry.features, 1);
         remove(&d, &entry.id).unwrap();
         assert!(orphans(&d).is_empty());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A design's drawings are part of it (#3890), so a change to a drawing alone is unsaved
+    /// work: it is autosaved, and after a crash it comes back with the design.
+    #[test]
+    fn a_drawing_change_alone_is_autosaved_and_recovered() {
+        let d = dir("drawing");
+        let mut s = Session::default();
+        let mut a = Autosaver::new(&d, Duration::from_secs(3600)).unwrap();
+        s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        s.execute("drawing.create", &json!({"name": "Box drawing"})).unwrap();
+        s.mark_saved();
+        assert!(!a.save(&s).unwrap(), "nothing unsaved");
+        s.execute("drawing.properties.set", &json!({"values": {"author": "Jane Doe"}})).unwrap();
+        assert!(a.save(&s).unwrap(), "the drawing's change is unsaved");
+        drop(a);
+        let found = orphans(&d);
+        assert_eq!(found.len(), 1);
+        let (doc, entry) = load(&d, &found[0].id).unwrap();
+        assert_eq!(doc.drawings, s.doc.drawings);
+        assert_eq!(doc, *s.doc);
+        remove(&d, &entry.id).unwrap();
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A drawing that breaks a rule of the record would keep the whole autosave from opening:
+    /// the autosave keeps the rest of the design, and its error names the drawing and the rule.
+    #[test]
+    fn an_autosave_leaves_out_a_drawing_that_breaks_a_rule() {
+        let d = dir("broken-drawing");
+        let mut s = Session::default();
+        let mut a = Autosaver::new(&d, Duration::from_secs(3600)).unwrap();
+        s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        s.execute("drawing.create", &json!({"name": "Kept"})).unwrap();
+        s.execute("drawing.create", &json!({"name": "Broken"})).unwrap();
+        let mut doc = (*s.doc).clone();
+        let broken = doc.drawings.iter_mut().find(|d| d.name == "Broken").unwrap();
+        Arc::make_mut(broken).language = "?".into();
+        s.doc = Arc::new(doc);
+        let error = a.save(&s).unwrap_err().to_string();
+        assert!(error.starts_with(r#"drawing "Broken" ("#) && error.contains(") left out: the language is not"), "{error}");
+        assert!(!a.save(&s).unwrap(), "written: not again until the design changes");
+        drop(a);
+        let found = orphans(&d);
+        assert_eq!(found.len(), 1);
+        let (doc, entry) = load(&d, &found[0].id).unwrap();
+        assert_eq!(doc.features, s.doc.features);
+        assert_eq!(doc.drawings.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["Kept"]);
+        remove(&d, &entry.id).unwrap();
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// What is shown and hidden is not part of the design's undo history but is restored with it:
+    /// the autosave keeps a hidden body hidden (K9' check, gap G3).
+    #[test]
+    fn an_autosave_keeps_what_is_hidden() {
+        let d = dir("hidden");
+        let mut s = Session::default();
+        let mut a = Autosaver::new(&d, Duration::from_secs(3600)).unwrap();
+        s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10, "body_name": "Box"})).unwrap();
+        s.execute("browser.visibility", &json!({"items": ["Box"], "visible": false})).unwrap();
+        assert!(!s.visibility.is_empty());
+        assert!(a.save(&s).unwrap());
+        drop(a);
+        let found = orphans(&d);
+        let (doc, entry) = load(&d, &found[0].id).unwrap();
+        assert_eq!(doc.visibility, s.visibility);
+        remove(&d, &entry.id).unwrap();
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A drawing too large to save would fail the whole autosave: it is left out like one that
+    /// breaks a rule, the rest is written, and the error names it (K9' check, gap G2).
+    #[test]
+    fn an_autosave_leaves_out_a_drawing_too_large_to_save() {
+        let d = dir("huge-drawing");
+        let mut s = Session::default();
+        let mut a = Autosaver::new(&d, Duration::from_secs(3600)).unwrap();
+        s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        s.execute("drawing.create", &json!({"name": "Kept"})).unwrap();
+        let items = vec!["0"; 2_000_000].join(",");
+        let format = solidcraft_doc::format::DRAWING.format_string(1);
+        let huge = solidcraft_doc::drawing::Drawing::from_json(&format!(
+            r#"{{"format":"{format}","id":"0000000000002","name":"Huge","sources":[],"language":"en","sheets":[{{"id":"0000000000003","name":"S","sheet":{{"size":{{"standard":"a4"}}}}}}],"properties":{{"com.example":{{"items":[{items}]}}}}}}"#
+        ))
+        .unwrap();
+        let mut doc = (*s.doc).clone();
+        doc.drawings.push(Arc::new(huge));
+        s.doc = Arc::new(doc);
+        let error = a.save(&s).unwrap_err().to_string();
+        assert!(error.starts_with(r#"drawing "Huge" ("#) && error.contains("left out: drawing too large to save"), "{error}");
+        drop(a);
+        let found = orphans(&d);
+        assert_eq!(found.len(), 1);
+        let (doc, entry) = load(&d, &found[0].id).unwrap();
+        assert_eq!(doc.drawings.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["Kept"]);
+        remove(&d, &entry.id).unwrap();
         let _ = fs::remove_dir_all(&d);
     }
 
@@ -532,7 +671,7 @@ mod tests {
         let mut t = Session::default();
         let r = t.execute("doc.recover", &json!({"dir": d.to_string_lossy(), "id": id, "discard": true})).unwrap();
         assert_eq!(r["features"], 1, "{r}");
-        assert!(orphans(&d).is_empty() && !file(&d, &id, "json").exists() && !file(&d, &id, "solidcraft").exists());
+        assert!(orphans(&d).is_empty() && !file(&d, &id, "json").exists() && !file(&d, &id, solidcraft_io::DESIGN_EXT).exists());
         let part = d.join("part.solidcraft");
         fs::write(&part, solidcraft_io::write_design(&Document::default())).unwrap();
         assert!(t.execute("doc.recover", &json!({"dir": d.to_string_lossy(), "id": "part", "discard": true})).is_err());
@@ -549,7 +688,7 @@ mod tests {
         assert!(a.tick(&s, false).unwrap());
         s.mark_saved();
         a.tick(&s, false).unwrap();
-        assert!(!file(&d, &a.id, "solidcraft").exists());
+        assert!(!file(&d, &a.id, solidcraft_io::DESIGN_EXT).exists());
         a.close(&s);
         assert_eq!(fs::read_dir(&d).unwrap().count(), 0);
         // Closing with unsaved changes keeps them for the next launch.
@@ -559,5 +698,65 @@ mod tests {
         assert_eq!(orphans(&d).len(), 1);
         assert!(load(&d, "../etc").is_err());
         let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A corrupted or hostile recovery entry must not consume unbounded memory at startup.
+    /// A metadata file exactly at the limit is still accepted.
+    #[test]
+    fn oversized_recovery_metadata_does_not_hide_valid_entries() {
+        let d = dir("bounded-metadata");
+        fs::create_dir_all(&d).unwrap();
+        let good = Entry { id: "good".into(), path: None, name: "good".into(), saved_at: 1, features: 0 };
+        let mut boundary = Entry { id: "boundary".into(), path: None, name: String::new(), saved_at: 2, features: 0 };
+        let base_len = serde_json::to_vec(&boundary).unwrap().len();
+        boundary.name = "x".repeat((1 << 20) - base_len);
+        let oversized = Entry { id: "oversized".into(), name: "x".repeat(1 << 20), ..good.clone() };
+        for entry in [&good, &boundary, &oversized] {
+            fs::write(file(&d, &entry.id, solidcraft_io::DESIGN_EXT), solidcraft_io::write_design(&Document::default())).unwrap();
+            fs::write(file(&d, &entry.id, "json"), serde_json::to_vec(entry).unwrap()).unwrap();
+        }
+        assert_eq!(fs::metadata(file(&d, "boundary", "json")).unwrap().len(), 1 << 20);
+        assert!(fs::metadata(file(&d, "oversized", "json")).unwrap().len() > 1 << 20);
+        let mut ids: Vec<String> = orphans(&d).into_iter().map(|e| e.id).collect();
+        ids.sort();
+        assert_eq!(ids, ["boundary", "good"]);
+        assert_eq!(load(&d, "good").unwrap().1, good);
+        assert_eq!(load(&d, "boundary").unwrap().1, boundary);
+        assert!(load(&d, "oversized").is_err());
+        assert!(remove(&d, "oversized").is_err());
+        assert!(file(&d, "oversized", "json").exists(), "invalid metadata must not delete a design");
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// A mismatched metadata ID must not redirect the recovered design's save path.
+    #[test]
+    fn recovery_metadata_id_must_match_its_filename() {
+        let d = dir("metadata-id");
+        fs::create_dir_all(&d).unwrap();
+        let wrong = Entry { id: "other".into(), path: Some("/unrelated-design.solidcraft".into()), name: "wrong".into(), saved_at: 1, features: 0 };
+        fs::write(file(&d, "actual", "json"), serde_json::to_vec(&wrong).unwrap()).unwrap();
+        for id in ["actual", "other"] {
+            fs::write(file(&d, id, solidcraft_io::DESIGN_EXT), solidcraft_io::write_design(&Document::default())).unwrap();
+        }
+        assert!(orphans(&d).is_empty(), "metadata under another ID must not be offered");
+        assert!(load(&d, "actual").is_err(), "a mismatched path must not become the next save target");
+        assert!(remove(&d, "actual").is_err());
+        assert!(file(&d, "actual", solidcraft_io::DESIGN_EXT).exists());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// A device posing as a JSON file must not block the startup recovery scan.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recovery_scan_skips_non_regular_metadata_files() {
+        use std::os::unix::fs::symlink;
+
+        let d = dir("device-metadata");
+        fs::create_dir_all(&d).unwrap();
+        symlink("/dev/zero", file(&d, "device", "json")).unwrap();
+        assert!(orphans(&d).is_empty());
+        assert!(load(&d, "device").is_err());
+        assert!(remove(&d, "device").is_err());
+        fs::remove_dir_all(&d).unwrap();
     }
 }
