@@ -68,6 +68,15 @@ jobs:
           assert upstream.count(marker) == 0, "E2E tests already present upstream; stop to avoid duplicate tests"
           assert contributed.count(marker) == 1, "Cannot locate start of our five contributed tests"
           added = marker + contributed.split(marker, 1)[1]
+          # Current drawings has round_index(session, centre, radius); the older PR tests
+          # called round_index(session, body_name, centre, radius).
+          # Adapt only the isolated test overlay, never the original PR or engine.
+          for old_call, new_call in (
+            ('round_index(&s, "Plate", [20.0, 20.0, 20.0], 5.0)', 'round_index(&s, [20.0, 20.0, 20.0], 5.0)'),
+            ('round_index(&s, "Plate", [60.0, 50.0, 20.0], 5.0)', 'round_index(&s, [60.0, 50.0, 20.0], 5.0)'),
+          ):
+            assert added.count(old_call) == 1, "Expected original call missing"
+            added = added.replace(old_call, new_call)
           expected = (
             "fn changing_a_bores_diameter_keeps_its_dimension()",
             "fn deleting_a_bore_loses_its_dimension_and_never_moves_it()",
