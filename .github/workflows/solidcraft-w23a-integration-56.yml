@@ -1,0 +1,136 @@
+name: SolidCraft W23a Integration Test 56 (fork only)
+
+on:
+  push:
+    branches:
+      - integration/w23a-8288-clean-20261102
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-w23a-integration-56
+  cancel-in-progress: false
+
+jobs:
+  w23a-native:
+    name: Test 56 - W23a clean integration on drawings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout exact integration commit in SolidCraft fork
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify source ownership and version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "integration/w23a-8288-clean-20261102"
+          echo "T56_TESTED_SHA=$(git rev-parse HEAD)"
+          git diff --check
+          python3 - <<'PY'
+          from pathlib import Path
+          content = Path("crates/engine/src/cmd/drawing_dimension_tests.rs").read_text()
+          assert "fn workshop_plate_round_index(s: &Session, body: &str," in content
+          assert content.count('workshop_plate_round_index(&s, "Plate",') == 2
+          assert "reference_margin_mm" not in content
+          assert "reference_shown_percent" in content
+          assert '"body": "Plate"' in content
+          for name in [
+              "changing_a_bores_diameter_keeps_its_dimension",
+              "deleting_a_bore_loses_its_dimension_and_never_moves_it",
+              "undo_and_redo_a_diameter_change_keep_its_dimension",
+              "undo_and_redo_a_deleted_bore_restore_its_dimension",
+              "reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value",
+          ]:
+              assert content.count("fn " + name + "()") == 1, name
+          print("T56_SOURCE_INTEGRATION=PASS")
+          PY
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: Run static contract validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/fixtures/w23a-drawing-updates/validate.py
+          echo "T56_STATIC_CONTRACT=PASS"
+      - name: Validate formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --package solidcraft-engine -- --check
+          echo "T56_FMT=PASS"
+      - name: Run real native Rust test groups (no zero-test successes)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test56-report
+          echo "git_sha=$(git rev-parse HEAD)" > test56-report/metadata.txt
+          echo "upstream_drawings_base=d5fd14135f0e220b45171010722a0064683c63f1" >> test56-report/metadata.txt
+          echo "original_pr_head=c86b7a4c233d4903ded52ac155b1f0ee82abd79c" >> test56-report/metadata.txt
+          cargo test --profile ci -p solidcraft-engine --lib -- --list > test56-report/engine-list.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          lines = Path("test56-report/engine-list.txt").read_text().splitlines()
+          for prefix in (
+              "cmd::drawing_dimension::tests::",
+              "cmd::drawing_view::tests::",
+              "schema::drawing_view::tests::",
+              "cmd::drawing_export::tests::",
+          ):
+              found = [x for x in lines if x.startswith(prefix) and x.endswith(": test")]
+              assert found, "zero tests for " + prefix
+              print("T56_DISCOVERY", prefix, len(found))
+          for case in (
+              "changing_a_bores_diameter_keeps_its_dimension",
+              "deleting_a_bore_loses_its_dimension_and_never_moves_it",
+              "undo_and_redo_a_diameter_change_keep_its_dimension",
+              "undo_and_redo_a_deleted_bore_restore_its_dimension",
+              "reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value",
+          ):
+              assert "cmd::drawing_dimension::tests::" + case + ": test" in lines, "missing E2E " + case
+          print("T56_ALL_FIVE_E2E_DISCOVERED=PASS")
+          PY
+          run_group() {
+            local label="$1" package="$2" filter="$3"
+            echo "T56_GROUP_START=$label"
+            timeout 75m cargo test --profile ci -p "$package" --lib "$filter" -- --nocapture 2>&1 | tee "test56-report/$label.log"
+            python3 - "$label" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+          label = sys.argv[1]
+          text = Path("test56-report/" + label + ".log").read_text()
+          found = re.findall(r"test result:\s*ok\.\s*(\d+) passed;\s*(\d+) failed;\s*(\d+) ignored;", text)
+          assert len(found) == 1, f"{label}: expected one test result, found {found}"
+          passed, failed, ignored = map(int, found[0])
+          assert passed > 0 and failed == 0 and ignored == 0, f"{label}: invalid result {found}"
+          with Path("test56-report/group-summary.txt").open("a") as output:
+              output.write(f"{label}: {passed} pass / {failed} fail / {ignored} ignored\n")
+          print(f"T56_GROUP_PASS={label} count={passed}")
+          PY
+          }
+          run_group dimension solidcraft-engine cmd::drawing_dimension::tests
+          run_group view solidcraft-engine cmd::drawing_view::tests
+          run_group schema_view solidcraft-engine schema::drawing_view::tests
+          run_group export solidcraft-engine cmd::drawing_export::tests
+          run_group doc_view solidcraft-doc drawing_view
+          echo "T56_NATIVE_TESTS=PASS"
+      - name: Preserve original test output and tested commit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t56-w23a-integration
+          path: test56-report/
+          if-no-files-found: warn
+          retention-days: 14
