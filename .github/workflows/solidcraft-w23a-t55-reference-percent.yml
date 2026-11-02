@@ -126,14 +126,63 @@ jobs:
             echo "original_pr_tests=c86b7a4c233d4903ded52ac155b1f0ee82abd79c"
             echo "overlay=only five E2E test functions and acceptance fixture"
           } > t55-report/metadata.txt
+          # First list the actual test names to prevent a false green from 0 matched tests.
+          # The Rust paths are cmd::drawing_dimension::tests, not cmd::drawing_dimension_tests.
           timeout 75m bash -euo pipefail -c '
-            cargo test --profile ci -p solidcraft-engine --lib cmd::drawing_dimension_tests -- --nocapture
-            cargo test --profile ci -p solidcraft-engine --lib cmd::drawing_view_tests -- --nocapture
-            cargo test --profile ci -p solidcraft-engine --lib schema::drawing_view_tests -- --nocapture
-            cargo test --profile ci -p solidcraft-engine --lib cmd::drawing_export_tests -- --nocapture
-            cargo test --profile ci -p solidcraft-doc --lib drawing_view -- --nocapture
+            cargo test --profile ci -p solidcraft-engine --lib -- --list > t55-report/engine-test-list.txt
+            python3 - <<PY
+          from pathlib import Path
+          tests = Path("t55-report/engine-test-list.txt").read_text().splitlines()
+          groups = [
+              "cmd::drawing_dimension::tests::",
+              "cmd::drawing_view::tests::",
+              "schema::drawing_view::tests::",
+              "cmd::drawing_export::tests::",
+          ]
+          for group in groups:
+              matches = [s for s in tests if s.startswith(group) and s.endswith(": test")]
+              assert matches, f"ZERO ENGINE TESTS discovered for {group}"
+              print(f"T55_TEST_DISCOVERY group={group} count={len(matches)}")
+          for case in [
+              "changing_a_bores_diameter_keeps_its_dimension",
+              "deleting_a_bore_loses_its_dimension_and_never_moves_it",
+              "undo_and_redo_a_diameter_change_keep_its_dimension",
+              "undo_and_redo_a_deleted_bore_restore_its_dimension",
+              "reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value",
+          ]:
+              full = "cmd::drawing_dimension::tests::" + case + ": test"
+              assert full in tests, f"Missing official PR E2E test: {full}"
+          print("T55_FIVE_PR_E2E_TESTS_DISCOVERED=PASS")
+          PY
+            run_group() {
+              pkg="$1"
+              filter="$2"
+              group="$3"
+              echo "T55_GROUP_START=$group filter=$filter package=$pkg"
+              cargo test --profile ci -p "$pkg" --lib "$filter" -- --nocapture 2>&1 | tee "t55-report/$group.log"
+              python3 - "$group" <<PY
+          from pathlib import Path
+          import re
+          import sys
+          group = sys.argv[1]
+          log = Path("t55-report/" + group + ".log").read_text()
+          log = re.sub(r"\x1b\[[0-9;]*m", "", log)
+          results = re.findall(r"test result:\s*ok\.\s*(\d+) passed;\s*(\d+) failed;", log)
+          assert len(results) == 1, f"{group}: expected exactly one test result, got {results}"
+          passed, failed = map(int, results[0])
+          assert passed > 0 and failed == 0, f"{group}: zero tests or failures: {results}"
+          print(f"T55_GROUP_PASS={group} passed={passed} failed={failed}")
+          with Path("t55-report/group-summary.txt").open("a") as f:
+              f.write(f"{group}: {passed} passed, {failed} failed\n")
+          PY
+            }
+            run_group solidcraft-engine cmd::drawing_dimension::tests engine_dimension
+            run_group solidcraft-engine cmd::drawing_view::tests engine_view
+            run_group solidcraft-engine schema::drawing_view::tests engine_schema_view
+            run_group solidcraft-engine cmd::drawing_export::tests engine_export
+            run_group solidcraft-doc drawing_view doc_view
+            echo "T55_NATIVE_TESTS=PASS"
           ' 2>&1 | tee t55-report/native-tests.log
-          echo "T55_NATIVE_TESTS=PASS"
       - name: Preserve native test report and source identifiers
         if: always()
         uses: actions/upload-artifact@v4
