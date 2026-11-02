@@ -1,0 +1,135 @@
+name: SolidCraft W23a Test 55 - percentage-view API with E2E dimensions
+
+on:
+  push:
+    branches:
+      - tests/w23a-t55-reference-percent-20261102
+    paths:
+      - .github/workflows/solidcraft-w23a-t55-reference-percent.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-fork-w23a-t55
+  cancel-in-progress: false
+
+jobs:
+  native-drawing-regression:
+    name: T55 - Native Drawing compatibility with merged 10713
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Verify that the workflow is running in Benny's SolidCraft fork
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          echo "SOLIDCRAFT_FORK_ACTIONS_T55=PASS"
+          echo "repo=$GITHUB_REPOSITORY"
+          echo "runner=$RUNNER_OS"
+      - name: Checkout pinned upstream drawings, not the fork main branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: d5fd14135f0e220b45171010722a0064683c63f1
+          path: source
+          persist-credentials: false
+      - name: Checkout only our existing E2E tests and fixture from unchanged PR 8288
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Benny1496/solidcraft
+          ref: c86b7a4c233d4903ded52ac155b1f0ee82abd79c
+          path: existing-pr-tests
+          persist-credentials: false
+          sparse-checkout: |
+            crates/engine/src/cmd/drawing_dimension_tests.rs
+            examples/acceptance/drawing_m2.json
+      - name: Prepare isolated native tests (never copy obsolete PR production code)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "d5fd14135f0e220b45171010722a0064683c63f1"
+          test "$(git -C existing-pr-tests rev-parse HEAD)" = "c86b7a4c233d4903ded52ac155b1f0ee82abd79c"
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          base = Path("source")
+          old = Path("existing-pr-tests")
+          upstream_test = base / "crates/engine/src/cmd/drawing_dimension_tests.rs"
+          pr_test = old / "crates/engine/src/cmd/drawing_dimension_tests.rs"
+          marker = "/// One command-script plate with two independently authored, positioned bore dimensions."
+          upstream = upstream_test.read_text()
+          contributed = pr_test.read_text()
+          assert upstream.count(marker) == 0, "E2E tests already present upstream; stop to avoid duplicate tests"
+          assert contributed.count(marker) == 1, "Cannot locate start of our five contributed tests"
+          added = marker + contributed.split(marker, 1)[1]
+          expected = (
+            "fn changing_a_bores_diameter_keeps_its_dimension()",
+            "fn deleting_a_bore_loses_its_dimension_and_never_moves_it()",
+            "fn undo_and_redo_a_diameter_change_keep_its_dimension()",
+            "fn undo_and_redo_a_deleted_bore_restore_its_dimension()",
+            "fn reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value()",
+          )
+          assert all(added.count(case) == 1 for case in expected), "Five original E2E cases must be present"
+          assert "reference_margin_mm" not in added, "Must not reintroduce old view field"
+          for filename in ("crates/engine/src/cmd/drawing_view.rs", "crates/engine/src/schema/drawing_view.rs", "crates/engine/src/cmd/drawing_dimension_tests.rs"):
+            content = (base / filename).read_text()
+            assert "reference_shown_percent" in content, "Missing renamed percentage view field in " + filename
+            assert "reference_margin_mm" not in content, "Old field still present in " + filename
+          upstream_test.write_text(upstream.rstrip() + "\n\n" + added)
+          fixture = "examples/acceptance/drawing_m2.json"
+          assert not (base / fixture).exists(), "Fixture was integrated upstream, reconsider test overlay"
+          (base / fixture).parent.mkdir(parents=True, exist_ok=True)
+          shutil.copyfile(old / fixture, base / fixture)
+          print("T55_OVERLAY=PASS", "five PR native tests and one fixture added only; upstream engine remains unchanged")
+          PY
+          git -C source diff --check
+          echo "T55_SOURCE_SHA=d5fd14135f0e220b45171010722a0064683c63f1"
+          echo "T55_PR_TEST_SHA=c86b7a4c233d4903ded52ac155b1f0ee82abd79c"
+      - name: Install current stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache native Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: source
+          cache-on-failure: true
+      - name: Check formatting on the actual test overlay
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --package solidcraft-engine -- --check
+      - name: Execute focused engine plus doc view regression (75 minutes max)
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p t55-report
+          {
+            echo "test=T55"
+            echo "runner_repo=$GITHUB_REPOSITORY"
+            echo "upstream_drawings=d5fd14135f0e220b45171010722a0064683c63f1"
+            echo "original_pr_tests=c86b7a4c233d4903ded52ac155b1f0ee82abd79c"
+            echo "overlay=only five E2E test functions and acceptance fixture"
+          } > t55-report/metadata.txt
+          timeout 75m bash -euo pipefail -c '
+            cargo test --profile ci -p solidcraft-engine --lib cmd::drawing_dimension_tests -- --nocapture
+            cargo test --profile ci -p solidcraft-engine --lib cmd::drawing_view_tests -- --nocapture
+            cargo test --profile ci -p solidcraft-engine --lib schema::drawing_view_tests -- --nocapture
+            cargo test --profile ci -p solidcraft-engine --lib cmd::drawing_export_tests -- --nocapture
+            cargo test --profile ci -p solidcraft-doc --lib drawing_view -- --nocapture
+          ' 2>&1 | tee t55-report/native-tests.log
+          echo "T55_NATIVE_TESTS=PASS"
+      - name: Preserve native test report and source identifiers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t55-native-drawing-20261102
+          path: source/t55-report/
+          if-no-files-found: warn
+          retention-days: 14
