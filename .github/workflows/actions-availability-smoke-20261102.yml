@@ -1,0 +1,27 @@
+name: SolidCraft Fork Actions Availability Probe 2026-11-02
+
+on:
+  push:
+    branches:
+      - diagnostics/actions-availability-20261102
+    paths:
+      - .github/workflows/actions-availability-smoke-20261102.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  availability:
+    name: Minimal Actions permission check
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Report GitHub Actions availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'SOLIDCRAFT_FORK_ACTIONS_PROBE=PASS'
+          echo "repository=$GITHUB_REPOSITORY"
+          echo "ref=$GITHUB_REF"
+          echo "runner_os=$RUNNER_OS"
