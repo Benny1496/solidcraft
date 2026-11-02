@@ -68,15 +68,26 @@ jobs:
           assert upstream.count(marker) == 0, "E2E tests already present upstream; stop to avoid duplicate tests"
           assert contributed.count(marker) == 1, "Cannot locate start of our five contributed tests"
           added = marker + contributed.split(marker, 1)[1]
-          # Current drawings has round_index(session, centre, radius); the older PR tests
-          # called round_index(session, body_name, centre, radius).
-          # Adapt only the isolated test overlay, never the original PR or engine.
+          # IMPORTANT: the upstream 3-argument round_index helper searches the
+          # body "Box" only. Our PR tests intentionally search body "Plate".
+          # The old 4-argument helper MUST be preserved in the isolated overlay;
+          # simply deleting "Plate" makes the tests look in the wrong solid body.
+          original_signature = 'pub(crate) fn round_index(s: &Session, body: &str, centre: [f64; 3], radius: f64) -> usize {'
+          assert contributed.count(original_signature) == 1, "Missing original body-aware edge finder"
+          helper_start = contributed.index(original_signature)
+          helper_end = contributed.index("\n}", helper_start) + 2
+          original_helper = contributed[helper_start:helper_end]
+          assert 'state.body(body).unwrap().mesh()' in original_helper, "Original helper must use the explicit body name"
+          assert 'mesh.edges.iter().position' in original_helper, "Original helper must actually locate an edge"
+          adapted_helper = original_helper.replace('pub(crate) fn round_index(', 'fn workshop_plate_round_index(', 1)
           for old_call, new_call in (
-            ('round_index(&s, "Plate", [20.0, 20.0, 20.0], 5.0)', 'round_index(&s, [20.0, 20.0, 20.0], 5.0)'),
-            ('round_index(&s, "Plate", [60.0, 50.0, 20.0], 5.0)', 'round_index(&s, [60.0, 50.0, 20.0], 5.0)'),
+            ('round_index(&s, "Plate", [20.0, 20.0, 20.0], 5.0)', 'workshop_plate_round_index(&s, "Plate", [20.0, 20.0, 20.0], 5.0)'),
+            ('round_index(&s, "Plate", [60.0, 50.0, 20.0], 5.0)', 'workshop_plate_round_index(&s, "Plate", [60.0, 50.0, 20.0], 5.0)'),
           ):
-            assert added.count(old_call) == 1, "Expected original call missing"
+            assert added.count(old_call) == 1, "Expected original PR call missing: " + old_call
             added = added.replace(old_call, new_call)
+          assert added.count('workshop_plate_round_index(&s, "Plate",') == 2, "Both bores must explicitly target Plate"
+          added = adapted_helper + "\n\n" + added
           expected = (
             "fn changing_a_bores_diameter_keeps_its_dimension()",
             "fn deleting_a_bore_loses_its_dimension_and_never_moves_it()",
