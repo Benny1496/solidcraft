@@ -1,0 +1,64 @@
+name: SolidCraft W23a UI workspace static contract - T57
+
+on:
+  push:
+    branches:
+      - tests/w23a-ui-workspace-contract-20261103
+    paths:
+      - .github/workflows/solidcraft-w23a-workspace-static-20261103.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-ui-workflow:
+    name: T57 - static close-edit-reopen recipe contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check repository and source commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$(git rev-parse HEAD^)" = "d984bc63557e2772b67492dd5c27a6fc5922cc72"
+          echo "T57_SOURCE_PR_HEAD=d984bc63557e2772b67492dd5c27a6fc5922cc72"
+          git diff --check
+      - name: Validate static W23a oracle contracts and workspace restrictions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m json.tool tests/fixtures/w23a-drawing-updates/cases.json > /dev/null
+          python3 -m py_compile tests/fixtures/w23a-drawing-updates/validate.py
+          python3 tests/fixtures/w23a-drawing-updates/validate.py
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          folder = Path("tests/fixtures/w23a-drawing-updates")
+          data = json.loads((folder / "cases.json").read_text())
+          policy = data["ui_workflow_policy"]
+          expected = [
+              "close_drawing_workspace",
+              "switch_to_model_workspace",
+              "apply_source_edit_or_undo_redo",
+              "reopen_drawing_workspace",
+              "verify_views_dimensions_references_and_positions",
+          ]
+          assert policy["required_sequence"] == expected
+          assert policy["model_commands_during_open_drawing"] == "rejected"
+          assert all(
+              c["ui_workflow"]["required_sequence"] == expected and
+              c["ui_workflow"]["model_command_while_drawing_open"] is False and
+              c["ui_workflow"]["runtime_status"] == "NOT_RUN"
+              for c in data["cases"]
+          )
+          readme = (folder / "README.md").read_text()
+          assert "Check both drawing-open and drawing-closed paths" not in readme
+          assert "Drawing workspace **rejects model-edit commands" in readme
+          print("T57_STATIC_WORKSPACE_POLICY=PASS")
+          print("T57_ACTUAL_UI_E2E=NOT_RUN")
+          PY
