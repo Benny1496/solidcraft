@@ -1,0 +1,145 @@
+name: SolidCraft assembly sheet stage A, Test 58 (fork only)
+
+on:
+  push:
+    branches:
+      - tests/assembly-sheet-stage-a-20261103
+    paths:
+      - .github/workflows/solidcraft-assembly-sheet-58.yml
+      - tests/fixtures/assembly-sheet/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-assembly-sheet-58
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_DRAWINGS_SHA: 664c9812d2ec6c08d4fbd13b3e876eb53490be8f
+
+jobs:
+  assembly-sheet:
+    name: Test 58 - assembly sheet stage A on drawings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout the test overlay (this fork branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout upstream drawings at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 664c9812d2ec6c08d4fbd13b3e876eb53490be8f
+          path: src
+          persist-credentials: false
+      - name: Verify sources and apply the overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          cd src
+          test "$(git rev-parse HEAD)" = "$UPSTREAM_DRAWINGS_SHA"
+          echo "T58_UPSTREAM_SHA=$(git rev-parse HEAD)"
+          echo "T58_OVERLAY_SHA=$(git -C ../overlay rev-parse HEAD)"
+          target=crates/engine/src/cmd/drawing_balloon_tests.rs
+          test -f "$target"
+          echo >> "$target"
+          cat ../overlay/tests/fixtures/assembly-sheet/assembly_sheet_tests.rs >> "$target"
+          python3 - "$target" <<'PY'
+          import sys
+          text = open(sys.argv[1]).read()
+          for name in (
+              "assembly_sheet_parts_list_counts_by_hand_and_keeps_its_item_numbers",
+              "assembly_sheet_balloons_and_revisions_follow_the_model_and_the_file",
+          ):
+              assert text.count("fn " + name + "()") == 1, name
+          print("T58_OVERLAY_APPLIED=PASS")
+          PY
+          git diff --stat
+          git status --short
+          test "$(git status --short | wc -l)" = "1"
+          echo "T58_ONLY_TEST_FILE_CHANGED=PASS"
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src
+          cache-on-failure: true
+      - name: Validate formatting of the changed test file
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2024 --check crates/engine/src/cmd/drawing_balloon_tests.rs
+          echo "T58_FMT=PASS"
+      - name: Run native Rust test groups (no zero-test successes)
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../test58-report
+          echo "upstream_drawings_sha=$UPSTREAM_DRAWINGS_SHA" > ../test58-report/metadata.txt
+          echo "overlay_sha=$(git -C ../overlay rev-parse HEAD)" >> ../test58-report/metadata.txt
+          cargo test --profile ci -p solidcraft-engine --lib -- --list > ../test58-report/engine-list.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          lines = Path("../test58-report/engine-list.txt").read_text().splitlines()
+          for case in (
+              "assembly_sheet_parts_list_counts_by_hand_and_keeps_its_item_numbers",
+              "assembly_sheet_balloons_and_revisions_follow_the_model_and_the_file",
+          ):
+              assert "cmd::drawing_balloon::tests::" + case + ": test" in lines, "missing " + case
+          print("T58_NEW_TESTS_DISCOVERED=PASS")
+          PY
+          status=0
+          run_group() {
+            local label="$1" filter="$2" expect="$3"
+            echo "T58_GROUP_START=$label"
+            set +e
+            timeout 75m cargo test --profile ci -p solidcraft-engine --lib "$filter" -- --nocapture --test-threads=2 2>&1 | tee "../test58-report/$label.log"
+            set -e
+            python3 - "$label" "$expect" <<'PY' || status=1
+          from pathlib import Path
+          import re
+          import sys
+          label, expect = sys.argv[1], sys.argv[2]
+          text = Path("../test58-report/" + label + ".log").read_text()
+          found = re.findall(r"test result: *([a-z]+)[.] *([0-9]+) passed; *([0-9]+) failed; *([0-9]+) ignored;", text)
+          with Path("../test58-report/group-summary.txt").open("a") as out:
+              print(f"{label}: {found}", file=out)
+          assert len(found) == 1, f"{label}: expected one test result, found {found}"
+          verdict, passed, failed, ignored = found[0][0], *map(int, found[0][1:])
+          if expect:
+              assert passed == int(expect), f"{label}: expected {expect} passed, got {passed}"
+          assert verdict == "ok" and passed > 0 and failed == 0 and ignored == 0, f"{label}: {found}"
+          print(f"T58_GROUP_PASS={label} count={passed}")
+          PY
+          }
+          run_group assembly_sheet cmd::drawing_balloon::tests::assembly_sheet 2
+          run_group balloon cmd::drawing_balloon::tests ""
+          run_group revision cmd::drawing_revision::tests ""
+          run_group bom cmd::bom::tests ""
+          run_group dimension cmd::drawing_dimension::tests ""
+          run_group export cmd::drawing_export::tests ""
+          cat ../test58-report/group-summary.txt
+          if [ "$status" != 0 ]; then echo "T58_NATIVE_TESTS=FAIL"; exit 1; fi
+          echo "T58_NATIVE_TESTS=PASS"
+      - name: Preserve original test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t58-assembly-sheet
+          path: test58-report/
+          if-no-files-found: warn
+          retention-days: 14
