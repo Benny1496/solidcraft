@@ -20,13 +20,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 15
       - name: Check repository and source commit
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
-          test "$(git rev-parse HEAD^)" = "d984bc63557e2772b67492dd5c27a6fc5922cc72"
+          git merge-base --is-ancestor d984bc63557e2772b67492dd5c27a6fc5922cc72 HEAD
           echo "T57_SOURCE_PR_HEAD=d984bc63557e2772b67492dd5c27a6fc5922cc72"
           git diff --check
       - name: Validate static W23a oracle contracts and workspace restrictions
