@@ -1,0 +1,364 @@
+name: "SolidCraft Test 67: PR 8288 gate, new drawing prototypes, PR 8288 with PR 11881 (fork only)"
+
+on:
+  push:
+    branches:
+      - tests/w23-assembly-sheet-bom-20261104
+    paths:
+      - .github/workflows/solidcraft-big-67.yml
+      - tests/fixtures/t67/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-big-67
+  cancel-in-progress: false
+
+env:
+  BASE_SHA: 49eedf122ca01d94390c8779e1adf5cb1a911fab
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+
+jobs:
+  gate:
+    name: "Test 67 A - PR 8288 (6d62ba4) on drawings@49eedf1 + #11953: repository checks, clippy, all engine tests"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    env:
+      SOLIDCRAFT_GPU: software
+      SOLIDCRAFT_REQUIRE_GPU: "1"
+      ACTION_MATRIX_JOBS: "4"
+    steps:
+      - name: Make room on the runner
+        shell: bash
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
+      - name: Checkout the patches (this fork branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout drawings at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 49eedf122ca01d94390c8779e1adf5cb1a911fab
+          path: src
+          persist-credentials: false
+      - name: Apply #11953 and PR 8288
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git apply --index ../overlay/tests/fixtures/t67/fix11953.diff
+          git apply --index ../overlay/tests/fixtures/t67/pr8288-6d62ba4.diff
+          git diff --cached --stat
+          echo "T67A_APPLIED=PASS (#11953 and PR 8288 head 6d62ba4)"
+      - name: Install a software Vulkan driver (lavapipe), as the upstream test job does
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src
+          key: t67-gate
+          cache-on-failure: true
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-nextest
+      - name: Repository checks, as the upstream "Format and repository checks" job runs them
+        shell: bash
+        working-directory: src
+        run: |
+          set -uo pipefail
+          mkdir -p ../t67-report
+          fails=0
+          check() {
+            local name="$1"; shift
+            if "$@" > "../t67-report/check-${name}.log" 2>&1; then
+              echo "T67A_CHECK ${name}: PASS"
+            else
+              echo "T67A_CHECK ${name}: FAIL"; tail -40 "../t67-report/check-${name}.log"; fails=$((fails + 1))
+            fi
+          }
+          check fmt cargo fmt --all -- --check
+          check assets cargo xtask assets
+          check icons cargo xtask icons
+          check licences cargo xtask licences --check
+          check layers cargo xtask layers
+          check ui-containers bash -c 'cargo xtask ui-containers && cargo test -p xtask ui_containers --locked'
+          check lists cargo xtask lists
+          check i18n cargo xtask i18n --check
+          check skills bash -c 'cargo xtask skills && cargo test -p xtask skills --locked'
+          check format-pending bash scripts/test-format-pending.sh
+          check web-offline cargo xtask web-offline-test
+          check affected-selftest python3 -I scripts/ci/test_affected.py
+          check main-merge-selftest python3 -I scripts/ci/test_main_merge.py
+          check bot-tests bash -c 'node --test scripts/claim/*.test.js scripts/triage/*.test.js scripts/kernel-paused/*.test.js scripts/pr-checks/*.test.js'
+          check w23a-static python3 -I tests/fixtures/w23a-drawing-updates/validate.py
+          echo "T67A_CHECKS_FAILED=${fails}"
+          test "$fails" = 0
+      - name: Clippy -D warnings on the engine, all targets
+        if: always()
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 120m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings 2>&1 | tee ../t67-report/clippy.log
+          test "${PIPESTATUS[0]}" = 0
+          echo "T67A_CLIPPY_ENGINE=PASS"
+      - name: All engine tests, with the pull-request filter of the upstream test job
+        if: always()
+        shell: bash
+        working-directory: src
+        run: |
+          set -uo pipefail
+          base='default() & not (binary(action_matrix) & test(=action_matrix_sample))'
+          timeout 230m cargo nextest run -p solidcraft-engine --cargo-profile ci --locked --profile ci --no-tests=pass \
+            --ignore-default-filter -E "($base) & not (package(=solidcraft-gpu) & test(/^path::/))" 2>&1 | tee ../t67-report/engine-tests.log
+          code=${PIPESTATUS[0]}
+          cp target/nextest/ci/junit.xml ../t67-report/engine-junit.xml 2>/dev/null || true
+          grep -E "^ *Summary|^\s+(PASS|FAIL|SIGSEGV|TIMEOUT).*drawing_dimension" ../t67-report/engine-tests.log | tail -60 || true
+          grep -E "^\s+(FAIL|SIGSEGV|SIGABRT|TIMEOUT|LEAK)" ../t67-report/engine-tests.log | sed 's/^/T67A_NOT_PASSED /' | head -80 || true
+          grep -E "Summary" ../t67-report/engine-tests.log | sed 's/^/T67A_SUMMARY /' || true
+          test "$code" = 0 && echo "T67A_ENGINE_TESTS=PASS"
+          test "$code" = 0
+      - name: Preserve original output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t67-a-gate
+          path: t67-report/
+          if-no-files-found: warn
+          retention-days: 14
+
+  prototypes:
+    name: "Test 67 B - new prototypes on PR 8288: five dimensions, R2 centres, the sheet on paper, fillets; observations"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    steps:
+      - name: Make room on the runner
+        shell: bash
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+      - name: Checkout the patches (this fork branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout drawings at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 49eedf122ca01d94390c8779e1adf5cb1a911fab
+          path: src
+          persist-credentials: false
+      - name: Apply #11953, PR 8288 and the prototypes
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git apply --index ../overlay/tests/fixtures/t67/fix11953.diff
+          git apply --index ../overlay/tests/fixtures/t67/pr8288-6d62ba4.diff
+          git apply --index ../overlay/tests/fixtures/t67/prototypes-t67.diff
+          git diff --cached --stat
+          echo "T67B_APPLIED=PASS"
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src
+          key: t67-prototypes
+          cache-on-failure: true
+      - name: fmt and clippy -D warnings on the engine
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t67-report
+          rustfmt --edition 2024 --check crates/engine/src/cmd/drawing_dimension_tests.rs
+          echo "T67B_FMT=PASS"
+          timeout 110m cargo clippy -p solidcraft-engine --all-targets --profile ci -- -D warnings 2>&1 | tee ../t67-report/clippy.log
+          test "${PIPESTATUS[0]}" = 0
+          echo "T67B_CLIPPY=PASS"
+      - name: Every engine test with drawing in its name, and the observations
+        shell: bash
+        working-directory: src
+        run: |
+          set -uo pipefail
+          timeout 60m cargo test --profile ci -p solidcraft-engine --lib drawing -- --test-threads=2 2>&1 | tee ../t67-report/drawing.log
+          code=${PIPESTATUS[0]}
+          timeout 30m cargo test --profile ci -p solidcraft-engine --lib cmd::drawing_dimension::tests::observe_ -- --ignored --nocapture --test-threads=1 2>&1 | tee ../t67-report/observe.log
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("../t67-report/drawing.log").read_text()
+          ours = {
+              "PR 8288": [
+                  "changing_a_bores_diameter_keeps_its_dimension",
+                  "deleting_a_bore_loses_its_dimension_and_never_moves_it",
+                  "undo_and_redo_a_diameter_change_keep_its_dimension",
+                  "undo_and_redo_a_deleted_bore_restore_its_dimension",
+                  "reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value",
+                  "the_plates_width_between_its_side_faces_follows_a_width_change",
+                  "a_suppressed_bore_says_so_and_its_dimension_comes_back",
+              ],
+              "new prototype": [
+                  "the_plates_five_dimensions_follow_each_parameter_and_its_undo",
+                  "the_bores_centres_stay_put_and_a_lost_bore_takes_its_centre_dimensions",
+                  "the_plates_sheet_draws_what_the_model_has_and_the_same_after_undo",
+                  "fillets_on_the_plates_corners_leave_its_five_dimensions_read",
+              ],
+          }
+          for group, names in ours.items():
+              for name in names:
+                  line = re.search(rf"^test cmd::drawing_dimension::tests::{name} \.\.\. (\w+)$", text, re.M)
+                  print(f"T67B_OURS [{group}] {name}: {line.group(1) if line else 'MISSING'}")
+          for name in re.findall(r"^test (\S+) \.\.\. FAILED$", text, re.M):
+              print(f"T67B_FAILED {name}")
+          for block in re.findall(r"^---- (\S+) stdout ----\n(.*?)(?=^---- |^failures:$)", text, re.M | re.S):
+              print(f"T67B_FAILURE_DETAIL {block[0]}:")
+              print("\n".join(block[1].strip().splitlines()[:12]))
+          print("T67B_RESULT", re.findall(r"test result: *([a-z]+)[.] *([0-9]+) passed; *([0-9]+) failed; *([0-9]+) ignored;", text))
+          observed = Path("../t67-report/observe.log").read_text()
+          for line in observed.splitlines():
+              if "T67_OBSERVE" in line or re.match(r"^test .*observe_.* \.\.\. ", line) or "panicked" in line:
+                  print(line)
+          PY
+          test "$code" = 0 && echo "T67B_DRAWING_TESTS=PASS"
+          test "$code" = 0
+      - name: Preserve original output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t67-b-prototypes
+          path: t67-report/
+          if-no-files-found: warn
+          retention-days: 14
+
+  together:
+    name: "Test 67 C - PR 8288 and PR 11881 together on drawings@49eedf1 + #11953"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    steps:
+      - name: Make room on the runner
+        shell: bash
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+      - name: Checkout the patches (this fork branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout drawings at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 49eedf122ca01d94390c8779e1adf5cb1a911fab
+          path: src
+          persist-credentials: false
+      - name: Apply #11953, PR 8288 and PR 11881
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git apply --index ../overlay/tests/fixtures/t67/fix11953.diff
+          git apply --index ../overlay/tests/fixtures/t67/pr8288-6d62ba4.diff
+          git apply --index ../overlay/tests/fixtures/t67/pr11881-bf35dbb.diff
+          echo "T67C_PR11881_ON_CURRENT_DRAWINGS=PASS (applies without conflicts)"
+          git diff --cached --stat
+          python3 -I tests/fixtures/w23a-drawing-updates/validate.py
+          python3 -I tests/fixtures/w23-assembly-sheet/validate.py
+          echo "T67C_STATIC=PASS (both recipe checks)"
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src
+          key: t67-together
+          cache-on-failure: true
+      - name: fmt, lists and clippy -D warnings on the engine
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t67-report
+          cargo fmt --all -- --check
+          echo "T67C_FMT_ALL=PASS"
+          cargo xtask lists
+          echo "T67C_LISTS=PASS"
+          timeout 110m cargo clippy -p solidcraft-engine --all-targets --profile ci -- -D warnings 2>&1 | tee ../t67-report/clippy.log
+          test "${PIPESTATUS[0]}" = 0
+          echo "T67C_CLIPPY=PASS"
+      - name: The bill of materials, balloon, revision and dimension tests
+        shell: bash
+        working-directory: src
+        run: |
+          set -uo pipefail
+          timeout 60m cargo test --profile ci -p solidcraft-engine --lib -- cmd::bom::tests cmd::drawing_balloon::tests cmd::drawing_revision::tests cmd::drawing_dimension::tests --test-threads=2 2>&1 | tee ../t67-report/together.log
+          code=${PIPESTATUS[0]}
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("../t67-report/together.log").read_text()
+          ours = [
+              "bom::tests::the_assembly_sheets_parts_list_matches_the_hand_counts",
+              "bom::tests::the_assembly_sheets_item_numbers_hold_through_edits_undo_and_reopening",
+              "bom::tests::a_purchased_screw_keeps_the_assembly_sheets_counts",
+              "bom::tests::a_phantom_holder_puts_what_it_holds_on_the_assembly_sheets_first_level",
+              "drawing_balloon::tests::balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay",
+              "drawing_dimension::tests::changing_a_bores_diameter_keeps_its_dimension",
+              "drawing_dimension::tests::deleting_a_bore_loses_its_dimension_and_never_moves_it",
+              "drawing_dimension::tests::undo_and_redo_a_diameter_change_keep_its_dimension",
+              "drawing_dimension::tests::undo_and_redo_a_deleted_bore_restore_its_dimension",
+              "drawing_dimension::tests::reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value",
+              "drawing_dimension::tests::the_plates_width_between_its_side_faces_follows_a_width_change",
+              "drawing_dimension::tests::a_suppressed_bore_says_so_and_its_dimension_comes_back",
+          ]
+          bad = []
+          for name in ours:
+              line = re.search(rf"^test cmd::{name} \.\.\. (\w+)$", text, re.M)
+              verdict = line.group(1) if line else "MISSING"
+              print(f"T67C_OURS {name}: {verdict}")
+              if verdict != "ok":
+                  bad.append(name)
+          for name in re.findall(r"^test (\S+) \.\.\. FAILED$", text, re.M):
+              print(f"T67C_FAILED {name}")
+          found = re.findall(r"test result: *([a-z]+)[.] *([0-9]+) passed; *([0-9]+) failed; *([0-9]+) ignored;", text)
+          print(f"T67C_RESULT {found}")
+          assert not bad, f"not ok: {bad}"
+          assert len(found) == 1 and found[0][0] == "ok" and found[0][2] == "0", found
+          print(f"T67C_TESTS=PASS count={found[0][1]} ours={len(ours)}")
+          PY
+          py=$?
+          test "$code" = 0 && test "$py" = 0
+      - name: Preserve original output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t67-c-together
+          path: t67-report/
+          if-no-files-found: warn
+          retention-days: 14
