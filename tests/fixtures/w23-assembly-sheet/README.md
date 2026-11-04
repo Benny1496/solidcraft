@@ -50,11 +50,14 @@ and revision rows:
 `cases.json` holds recipes 3 to 6 of #11773, turned on as each piece lands on `drawings`. Every
 model edit in them is made with the drawing closed, then the drawing is opened again.
 
-- **W23-AS-03, the parts list on the sheet** (waits for #3874's P8): the first level numbered 1, 2,
-  3 with the script's descriptions; the second holder deleted, HL-300 reads 1 and the numbers stay.
-- **W23-AS-04, balloons** (waits for #3874's balloon item numbers): one balloon through each holder
-  to its block, both showing item 2; the second holder deleted, its balloon is lost (pink), never
-  moved to the first holder or removed; undone, both are ok again.
+- **W23-AS-03, the parts list on the sheet** (waits for `drawing.table.add`, #11828, and the list
+  drawn on paper): the first level numbered 1, 2, 3 with the script's descriptions; the second
+  holder deleted, HL-300 reads 1 and the numbers stay.
+- **W23-AS-04, balloons** (waits for the balloon-reads-its-row PR on #11828): a balloon picks the
+  row its placement is counted in, as `row_of` does, and shows that row's number. One balloon
+  through each holder to its block, both on HL-300's row, item 2; the second holder deleted, its
+  balloon is lost (pink) and its row not found, never moved to the first holder or removed; undone,
+  both are ok again; with HL-300 a phantom, both read BL-200's row.
 - **W23-AS-05, the revision table** (waits for #11803 `drawing.revise`, #11813 numbering, #11821
   revision tags, #3875's table): revisions 1, 2, 3; 2 deleted leaves 1 and 3 with 4 next; a tag on
   3; unchanged by a model edit and through save and reopen.
