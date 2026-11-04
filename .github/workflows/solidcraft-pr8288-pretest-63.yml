@@ -1,0 +1,140 @@
+name: SolidCraft PR 8288 pre-tests on drawings and on CamWight's 11823 stack, Test 63 (fork only)
+
+on:
+  push:
+    branches:
+      - tests/w23-assembly-sheet-bom-20261104
+    paths:
+      - .github/workflows/solidcraft-pr8288-pretest-63.yml
+      - tests/fixtures/pr8288-pretest-t63/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-pr8288-pretest-63
+  cancel-in-progress: false
+
+jobs:
+  pretest:
+    name: Test 63 ${{ matrix.label }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: A1 - PR 8288 on drawings@fd4b7a7
+            repo: tangency-labs/solidcraft
+            base: fd4b7a7bc0e5d2de4eadf682eb2aee9510a5fc66
+            prototypes: "no"
+            expect_new: "5"
+          - label: A2+B - PR 8288 and two prototypes on CamWight's 11823 stack@03a5065
+            repo: CamWight/solidcraft
+            base: 03a50655933e3ef426fab6d129b6c55820c0a9a5
+            prototypes: "yes"
+            expect_new: "7"
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout the patches (this fork branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout the base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.base }}
+          path: src
+          persist-credentials: false
+      - name: Apply PR 8288's two commits (and the prototypes)
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$(git rev-parse HEAD)" = "${{ matrix.base }}"
+          git config user.name ci && git config user.email ci@example.invalid
+          git am --3way ../overlay/tests/fixtures/pr8288-pretest-t63/pr8288.patch
+          echo "T63_PR8288_APPLIED=PASS without conflicts on ${{ matrix.base }}"
+          if [ "${{ matrix.prototypes }}" = yes ]; then
+            git am --3way ../overlay/tests/fixtures/pr8288-pretest-t63/prototypes.patch
+            echo "T63_PROTOTYPES_APPLIED=PASS"
+          fi
+          git diff --stat "${{ matrix.base }}" HEAD
+          python3 -I tests/fixtures/w23a-drawing-updates/validate.py
+          echo "T63_W23A_STATIC=PASS"
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src
+          cache-on-failure: true
+      - name: fmt and clippy -D warnings on the engine
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2024 --check crates/engine/src/cmd/drawing_dimension_tests.rs
+          echo "T63_FMT=PASS"
+          timeout 100m cargo clippy -p solidcraft-engine --all-targets --profile ci -- -D warnings
+          echo "T63_CLIPPY=PASS"
+      - name: Run the drawing dimension tests
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../test63-report
+          set +e
+          timeout 60m cargo test --profile ci -p solidcraft-engine --lib cmd::drawing_dimension::tests -- --test-threads=2 2>&1 | tee ../test63-report/dimension.log
+          code=${PIPESTATUS[0]}
+          set -e
+          python3 - "${{ matrix.prototypes }}" "${{ matrix.expect_new }}" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+          prototypes, expect = sys.argv[1] == "yes", int(sys.argv[2])
+          text = Path("../test63-report/dimension.log").read_text()
+          ours = [
+              "changing_a_bores_diameter_keeps_its_dimension",
+              "deleting_a_bore_loses_its_dimension_and_never_moves_it",
+              "undo_and_redo_a_diameter_change_keep_its_dimension",
+              "undo_and_redo_a_deleted_bore_restore_its_dimension",
+              "reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value",
+          ]
+          if prototypes:
+              ours += [
+                  "the_plates_width_between_its_side_faces_follows_a_width_change",
+                  "a_suppressed_bore_says_so_and_its_dimension_comes_back",
+              ]
+          bad = []
+          for name in ours:
+              line = re.search(rf"^test cmd::drawing_dimension::tests::{name} \.\.\. (\w+)$", text, re.M)
+              verdict = line.group(1) if line else "MISSING"
+              print(f"T63_OURS {name}: {verdict}")
+              if verdict != "ok":
+                  bad.append(name)
+          for line in re.findall(r"^test (cmd::drawing_dimension::tests::\S+) \.\.\. FAILED$", text, re.M):
+              print(f"T63_FAILED {line}")
+          found = re.findall(r"test result: *([a-z]+)[.] *([0-9]+) passed; *([0-9]+) failed; *([0-9]+) ignored;", text)
+          print(f"T63_RESULT {found}")
+          assert len(ours) == expect and not bad, f"not ok: {bad}"
+          assert len(found) == 1 and found[0][0] == "ok" and found[0][2] == "0" and found[0][3] == "0", found
+          print(f"T63_DIMENSION_TESTS=PASS count={found[0][1]} ours={len(ours)}")
+          PY
+          test "$code" = 0
+      - name: Preserve original output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t63-${{ matrix.prototypes == 'yes' && 'stack-11823' || 'drawings' }}
+          path: test63-report/
+          if-no-files-found: warn
+          retention-days: 14
