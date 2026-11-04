@@ -1,4 +1,4 @@
-name: SolidCraft PR 8288 pre-tests on drawings and on CamWight's 11823 stack, Test 63 (fork only)
+name: SolidCraft PR 8288 pre-tests on drawings and on CamWight's 11823 stack, Test 63 (fork only, run 2)
 
 on:
   push:
@@ -61,6 +61,9 @@ jobs:
           git config user.name ci && git config user.email ci@example.invalid
           git am --3way ../overlay/tests/fixtures/pr8288-pretest-t63/pr8288.patch
           echo "T63_PR8288_APPLIED=PASS without conflicts on ${{ matrix.base }}"
+          git am --3way ../overlay/tests/fixtures/pr8288-pretest-t63/fix.patch
+          ! grep -n "unreachable!" crates/engine/src/cmd/drawing_dimension_tests.rs
+          echo "T63_CLIPPY_FIX_APPLIED=PASS (no unreachable! in the reopen test)"
           if [ "${{ matrix.prototypes }}" = yes ]; then
             git am --3way ../overlay/tests/fixtures/pr8288-pretest-t63/prototypes.patch
             echo "T63_PROTOTYPES_APPLIED=PASS"

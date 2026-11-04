@@ -1,4 +1,4 @@
-From 5ebb5b3b2730c2e86a331d07dfedeff92809b7f8 Mon Sep 17 00:00:00 2001
+From abb8511bec6e23afbeaf9d981ccf583e9df58210 Mon Sep 17 00:00:00 2001
 From: Benny1496 <163034806+Benny1496@users.noreply.github.com>
 Date: Wed, 4 Nov 2026 10:27:41 +0100
 Subject: [PATCH] test(drawings): prototypes for #8288 on CamWight's #11823
@@ -13,10 +13,10 @@ deleted reads lost and never moves to Bore2.
  1 file changed, 49 insertions(+)
 
 diff --git a/crates/engine/src/cmd/drawing_dimension_tests.rs b/crates/engine/src/cmd/drawing_dimension_tests.rs
-index ecb5b8b..87dec2e 100644
+index 9f0f738..dcef3ee 100644
 --- a/crates/engine/src/cmd/drawing_dimension_tests.rs
 +++ b/crates/engine/src/cmd/drawing_dimension_tests.rs
-@@ -1044,3 +1044,52 @@ fn reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value() {
+@@ -1043,3 +1043,52 @@ fn reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value() {
          }
      }
  }
