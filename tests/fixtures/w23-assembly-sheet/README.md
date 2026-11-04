@@ -35,6 +35,16 @@ In `crates/engine/src/cmd/bom_tests.rs`:
 - `a_purchased_screw_keeps_the_assembly_sheets_counts`
 - `a_phantom_holder_puts_what_it_holds_on_the_assembly_sheets_first_level`
 
+In `crates/engine/src/cmd/drawing_balloon_tests.rs`, on what `drawings` already has for balloons
+and revision rows:
+
+- `balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay`: four balloons on
+  the top view at 1:2 (the plate, a screw, and the block through each holder); model edits made
+  with the drawing closed; the second holder moved, its arrow follows; deleted, its balloon is
+  `lost`, keeps its occurrence and record and is never moved to the first holder; undo and redo;
+  save and reopen; revision rows 1 and 3 after row 2 is deleted, the next still 4, and the
+  drawing's record unchanged by every model edit.
+
 ## NOT RUN yet
 
 Turned on as each piece lands on `drawings`:
