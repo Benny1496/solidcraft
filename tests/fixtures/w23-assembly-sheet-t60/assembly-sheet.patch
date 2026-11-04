@@ -1,0 +1,458 @@
+From 0f98ebd652d44a686e1e6cafef7243adf8964540 Mon Sep 17 00:00:00 2001
+From: Benny1496 <163034806+Benny1496@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 08:01:25 +0100
+Subject: [PATCH 1/2] test(drawings): the W23 assembly sheet's parts list,
+ counted by hand (#11773)
+
+A small test assembly from plain shapes, built by one command script in
+tests/fixtures/w23-assembly-sheet/: a base plate, four screws on it, and a
+holder placed twice with a block and two screws in each.
+
+Four tests in bom_tests.rs check assembly.bom against the hand counts:
+parts only, the first level, all levels and the holder's own list; item
+numbers through a renumber, a new part, undo and redo, a deleted holder
+and save and reopen in both formats; the screw purchased; the holder a
+phantom. No production code changes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Br32oWdFXUCACfZNe7toDy
+---
+ crates/engine/src/cmd/bom_tests.rs            | 161 ++++++++++++++++++
+ tests/fixtures/w23-assembly-sheet/README.md   |  46 +++++
+ .../fixtures/w23-assembly-sheet/assembly.json |  25 +++
+ 3 files changed, 232 insertions(+)
+ create mode 100644 tests/fixtures/w23-assembly-sheet/README.md
+ create mode 100644 tests/fixtures/w23-assembly-sheet/assembly.json
+
+diff --git a/crates/engine/src/cmd/bom_tests.rs b/crates/engine/src/cmd/bom_tests.rs
+index 3e6ed78..d274ac2 100644
+--- a/crates/engine/src/cmd/bom_tests.rs
++++ b/crates/engine/src/cmd/bom_tests.rs
+@@ -2089,3 +2089,164 @@ fn hostile_quantities_are_refused_without_a_change() {
+     assert_eq!(s.doc.to_json(), design);
+     assert_eq!(s.undo.len(), undo);
+ }
++
++/// The W23 assembly sheet's test assembly (#11773), from its command script: a base plate placed
++/// once, a screw placed four times on it, and a holder placed twice, each holding one block and two
++/// of the screws. Returns the session and the two holders.
++fn assembly_sheet() -> (Session, [u64; 2]) {
++    let script: Value = serde_json::from_str(include_str!("../../../../tests/fixtures/w23-assembly-sheet/assembly.json")).unwrap();
++    let mut s = Session::default();
++    let made = s.run_script(&script).unwrap();
++    let placed = |name: &str| {
++        let step = script["commands"].as_array().unwrap().iter().position(|c| c["as"] == name).unwrap();
++        made[step]["occurrence"].as_u64().unwrap()
++    };
++    let holders = [placed("first_holder"), placed("second_holder")];
++    (s, holders)
++}
++
++/// The assembly sheet's parts list against the hand counts: parts only, the first level, all levels
++/// and one holder's own list. Reading them changes nothing.
++#[test]
++fn the_assembly_sheets_parts_list_matches_the_hand_counts() {
++    let (mut s, _) = assembly_sheet();
++    let undo = s.undo.len();
++    let flat = run(&mut s, "assembly.bom", json!({}));
++    assert_eq!(typed(&flat), [row("BL-200", "normal", 2), row("BP-100", "normal", 1), row("SC-M6", "normal", 8)], "4 + 2 x 2 screws: {flat}");
++    assert_eq!((flat["total_occurrences"].as_u64(), flat["numbered"].as_bool()), (Some(11), Some(false)));
++    let top = run(&mut s, "assembly.bom", json!({"levels": "top"}));
++    assert_eq!(typed(&top), [row("BP-100", "normal", 1), row("HL-300", "normal", 2), row("SC-M6", "normal", 4)], "{top}");
++    assert_eq!(top["total_occurrences"], 7, "1 + 2 + 4");
++    let all = run(&mut s, "assembly.bom", json!({"levels": "all"}));
++    assert_eq!(
++        deep(&all),
++        [
++            deep_row("1", "BP-100", "normal", 1, 1),
++            deep_row("2", "HL-300", "normal", 2, 2),
++            deep_row("2.1", "BL-200", "normal", 1, 2),
++            deep_row("2.2", "SC-M6", "normal", 2, 4),
++            deep_row("3", "SC-M6", "normal", 4, 4),
++        ],
++        "{all}"
++    );
++    assert_eq!(all["total_occurrences"], 13, "1 + 2 + 2 + 4 + 4");
++    let holder = run(&mut s, "assembly.bom", json!({"component": "Holder"}));
++    assert_eq!(typed(&holder), [row("BL-200", "normal", 1), row("SC-M6", "normal", 2)], "{holder}");
++    assert_eq!(s.undo.len(), undo, "a parts list only reads");
++}
++
++/// The assembly sheet's item numbers: renumbered from 10 in tens in one undo step; a new part takes
++/// 31 and keeps it through undo and redo; the second holder deleted keeps every number and leaves 1
++/// block and 6 screws; the first level is numbered on its own; all of it is the same after save and
++/// open, in both formats.
++#[test]
++fn the_assembly_sheets_item_numbers_hold_through_edits_undo_and_reopening() {
++    let dir = scratch("assembly-sheet");
++    let (mut s, holders) = assembly_sheet();
++    let undo = s.undo.len();
++    let numbered = run(&mut s, "assembly.bom.renumber", json!({"start": 10, "step": 10}));
++    let three = [numbered_row("10", "BL-200", ""), numbered_row("20", "BP-100", ""), numbered_row("30", "SC-M6", "")];
++    assert_eq!((numbered["numbered"].as_bool(), numbers(&numbered)), (Some(true), three.to_vec()), "{numbered}");
++    assert_eq!(s.undo.len(), undo + 1, "one undo step");
++
++    // A new part takes the highest number + 1. Undone, it goes with its number; redone, both come back.
++    run(&mut s, "component.create", json!({"name": "Washer", "activate": false}));
++    run(&mut s, "component.metadata.set", json!({"component": "Washer", "part_number": "WS-010", "description": "Washer M6"}));
++    let four =
++        [numbered_row("10", "BL-200", ""), numbered_row("20", "BP-100", ""), numbered_row("30", "SC-M6", ""), numbered_row("31", "WS-010", "")];
++    assert_eq!(numbers(&run(&mut s, "assembly.bom", json!({}))), four);
++    run(&mut s, "edit.undo", json!({}));
++    run(&mut s, "edit.undo", json!({}));
++    assert_eq!(numbers(&run(&mut s, "assembly.bom", json!({}))), three);
++    run(&mut s, "edit.redo", json!({}));
++    run(&mut s, "edit.redo", json!({}));
++    assert_eq!(numbers(&run(&mut s, "assembly.bom", json!({}))), four, "the washer is 31 again");
++
++    // The second holder deleted: 1 block and 6 screws, every number kept. Undone: 2 and 8 again.
++    run(&mut s, "selection.delete", json!({"occurrences": [holders[1]]}));
++    let fewer = run(&mut s, "assembly.bom", json!({}));
++    assert_eq!(
++        typed(&fewer),
++        [row("BL-200", "normal", 1), row("BP-100", "normal", 1), row("SC-M6", "normal", 6), row("WS-010", "normal", 1)],
++        "{fewer}"
++    );
++    assert_eq!(numbers(&fewer), four, "a model edit keeps the numbers");
++    run(&mut s, "edit.undo", json!({}));
++    let back = run(&mut s, "assembly.bom", json!({}));
++    assert_eq!(typed(&back)[2], row("SC-M6", "normal", 8), "{back}");
++    assert_eq!(numbers(&back), four);
++
++    // The first level numbered on its own, 1 to 4; parts only keeps its numbers.
++    let top = run(&mut s, "assembly.bom.renumber", json!({"levels": "top"}));
++    assert_eq!(
++        numbers(&top),
++        [numbered_row("1", "BP-100", ""), numbered_row("2", "HL-300", ""), numbered_row("3", "SC-M6", ""), numbered_row("4", "WS-010", "")],
++        "{top}"
++    );
++    assert_eq!(numbers(&run(&mut s, "assembly.bom", json!({}))), four, "each view keeps its own numbers");
++    assert_eq!(s.doc.assembly.item_numbers.len(), 2);
++
++    // Saved and opened again, in both formats: the same rows, counts and numbers in every view.
++    for (file, format) in [("assembly.json", "json"), ("assembly.solidcraft", "container")] {
++        let path = dir.join(file);
++        run(&mut s, "file.save_as", json!({"path": path, "format": format}));
++        let mut opened = Session::default();
++        run(&mut opened, "doc.open", json!({"path": path}));
++        for view in [json!({}), json!({"levels": "top"}), json!({"levels": "all"})] {
++            let (was, is) = (run(&mut s, "assembly.bom", view.clone()), run(&mut opened, "assembly.bom", view.clone()));
++            assert_eq!((numbers(&is), deep(&is)), (numbers(&was), deep(&was)), "{format} {view}");
++        }
++        assert_eq!(opened.doc.assembly.item_numbers, s.doc.assembly.item_numbers, "{format}");
++    }
++    let _ = std::fs::remove_dir_all(&dir);
++}
++
++/// The assembly sheet with the screw bought: every count stays as counted by hand, and the screw's
++/// rows say purchased. Undone, the rows are normal again.
++#[test]
++fn a_purchased_screw_keeps_the_assembly_sheets_counts() {
++    let (mut s, _) = assembly_sheet();
++    set_type(&mut s, "Screw", "purchased");
++    let flat = run(&mut s, "assembly.bom", json!({}));
++    assert_eq!(typed(&flat), [row("BL-200", "normal", 2), row("BP-100", "normal", 1), row("SC-M6", "purchased", 8)], "{flat}");
++    let top = run(&mut s, "assembly.bom", json!({"levels": "top"}));
++    assert_eq!(typed(&top), [row("BP-100", "normal", 1), row("HL-300", "normal", 2), row("SC-M6", "purchased", 4)], "{top}");
++    let all = run(&mut s, "assembly.bom", json!({"levels": "all"}));
++    assert_eq!(
++        deep(&all),
++        [
++            deep_row("1", "BP-100", "normal", 1, 1),
++            deep_row("2", "HL-300", "normal", 2, 2),
++            deep_row("2.1", "BL-200", "normal", 1, 2),
++            deep_row("2.2", "SC-M6", "purchased", 2, 4),
++            deep_row("3", "SC-M6", "purchased", 4, 4),
++        ],
++        "{all}"
++    );
++    let holder = run(&mut s, "assembly.bom", json!({"component": "Holder"}));
++    assert_eq!(typed(&holder), [row("BL-200", "normal", 1), row("SC-M6", "purchased", 2)], "{holder}");
++    run(&mut s, "edit.undo", json!({}));
++    assert_eq!(typed(&run(&mut s, "assembly.bom", json!({})))[2], row("SC-M6", "normal", 8));
++}
++
++/// The assembly sheet with the holder a phantom: it has no row of its own, and what it holds counts
++/// where it is placed, so the first level lists 2 blocks, 1 plate and 8 screws (4 + 2 x 2). Parts
++/// only doesn't change. Undone, the holder is a row again.
++#[test]
++fn a_phantom_holder_puts_what_it_holds_on_the_assembly_sheets_first_level() {
++    let (mut s, _) = assembly_sheet();
++    set_type(&mut s, "Holder", "phantom");
++    let top = run(&mut s, "assembly.bom", json!({"levels": "top"}));
++    assert_eq!(typed(&top), [row("BL-200", "normal", 2), row("BP-100", "normal", 1), row("SC-M6", "normal", 8)], "{top}");
++    assert_eq!(top["total_occurrences"], 11, "2 + 1 + 8");
++    let flat = run(&mut s, "assembly.bom", json!({}));
++    assert_eq!(typed(&flat), [row("BL-200", "normal", 2), row("BP-100", "normal", 1), row("SC-M6", "normal", 8)], "{flat}");
++    let all = run(&mut s, "assembly.bom", json!({"levels": "all"}));
++    assert_eq!(
++        deep(&all),
++        [deep_row("1", "BL-200", "normal", 2, 2), deep_row("2", "BP-100", "normal", 1, 1), deep_row("3", "SC-M6", "normal", 8, 8)],
++        "{all}"
++    );
++    run(&mut s, "edit.undo", json!({}));
++    assert_eq!(typed(&run(&mut s, "assembly.bom", json!({"levels": "top"})))[1], row("HL-300", "normal", 2));
++}
+diff --git a/tests/fixtures/w23-assembly-sheet/README.md b/tests/fixtures/w23-assembly-sheet/README.md
+new file mode 100644
+index 0000000..034f6d4
+--- /dev/null
++++ b/tests/fixtures/w23-assembly-sheet/README.md
+@@ -0,0 +1,46 @@
++# W23 assembly sheet
++
++The test assembly for #11773 (part of #4894): a small assembly from plain shapes whose parts list,
++balloons and revision table are checked against values counted by hand. Parts lists and balloons
++are planned on #3874, the revision table with the title block on #3875.
++
++`assembly.json` builds it by commands (`Session::run_script`). A step's `as` names the occurrence
++its reply returns, so a test can find the holders without counting steps.
++
++## The assembly
++
++| Part | Part number | Shape | Placed |
++|---|---|---|---|
++| Base plate | BP-100 | box 120 x 80 x 10 mm | once |
++| Screw | SC-M6 | cylinder Ø6 x 20 mm | 4 on the plate, and 2 in each holder |
++| Holder | HL-300 | assembly | twice, the second 40 mm along Y |
++| Block | BL-200 | box 20 x 20 x 30 mm | once in each holder |
++
++## Counted by hand
++
++- **Parts only:** BL-200 2, BP-100 1, SC-M6 8 (4 + 2 x 2).
++- **First level:** BP-100 1, HL-300 2, SC-M6 4.
++- **All levels:** 1 BP-100 1; 2 HL-300 2; 2.1 BL-200 1 each, 2 in all; 2.2 SC-M6 2 each, 4 in all;
++  3 SC-M6 4.
++- **SC-M6 purchased:** the same counts, its rows say purchased.
++- **HL-300 phantom:** no row of its own; the first level is BL-200 2, BP-100 1, SC-M6 8.
++- **The second holder deleted:** parts only is BL-200 1, BP-100 1, SC-M6 6.
++
++## What runs
++
++In `crates/engine/src/cmd/bom_tests.rs`:
++
++- `the_assembly_sheets_parts_list_matches_the_hand_counts`
++- `the_assembly_sheets_item_numbers_hold_through_edits_undo_and_reopening`
++- `a_purchased_screw_keeps_the_assembly_sheets_counts`
++- `a_phantom_holder_puts_what_it_holds_on_the_assembly_sheets_first_level`
++
++## NOT RUN yet
++
++Turned on as each piece lands on `drawings`:
++
++- the parts list placed on a sheet, its quantities after a model edit made with the drawing closed;
++- balloons showing their row's item number, a deleted holder's balloon lost (never moved or removed);
++- the revision table: `drawing.revise` (#11803), revisions numbered 1, 2, 3 (#11813) and revision
++  tags on a sheet (#11821);
++- the sheet export after save and reopen.
+diff --git a/tests/fixtures/w23-assembly-sheet/assembly.json b/tests/fixtures/w23-assembly-sheet/assembly.json
+new file mode 100644
+index 0000000..996054a
+--- /dev/null
++++ b/tests/fixtures/w23-assembly-sheet/assembly.json
+@@ -0,0 +1,25 @@
++{
++ "description": "W23 assembly sheet (#11773, part of #4894): a small test assembly whose parts list is counted by hand. A base plate BP-100 (120 x 80 x 10 mm) placed once; a screw SC-M6 (Ø6 x 20 mm) placed four times on the plate's corners; a holder HL-300, an assembly placed twice (the second 40 mm along Y), each holding one block BL-200 (20 x 20 x 30 mm) and two of the same screws. Parts only: BL-200 2, BP-100 1, SC-M6 8 (4 + 2 x 2). A step's `as` names the occurrence its reply returns, for the tests that read this script.",
++ "commands": [
++  {"command": "component.create", "params": {"name": "BasePlate"}, "as": "plate"},
++  {"command": "solid.box", "params": {"length": 120, "width": 80, "height": 10, "body_name": "Plate"}},
++  {"command": "component.activate", "params": {"component": 0}},
++  {"command": "component.create", "params": {"name": "Screw"}, "as": "screw"},
++  {"command": "solid.cylinder", "params": {"diameter": 6, "height": 20, "base": [5, 5, 10]}},
++  {"command": "component.activate", "params": {"component": 0}},
++  {"command": "occurrence.copy", "params": {"component": "Screw", "translate": [100, 0, 0]}},
++  {"command": "occurrence.copy", "params": {"component": "Screw", "translate": [0, 60, 0]}},
++  {"command": "occurrence.copy", "params": {"component": "Screw", "translate": [100, 60, 0]}},
++  {"command": "component.create", "params": {"name": "Holder", "activate": false}, "as": "first_holder"},
++  {"command": "component.create", "params": {"name": "Block", "parent": "Holder"}, "as": "block"},
++  {"command": "solid.box", "params": {"length": 20, "width": 20, "height": 30, "corner": [40, 10, 10], "body_name": "Block"}},
++  {"command": "component.activate", "params": {"component": 0}},
++  {"command": "occurrence.copy", "params": {"component": "Screw", "parent": "Holder", "translate": [30, 0, 0]}},
++  {"command": "occurrence.copy", "params": {"component": "Screw", "parent": "Holder", "translate": [30, 20, 0]}},
++  {"command": "occurrence.copy", "params": {"component": "Holder", "translate": [0, 40, 0]}, "as": "second_holder"},
++  {"command": "component.metadata.set", "params": {"component": "BasePlate", "part_number": "BP-100", "description": "Base plate 120 x 80 x 10"}},
++  {"command": "component.metadata.set", "params": {"component": "Screw", "part_number": "SC-M6", "description": "Screw M6 x 20"}},
++  {"command": "component.metadata.set", "params": {"component": "Holder", "part_number": "HL-300", "description": "Holder"}},
++  {"command": "component.metadata.set", "params": {"component": "Block", "part_number": "BL-200", "description": "Block 20 x 20 x 30"}}
++ ]
++}
+-- 
+2.43.0
+
+
+From 30c35b6814cb6811f1fc6e349e7fc74d4774a730 Mon Sep 17 00:00:00 2001
+From: Benny1496 <163034806+Benny1496@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 08:23:40 +0100
+Subject: [PATCH 2/2] test(drawings): balloons and revision rows on the W23
+ assembly sheet (#11773)
+
+One test in drawing_balloon_tests.rs, on the same command script as the
+parts list tests: four balloons on the top view follow their occurrences
+through model edits made with the drawing closed; the second holder's
+balloon reads lost when it is deleted and is never moved to the first
+holder; undo, redo, save and reopen; revision rows 1 and 3 (next 4) and
+the drawing's record never change with the model.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Br32oWdFXUCACfZNe7toDy
+---
+ .../engine/src/cmd/drawing_balloon_tests.rs   | 117 ++++++++++++++++++
+ tests/fixtures/w23-assembly-sheet/README.md   |  10 ++
+ 2 files changed, 127 insertions(+)
+
+diff --git a/crates/engine/src/cmd/drawing_balloon_tests.rs b/crates/engine/src/cmd/drawing_balloon_tests.rs
+index 76bcb17..b5b4951 100644
+--- a/crates/engine/src/cmd/drawing_balloon_tests.rs
++++ b/crates/engine/src/cmd/drawing_balloon_tests.rs
+@@ -5,6 +5,7 @@ use solidcraft_geom::drawing_view::NamedView;
+ 
+ use super::*;
+ use crate::schema::tests::conforms;
++use crate::tests::Folder;
+ 
+ fn run(s: &mut Session, id: &str, p: Value) -> Value {
+     let reply = s.execute(id, &p).unwrap_or_else(|e| panic!("{id}: {e}"));
+@@ -266,3 +267,119 @@ fn balloons_go_with_their_view_when_it_is_copied_and_with_its_sheet() {
+     }
+     assert_eq!(saved(&s), before);
+ }
++
++/// The W23 assembly sheet's test assembly (#11773), from its command script, and the occurrences
++/// the script names: the plate, the first screw, the two holders and the block placed in each.
++fn assembly_sheet() -> (Session, [u64; 5]) {
++    let script: Value = serde_json::from_str(include_str!("../../../../tests/fixtures/w23-assembly-sheet/assembly.json")).unwrap();
++    let mut s = Session::default();
++    let made = s.run_script(&script).unwrap();
++    let named = |name: &str| {
++        let step = script["commands"].as_array().unwrap().iter().position(|c| c["as"] == name).unwrap();
++        made[step]["occurrence"].as_u64().unwrap()
++    };
++    let occurrences = ["plate", "screw", "first_holder", "second_holder", "block"].map(named);
++    (s, occurrences)
++}
++
++/// Balloons on the assembly sheet's top view and the drawing's revision rows, through model edits
++/// made with the drawing closed, their undo and redo, and save and reopen: a balloon follows its
++/// occurrence; the second holder's balloon reads lost when that holder is deleted, and is never
++/// moved to the first holder or removed; the drawing's saved record and its revision rows never
++/// change with the model.
++#[test]
++fn balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay() {
++    let (mut s, [plate, screw, first, second, block]) = assembly_sheet();
++    run(&mut s, "drawing.create", json!({}));
++    let top = run(&mut s, "drawing.view.base", json!({"sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [150, 150]}))["view"].clone();
++    let drawing = ids::encode(s.drawing("test").unwrap().id);
++
++    // Four balloons: the plate's top front edge, the first screw's top rim, and the block by its
++    // top front edge through each holder.
++    let put = |s: &mut Session, point: [f64; 3], path: Value, at: [f64; 2]| {
++        let reply = run(s, ADD, json!({"view": top, "edge": {"point": point, "path": path}, "at": at}));
++        assert_eq!((&reply["status"], &reply["occurrence"]), (&json!("ok"), &path), "{reply}");
++        reply
++    };
++    let on_plate = put(&mut s, [60.0, 0.0, 10.0], json!([plate]), [-60.0, -50.0]);
++    let on_screw = put(&mut s, [8.0, 5.0, 30.0], json!([screw]), [-70.0, 40.0]);
++    let on_first = put(&mut s, [50.0, 10.0, 40.0], json!([first, block]), [0.0, 60.0]);
++    let on_second = put(&mut s, [50.0, 50.0, 40.0], json!([second, block]), [40.0, 60.0]);
++    ends_at(&on_plate, [60.0, 0.0, 10.0]);
++    ends_at(&on_first, [50.0, 10.0, 40.0]);
++    ends_at(&on_second, [50.0, 50.0, 40.0]);
++    assert_ne!(on_first["record"]["edge"], on_second["record"]["edge"], "one block, two placements, two balloons");
++    let balloons = [&on_plate, &on_screw, &on_first, &on_second].map(|b| b["balloon"].clone());
++
++    // Revision rows 1, 2 and 3; row 2 deleted: 1 and 3 stay, and the next is still 4.
++    let mut rows = Vec::new();
++    for (description, date) in [("First issue", "2026-11-03"), ("Withdrawn", "2026-11-04"), ("Holder moved", "2026-11-05")] {
++        rows.push(run(&mut s, "drawing.revision.add", json!({"set": {"description": description, "designer": "BS", "date": date}}))["row"].clone());
++    }
++    run(&mut s, "drawing.revision.delete", json!({"row": rows[1]}));
++    let revisions = run(&mut s, "drawing.inspect", json!({}))["revisions"].clone();
++    let numbers: Vec<&str> = revisions["rows"].as_array().unwrap().iter().map(|r| r["revision"].as_str().unwrap()).collect();
++    assert_eq!((numbers, revisions["next"].as_str()), (vec!["1", "3"], Some("4")), "{revisions}");
++
++    // The model is edited with the drawing closed, then the drawing is opened again.
++    let record = saved(&s);
++    let on_the_model = |s: &mut Session, id: &str, p: Value| {
++        run(s, "drawing.close", json!({}));
++        run(s, id, p);
++        run(s, "drawing.open", json!({"drawing": drawing}));
++    };
++    let read = |s: &mut Session| balloons.clone().map(|b| run(s, INSPECT, json!({"balloon": b})));
++    let statuses = |reads: &[Value; 4]| reads.clone().map(|r| r["status"].as_str().unwrap().to_string());
++    let ok = ["ok", "ok", "ok", "ok"].map(String::from);
++
++    // The second holder moved 30 mm along Y: its balloon's arrow follows, the others stay.
++    on_the_model(&mut s, "occurrence.move", json!({"occurrence": second, "space": "world", "translate": [0, 30, 0]}));
++    let moved = read(&mut s);
++    assert_eq!(statuses(&moved), ok);
++    ends_at(&moved[0], [60.0, 0.0, 10.0]);
++    ends_at(&moved[2], [50.0, 10.0, 40.0]);
++    ends_at(&moved[3], [50.0, 80.0, 40.0]);
++    assert_eq!(saved(&s), record, "a model edit leaves the drawing's record alone");
++    on_the_model(&mut s, "edit.undo", json!({}));
++    ends_at(&read(&mut s)[3], [50.0, 50.0, 40.0]);
++
++    // The second holder deleted: its balloon is lost, says why, keeps its occurrence and is still
++    // there; the others stay ok.
++    on_the_model(&mut s, "selection.delete", json!({"occurrences": [second]}));
++    let gone = read(&mut s);
++    assert_eq!(statuses(&gone), ["ok", "ok", "ok", "lost"].map(String::from), "{gone:?}");
++    assert!(gone[3]["why"].is_string(), "{}", gone[3]);
++    assert_eq!(gone[3]["occurrence"], json!([second, block]), "never moved to the first holder");
++    assert_eq!(gone[3]["record"], on_second["record"], "never removed or changed");
++    ends_at(&gone[2], [50.0, 10.0, 40.0]);
++    assert_eq!(saved(&s), record);
++
++    // Saved with the holder deleted and opened again: the same record, statuses and revisions.
++    let folder = Folder::new("assembly-sheet-balloons");
++    let path = folder.path("assembly.solidcraft");
++    run(&mut s, "file.save", json!({"path": path}));
++    let mut opened = Session::default();
++    run(&mut opened, "doc.open", json!({"path": path}));
++    run(&mut opened, "drawing.open", json!({"drawing": drawing}));
++    assert_eq!(saved(&opened), record, "opened again");
++    let again = read(&mut opened);
++    assert_eq!(statuses(&again), statuses(&gone));
++    for (was, is) in gone.iter().zip(&again) {
++        assert_eq!((&is["record"], &is["occurrence"]), (&was["record"], &was["occurrence"]), "{is}");
++    }
++    assert_eq!(run(&mut opened, "drawing.inspect", json!({}))["revisions"], revisions, "revision rows opened again");
++
++    // Undone: the second holder and its balloon are back; redone, lost again; undone once more.
++    on_the_model(&mut s, "edit.undo", json!({}));
++    let back = read(&mut s);
++    assert_eq!(statuses(&back), ok, "{back:?}");
++    ends_at(&back[3], [50.0, 50.0, 40.0]);
++    on_the_model(&mut s, "edit.redo", json!({}));
++    assert_eq!(statuses(&read(&mut s))[3], "lost");
++    on_the_model(&mut s, "edit.undo", json!({}));
++    assert_eq!(statuses(&read(&mut s)), ok);
++
++    // Through every model edit, the drawing's record and its revision rows are as they were.
++    assert_eq!(saved(&s), record);
++    assert_eq!(run(&mut s, "drawing.inspect", json!({}))["revisions"], revisions);
++}
+diff --git a/tests/fixtures/w23-assembly-sheet/README.md b/tests/fixtures/w23-assembly-sheet/README.md
+index 034f6d4..9d303bd 100644
+--- a/tests/fixtures/w23-assembly-sheet/README.md
++++ b/tests/fixtures/w23-assembly-sheet/README.md
+@@ -35,6 +35,16 @@ In `crates/engine/src/cmd/bom_tests.rs`:
+ - `a_purchased_screw_keeps_the_assembly_sheets_counts`
+ - `a_phantom_holder_puts_what_it_holds_on_the_assembly_sheets_first_level`
+ 
++In `crates/engine/src/cmd/drawing_balloon_tests.rs`, on what `drawings` already has for balloons
++and revision rows:
++
++- `balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay`: four balloons on
++  the top view at 1:2 (the plate, a screw, and the block through each holder); model edits made
++  with the drawing closed; the second holder moved, its arrow follows; deleted, its balloon is
++  `lost`, keeps its occurrence and record and is never moved to the first holder; undo and redo;
++  save and reopen; revision rows 1 and 3 after row 2 is deleted, the next still 4, and the
++  drawing's record unchanged by every model edit.
++
+ ## NOT RUN yet
+ 
+ Turned on as each piece lands on `drawings`:
+-- 
+2.43.0
+

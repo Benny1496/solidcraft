@@ -1,0 +1,123 @@
+name: SolidCraft assembly sheet parts list, balloons and revisions, Test 60 (fork only)
+
+on:
+  push:
+    branches:
+      - tests/w23-assembly-sheet-bom-20261104
+    paths:
+      - .github/workflows/solidcraft-assembly-sheet-60.yml
+      - tests/fixtures/w23-assembly-sheet-t60/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-assembly-sheet-60
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_DRAWINGS_SHA: fd4b7a7bc0e5d2de4eadf682eb2aee9510a5fc66
+
+jobs:
+  bom:
+    name: Test 60 - assembly sheet BOM, balloon and revision tests on drawings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout the patch (this fork branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout upstream drawings at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: fd4b7a7bc0e5d2de4eadf682eb2aee9510a5fc66
+          path: src
+          persist-credentials: false
+      - name: Apply the patch and check what it changes
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$(git rev-parse HEAD)" = "$UPSTREAM_DRAWINGS_SHA"
+          git apply --index ../overlay/tests/fixtures/w23-assembly-sheet-t60/assembly-sheet.patch
+          git diff --cached --name-status | tee ../changed.txt
+          printf 'M\tcrates/engine/src/cmd/bom_tests.rs\nM\tcrates/engine/src/cmd/drawing_balloon_tests.rs\nA\ttests/fixtures/w23-assembly-sheet/README.md\nA\ttests/fixtures/w23-assembly-sheet/assembly.json\n' > ../expected.txt
+          diff ../expected.txt ../changed.txt
+          test "$(git diff --cached --numstat crates/engine/src/cmd/bom_tests.rs crates/engine/src/cmd/drawing_balloon_tests.rs | cut -f2 | sort -u)" = "0"
+          echo "T60_PATCH_APPLIED=PASS (only additions, no production code)"
+          python3 -c "import json; json.load(open('tests/fixtures/w23-assembly-sheet/assembly.json'))"
+          echo "T60_SCRIPT_JSON=PASS"
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src
+          cache-on-failure: true
+      - name: Check formatting of the changed test file
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2024 --check crates/engine/src/cmd/bom_tests.rs crates/engine/src/cmd/drawing_balloon_tests.rs
+          echo "T60_FMT=PASS"
+      - name: Run the BOM, balloon and revision tests (no zero-test successes)
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../test60-report
+          echo "upstream_drawings_sha=$UPSTREAM_DRAWINGS_SHA" > ../test60-report/metadata.txt
+          echo "overlay_sha=$(git -C ../overlay rev-parse HEAD)" >> ../test60-report/metadata.txt
+          status=0
+          for group in bom drawing_balloon drawing_revision; do
+            set +e
+            timeout 75m cargo test --profile ci -p solidcraft-engine --lib "cmd::${group}::tests" -- --test-threads=2 2>&1 | tee "../test60-report/${group}.log"
+            [ "${PIPESTATUS[0]}" = 0 ] || status=1
+            set -e
+          done
+          python3 - <<'PY2'
+          from pathlib import Path
+          import re
+          new = {
+              "bom": (
+                  "the_assembly_sheets_parts_list_matches_the_hand_counts",
+                  "the_assembly_sheets_item_numbers_hold_through_edits_undo_and_reopening",
+                  "a_purchased_screw_keeps_the_assembly_sheets_counts",
+                  "a_phantom_holder_puts_what_it_holds_on_the_assembly_sheets_first_level",
+              ),
+              "drawing_balloon": ("balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay",),
+              "drawing_revision": (),
+          }
+          total = 0
+          for group, names in new.items():
+              text = Path(f"../test60-report/{group}.log").read_text()
+              for name in names:
+                  line = re.search(rf"^test cmd::{group}::tests::{name} \.\.\. (\w+)$", text, re.M)
+                  print(f"T60_NEW {group}::{name}: {line.group(1) if line else 'MISSING'}")
+                  assert line and line.group(1) == "ok", name
+              found = re.findall(r"test result: *([a-z]+)[.] *([0-9]+) passed; *([0-9]+) failed; *([0-9]+) ignored;", text)
+              print(f"T60_GROUP {group}: {found}")
+              assert len(found) == 1 and found[0][0] == "ok" and int(found[0][1]) > 0 and found[0][2] == "0" and found[0][3] == "0", (group, found)
+              total += int(found[0][1])
+          print(f"T60_NATIVE_TESTS=PASS total={total}")
+          PY2
+          test "$status" = 0
+      - name: Preserve original test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t60-assembly-sheet
+          path: test60-report/
+          if-no-files-found: warn
+          retention-days: 14
