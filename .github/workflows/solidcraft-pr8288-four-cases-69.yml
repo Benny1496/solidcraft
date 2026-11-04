@@ -1,0 +1,131 @@
+name: "SolidCraft Test 69: PR 8288 with the four plate cases (1c4f2f8c8) on drawings 49eedf1 + #11953 (fork only)"
+
+on:
+  push:
+    branches:
+      - tests/w23-assembly-sheet-bom-20261104
+    paths:
+      - .github/workflows/solidcraft-pr8288-four-cases-69.yml
+      - tests/fixtures/t69/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-pr8288-four-cases-69
+  cancel-in-progress: false
+
+env:
+  BASE_SHA: 49eedf122ca01d94390c8779e1adf5cb1a911fab
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+
+jobs:
+  pr8288:
+    name: "Test 69 - PR 8288's next head: fmt, lists, clippy, validate.py and every engine test with drawing in its name"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    steps:
+      - name: Make room on the runner
+        shell: bash
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+      - name: Checkout the patches (this fork branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout drawings at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 49eedf122ca01d94390c8779e1adf5cb1a911fab
+          path: src
+          persist-credentials: false
+      - name: Apply #11953, PR 8288 (6d62ba4) and its next commit
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git apply --index ../overlay/tests/fixtures/t67/fix11953.diff
+          git apply --index ../overlay/tests/fixtures/t67/pr8288-6d62ba4.diff
+          git apply --index ../overlay/tests/fixtures/t69/pr8288-four-cases.diff
+          git diff --cached --stat
+          if grep -n "eprintln\|T67_\|observe_" crates/engine/src/cmd/drawing_dimension_tests.rs; then exit 1; fi
+          python3 -I tests/fixtures/w23a-drawing-updates/validate.py
+          echo "T69_APPLIED_AND_STATIC=PASS"
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src
+          key: t67-prototypes
+          cache-on-failure: true
+      - name: fmt, lists and clippy -D warnings on the engine
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t69-report
+          cargo fmt --all -- --check
+          echo "T69_FMT_ALL=PASS"
+          cargo xtask lists
+          echo "T69_LISTS=PASS"
+          timeout 110m cargo clippy -p solidcraft-engine --all-targets --profile ci -- -D warnings 2>&1 | tee ../t69-report/clippy.log
+          test "${PIPESTATUS[0]}" = 0
+          echo "T69_CLIPPY=PASS"
+      - name: Every engine test with drawing in its name
+        shell: bash
+        working-directory: src
+        run: |
+          set +e
+          set -uo pipefail
+          timeout 60m cargo test --profile ci -p solidcraft-engine --lib drawing -- --test-threads=2 2>&1 | tee ../t69-report/drawing.log
+          code=${PIPESTATUS[0]}
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("../t69-report/drawing.log").read_text()
+          ours = [
+              "changing_a_bores_diameter_keeps_its_dimension",
+              "deleting_a_bore_loses_its_dimension_and_never_moves_it",
+              "undo_and_redo_a_diameter_change_keep_its_dimension",
+              "undo_and_redo_a_deleted_bore_restore_its_dimension",
+              "reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value",
+              "the_plates_width_between_its_side_faces_follows_a_width_change",
+              "a_suppressed_bore_says_so_and_its_dimension_comes_back",
+              "the_plates_five_dimensions_follow_each_parameter_and_its_undo",
+              "the_bores_centres_stay_put_and_a_lost_bore_takes_its_centre_dimensions",
+              "the_plates_sheet_draws_what_the_model_has_and_the_same_after_undo",
+              "fillets_on_the_plates_corners_leave_its_five_dimensions_read",
+          ]
+          bad = []
+          for name in ours:
+              line = re.search(rf"^test cmd::drawing_dimension::tests::{name} \.\.\. (\w+)$", text, re.M)
+              verdict = line.group(1) if line else "MISSING"
+              print(f"T69_OURS {name}: {verdict}")
+              if verdict != "ok":
+                  bad.append(name)
+          for name in re.findall(r"^test (\S+) \.\.\. FAILED$", text, re.M):
+              print(f"T69_FAILED {name}")
+          found = re.findall(r"test result: *([a-z]+)[.] *([0-9]+) passed; *([0-9]+) failed; *([0-9]+) ignored;", text)
+          print(f"T69_RESULT {found}")
+          assert not bad, f"not ok: {bad}"
+          assert len(found) == 1 and found[0][0] == "ok" and found[0][2] == "0" and found[0][3] == "0", found
+          print(f"T69_DRAWING_TESTS=PASS count={found[0][1]} ours={len(ours)}")
+          PY
+          py=$?
+          test "$code" = 0 && test "$py" = 0
+      - name: Preserve original output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t69-pr8288-four-cases
+          path: t69-report/
+          if-no-files-found: warn
+          retention-days: 14
