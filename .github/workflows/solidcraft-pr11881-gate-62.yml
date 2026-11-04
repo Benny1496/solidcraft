@@ -1,0 +1,121 @@
+name: SolidCraft PR 11881 gate checks, Test 62 (fork only)
+
+on:
+  push:
+    branches:
+      - tests/w23-assembly-sheet-bom-20261104
+    paths:
+      - .github/workflows/solidcraft-pr11881-gate-62.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-pr11881-gate-62
+  cancel-in-progress: false
+
+env:
+  PR_HEAD_SHA: bf35dbbcf9c74b74429aad3b1515a4e69700f01f
+  UPSTREAM_DRAWINGS_SHA: fd4b7a7bc0e5d2de4eadf682eb2aee9510a5fc66
+
+jobs:
+  gate:
+    name: Test 62 - fmt, lists, clippy -D warnings and the tests on PR 11881's head
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout PR 11881's head from this fork
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: bf35dbbcf9c74b74429aad3b1515a4e69700f01f
+          fetch-depth: 10
+          path: src
+          persist-credentials: false
+      - name: Check the head and what it changes
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$(git rev-parse HEAD)" = "$PR_HEAD_SHA"
+          git merge-base --is-ancestor "$UPSTREAM_DRAWINGS_SHA" HEAD
+          git diff --name-status "$UPSTREAM_DRAWINGS_SHA" HEAD | tee ../changed.txt
+          printf 'M\tcrates/engine/src/cmd/bom_tests.rs\nM\tcrates/engine/src/cmd/drawing_balloon_tests.rs\nA\ttests/fixtures/w23-assembly-sheet/README.md\nA\ttests/fixtures/w23-assembly-sheet/assembly.json\nA\ttests/fixtures/w23-assembly-sheet/cases.json\nA\ttests/fixtures/w23-assembly-sheet/validate.py\n' > ../expected.txt
+          diff ../expected.txt ../changed.txt
+          echo "T62_HEAD=PASS $(git rev-parse --short HEAD) on drawings@${UPSTREAM_DRAWINGS_SHA:0:9}, 6 files, no production code"
+          python3 -I tests/fixtures/w23-assembly-sheet/validate.py | tee ../static.txt
+          grep -q "STATIC CONTRACT PASS" ../static.txt
+          echo "T62_RECIPES_STATIC=PASS (recipes 3 to 6 stay NOT RUN)"
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src
+          cache-on-failure: true
+      - name: Gate checks from cargo xtask ci
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../test62-report
+          cargo fmt --all -- --check
+          echo "T62_FMT_ALL=PASS"
+          cargo xtask lists 2>&1 | tee ../test62-report/lists.log
+          echo "T62_LISTS=PASS"
+          timeout 100m cargo clippy -p solidcraft-engine --all-targets --profile ci -- -D warnings 2>&1 | tee ../test62-report/clippy.log
+          test "${PIPESTATUS[0]}" = 0
+          echo "T62_CLIPPY_ENGINE_ALL_TARGETS=PASS (-D warnings)"
+      - name: Run the BOM, balloon and revision tests
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          status=0
+          for group in bom drawing_balloon drawing_revision; do
+            set +e
+            timeout 60m cargo test --profile ci -p solidcraft-engine --lib "cmd::${group}::tests" -- --test-threads=2 2>&1 | tee "../test62-report/${group}.log"
+            [ "${PIPESTATUS[0]}" = 0 ] || status=1
+            set -e
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          new = {
+              "bom": (
+                  "the_assembly_sheets_parts_list_matches_the_hand_counts",
+                  "the_assembly_sheets_item_numbers_hold_through_edits_undo_and_reopening",
+                  "a_purchased_screw_keeps_the_assembly_sheets_counts",
+                  "a_phantom_holder_puts_what_it_holds_on_the_assembly_sheets_first_level",
+              ),
+              "drawing_balloon": ("balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay",),
+              "drawing_revision": (),
+          }
+          total = 0
+          for group, names in new.items():
+              text = Path(f"../test62-report/{group}.log").read_text()
+              for name in names:
+                  line = re.search(rf"^test cmd::{group}::tests::{name} \.\.\. (\w+)$", text, re.M)
+                  print(f"T62_NEW {group}::{name}: {line.group(1) if line else 'MISSING'}")
+                  assert line and line.group(1) == "ok", name
+              found = re.findall(r"test result: *([a-z]+)[.] *([0-9]+) passed; *([0-9]+) failed; *([0-9]+) ignored;", text)
+              print(f"T62_GROUP {group}: {found}")
+              assert len(found) == 1 and found[0][0] == "ok" and int(found[0][1]) > 0 and found[0][2] == "0" and found[0][3] == "0", (group, found)
+              total += int(found[0][1])
+          print(f"T62_NATIVE_TESTS=PASS total={total}")
+          PY
+          test "$status" = 0
+      - name: Preserve original output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t62-pr11881-gate
+          path: test62-report/
+          if-no-files-found: warn
+          retention-days: 14
