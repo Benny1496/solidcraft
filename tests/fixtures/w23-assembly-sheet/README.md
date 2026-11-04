@@ -45,12 +45,28 @@ and revision rows:
   save and reopen; revision rows 1 and 3 after row 2 is deleted, the next still 4, and the
   drawing's record unchanged by every model edit.
 
-## NOT RUN yet
+## Recipes, NOT RUN yet
 
-Turned on as each piece lands on `drawings`:
+`cases.json` holds recipes 3 to 6 of #11773, turned on as each piece lands on `drawings`. Every
+model edit in them is made with the drawing closed, then the drawing is opened again.
 
-- the parts list placed on a sheet, its quantities after a model edit made with the drawing closed;
-- balloons showing their row's item number, a deleted holder's balloon lost (never moved or removed);
-- the revision table: `drawing.revise` (#11803), revisions numbered 1, 2, 3 (#11813) and revision
-  tags on a sheet (#11821);
-- the sheet export after save and reopen.
+- **W23-AS-03, the parts list on the sheet** (waits for #3874's P8): the first level numbered 1, 2,
+  3 with the script's descriptions; the second holder deleted, HL-300 reads 1 and the numbers stay.
+- **W23-AS-04, balloons** (waits for #3874's balloon item numbers): one balloon through each holder
+  to its block, both showing item 2; the second holder deleted, its balloon is lost (pink), never
+  moved to the first holder or removed; undone, both are ok again.
+- **W23-AS-05, the revision table** (waits for #11803 `drawing.revise`, #11813 numbering, #11821
+  revision tags, #3875's table): revisions 1, 2, 3; 2 deleted leaves 1 and 3 with 4 next; a tag on
+  3; unchanged by a model edit and through save and reopen.
+- **W23-AS-06, the sheet export** (waits for the three above and text on the sheet, #4890): the
+  same SVG bytes before saving and after opening again; PNG, DXF and PDF as each writer lands.
+
+`validate.py` checks the recipes without running SolidCraft: it works the hand counts out again
+from `assembly.json`, checks every model edit is made with the drawing closed, that each recipe's
+expected values follow from the script (quantities, descriptions, item numbers, revisions), that
+everything placed fits an A3 sheet, and that the native tests above are in their files. It never
+reports a recipe as passed.
+
+```
+python3 tests/fixtures/w23-assembly-sheet/validate.py
+```
