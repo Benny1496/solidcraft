@@ -1,0 +1,150 @@
+name: "SolidCraft Test 70: the Bore3/Bore4 feature-id test fails as expected and its KNOWN_FAILING_TESTS line grades it (fork only)"
+
+on:
+  push:
+    branches:
+      - tests/w23-assembly-sheet-bom-20261104
+    paths:
+      - .github/workflows/solidcraft-a5-known-failing-70.yml
+      - tests/fixtures/t70/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-a5-known-failing-70
+  cancel-in-progress: false
+
+env:
+  BASE_SHA: 49eedf122ca01d94390c8779e1adf5cb1a911fab
+  MAIN_SHA: 06def2231d6ecf22ce002db70ee315f8f058ee34
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+
+jobs:
+  a5:
+    name: "Test 70 - the new test on PR 8288 (1c4f2f8), graded by main's known-failing"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    steps:
+      - name: Make room on the runner
+        shell: bash
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+      - name: Checkout the patches (this fork branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout drawings at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 49eedf122ca01d94390c8779e1adf5cb1a911fab
+          path: src
+          persist-credentials: false
+      - name: Checkout main at the pinned commit, for its known-failing tool and list
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 06def2231d6ecf22ce002db70ee315f8f058ee34
+          path: main
+          persist-credentials: false
+      - name: Apply #11953, PR 8288 (1c4f2f8) and the new test
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          test "$(git -C ../main rev-parse HEAD)" = "$MAIN_SHA"
+          git apply --index ../overlay/tests/fixtures/t67/fix11953.diff
+          git apply --index ../overlay/tests/fixtures/t70/pr8288-1c4f2f8.diff
+          git apply --index ../overlay/tests/fixtures/t70/a5-test.diff
+          git diff --cached --stat
+          python3 -I tests/fixtures/w23a-drawing-updates/validate.py
+          echo "T70_APPLIED=PASS"
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            src
+            main
+          key: t70-a5
+          cache-on-failure: true
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-nextest
+      - name: fmt and clippy -D warnings on the engine
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t70-report
+          cargo fmt --all -- --check
+          echo "T70_FMT_ALL=PASS"
+          timeout 110m cargo clippy -p solidcraft-engine --all-targets --profile ci -- -D warnings 2>&1 | tee ../t70-report/clippy.log
+          test "${PIPESTATUS[0]}" = 0
+          echo "T70_CLIPPY=PASS"
+      - name: Every engine test with drawing in its name, under nextest with a junit report
+        shell: bash
+        working-directory: src
+        run: |
+          set +e
+          set -uo pipefail
+          timeout 60m cargo nextest run -p solidcraft-engine --lib --cargo-profile ci --profile ci --no-fail-fast \
+            -E 'test(/drawing/)' 2>&1 | tee ../t70-report/drawing.log
+          code=${PIPESTATUS[0]}
+          cp target/nextest/ci/junit.xml ../t70-report/junit.xml
+          echo "nextest exit code: $code"
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("../t70-report/drawing.log").read_text()
+          junit = Path("../t70-report/junit.xml").read_text()
+          ours = "cmd::drawing_dimension::tests::a_new_hole_never_takes_the_dimension_of_an_undone_one"
+          failed = sorted(set(re.findall(r"^\s+FAIL \[[^\]]*\] (?:\([^)]*\) )?solidcraft-engine (\S+)", text, re.M)))
+          print("T70_FAILED", failed)
+          summary = re.findall(r"Summary \[.*", text)
+          print("T70_SUMMARY", summary[-1] if summary else "none")
+          assert failed == [ours], f"exactly the new test must fail today, got {failed}"
+          detail = text[text.find(ours):]
+          assert "Bore3's dimension reads another hole" in detail, "it must fail where Bore4 takes Bore3's dimension"
+          m = re.search(r"Bore3's dimension reads another hole: (\{.*?\})\n", detail)
+          print("T70_HOW_IT_FAILS", (m.group(1)[:400] if m else "see log"))
+          assert ours in junit, "the junit report names the test"
+          print("T70_FAILS_AS_EXPECTED=PASS (only the new test, where Bore4 takes Bore3's dimension)")
+          PY
+      - name: Grade the run with main's known-failing, without and with our line
+        shell: bash
+        working-directory: main
+        run: |
+          set +e
+          set -uo pipefail
+          cp tests/KNOWN_FAILING_TESTS ../t70-report/KNOWN_FAILING_TESTS.main
+          timeout 30m cargo xtask known-failing --junit ../t70-report/junit.xml 2>&1 | tee ../t70-report/grade-without.log
+          without=${PIPESTATUS[0]}
+          cp ../overlay/tests/fixtures/t70/KNOWN_FAILING_TESTS.with-ours tests/KNOWN_FAILING_TESTS
+          diff ../t70-report/KNOWN_FAILING_TESTS.main tests/KNOWN_FAILING_TESTS | tee ../t70-report/list.diff
+          timeout 30m cargo xtask known-failing --junit ../t70-report/junit.xml 2>&1 | tee ../t70-report/grade-with.log
+          with=${PIPESTATUS[0]}
+          timeout 30m cargo xtask lists 2>&1 | tee ../t70-report/lists.log
+          lists=${PIPESTATUS[0]}
+          echo "T70_GRADE_WITHOUT_OUR_LINE exit=$without (must fail: an unlisted failure)"
+          echo "T70_GRADE_WITH_OUR_LINE exit=$with (must pass)"
+          echo "T70_MAIN_LISTS_WITH_OUR_LINE exit=$lists (must pass: sorted, one cause each)"
+          test "$without" != 0 && test "$with" = 0 && test "$lists" = 0 && echo "T70_KNOWN_FAILING_LINE=PASS"
+          test "$without" != 0 && test "$with" = 0 && test "$lists" = 0
+      - name: Preserve original output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t70-a5-known-failing
+          path: t70-report/
+          if-no-files-found: warn
+          retention-days: 14
