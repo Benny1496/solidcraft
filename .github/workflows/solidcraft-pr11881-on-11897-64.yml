@@ -1,0 +1,130 @@
+name: SolidCraft PR 11881 with recipe 4 on CamWight's #11897, Test 64 (fork only)
+
+on:
+  push:
+    branches:
+      - tests/w23-assembly-sheet-bom-20261104
+    paths:
+      - .github/workflows/solidcraft-pr11881-on-11897-64.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-pr11881-on-11897-64
+  cancel-in-progress: false
+
+env:
+  BASE_SHA: f0aba50664d05f4bc871189bba6f8995f9159b1b
+
+jobs:
+  gate:
+    name: Test 64 - PR 11881 and recipe 4 on #11897@f0aba50: fmt, clippy, tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout the diff (this fork branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout CamWight's #11897 head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: CamWight/solidcraft
+          ref: f0aba50664d05f4bc871189bba6f8995f9159b1b
+          path: src
+          persist-credentials: false
+      - name: Apply PR 11881 and recipe 4, check what it changes
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git apply --index ../overlay/tests/fixtures/pr11881-on-11897-t64/on-11897.diff
+          git diff --cached --name-status | tee ../changed.txt
+          printf 'M\tcrates/engine/src/cmd/bom_tests.rs\nM\tcrates/engine/src/cmd/drawing_balloon_tests.rs\nA\ttests/fixtures/w23-assembly-sheet/README.md\nA\ttests/fixtures/w23-assembly-sheet/assembly.json\nA\ttests/fixtures/w23-assembly-sheet/cases.json\nA\ttests/fixtures/w23-assembly-sheet/validate.py\n' > ../expected.txt
+          diff ../expected.txt ../changed.txt
+          test "$(git diff --cached --numstat | cut -f2 | sort -u)" = "0"
+          echo "T64_APPLIED=PASS on #11897@${BASE_SHA:0:9}, 6 files, only additions"
+          python3 -I tests/fixtures/w23-assembly-sheet/validate.py | tee ../static.txt
+          grep -q "STATIC CONTRACT PASS" ../static.txt
+          echo "T64_RECIPES_STATIC=PASS"
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src
+          cache-on-failure: true
+      - name: Gate checks from cargo xtask ci
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../test64-report
+          cargo fmt --all -- --check
+          echo "T64_FMT_ALL=PASS"
+          timeout 100m cargo clippy -p solidcraft-engine --all-targets --profile ci -- -D warnings 2>&1 | tee ../test64-report/clippy.log
+          test "${PIPESTATUS[0]}" = 0
+          echo "T64_CLIPPY_ENGINE_ALL_TARGETS=PASS (-D warnings)"
+      - name: Run the BOM, balloon and revision tests
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          status=0
+          for group in bom drawing_balloon drawing_revision drawing_table; do
+            set +e
+            timeout 60m cargo test --profile ci -p solidcraft-engine --lib "cmd::${group}::tests" -- --test-threads=2 2>&1 | tee "../test64-report/${group}.log"
+            [ "${PIPESTATUS[0]}" = 0 ] || status=1
+            set -e
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          new = {
+              "bom": (
+                  "the_assembly_sheets_parts_list_matches_the_hand_counts",
+                  "the_assembly_sheets_item_numbers_hold_through_edits_undo_and_reopening",
+                  "a_purchased_screw_keeps_the_assembly_sheets_counts",
+                  "a_phantom_holder_puts_what_it_holds_on_the_assembly_sheets_first_level",
+              ),
+              "drawing_balloon": (
+                  "balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay",
+                  "balloons_on_the_assembly_sheet_read_their_holders_row",
+                  "a_balloon_reads_its_row_in_a_parts_list",
+                  "a_balloon_follows_its_row_through_the_model",
+              ),
+              "drawing_revision": (),
+              "drawing_table": (),
+          }
+          total = 0
+          for group, names in new.items():
+              text = Path(f"../test64-report/{group}.log").read_text()
+              for name in names:
+                  line = re.search(rf"^test cmd::{group}::tests::{name} \.\.\. (\w+)$", text, re.M)
+                  print(f"T64_NEW {group}::{name}: {line.group(1) if line else 'MISSING'}")
+                  assert line and line.group(1) == "ok", name
+              found = re.findall(r"test result: *([a-z]+)[.] *([0-9]+) passed; *([0-9]+) failed; *([0-9]+) ignored;", text)
+              print(f"T64_GROUP {group}: {found}")
+              assert len(found) == 1 and found[0][0] == "ok" and int(found[0][1]) > 0 and found[0][2] == "0" and found[0][3] == "0", (group, found)
+              total += int(found[0][1])
+          print(f"T64_NATIVE_TESTS=PASS total={total}")
+          PY
+          test "$status" = 0
+      - name: Preserve original output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t64-pr11881-on-11897
+          path: test64-report/
+          if-no-files-found: warn
+          retention-days: 14
