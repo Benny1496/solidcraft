@@ -1,0 +1,32 @@
+From 15e7066db39143b6cc2eb06aaa2cbba089038f69 Mon Sep 17 00:00:00 2001
+From: Benny1496 <163034806+Benny1496@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 10:34:00 +0100
+Subject: [PATCH] test(drawings): no unreachable! in the reopen test, for
+ clippy
+
+The engine denies clippy::unreachable, in its tests too, so the reopen
+test's last match arm failed cargo clippy -D warnings. The unchanged
+plate is now the match's default arm; what the test checks is the same.
+---
+ crates/engine/src/cmd/drawing_dimension_tests.rs | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/crates/engine/src/cmd/drawing_dimension_tests.rs b/crates/engine/src/cmd/drawing_dimension_tests.rs
+index 689d37b..6d00beb 100644
+--- a/crates/engine/src/cmd/drawing_dimension_tests.rs
++++ b/crates/engine/src/cmd/drawing_dimension_tests.rs
+@@ -966,10 +966,9 @@ fn reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value() {
+         assert_eq!(bore2["record"]["text"], second["record"]["text"], "{state}: Bore2 label moved");
+         reads(&bore2, 10.0, "Ø10.00");
+         match state {
+-            "unchanged" => reads(&bore1, 10.0, "Ø10.00"),
+             "resized" => reads(&bore1, 12.0, "Ø12.00"),
+             "deleted" => reads_lost_bore(&bore1),
+-            _ => unreachable!(),
++            _ => reads(&bore1, 10.0, "Ø10.00"),
+         }
+     }
+ }
+-- 
+2.43.0
+
