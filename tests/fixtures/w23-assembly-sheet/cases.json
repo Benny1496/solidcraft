@@ -34,8 +34,8 @@
    "id": "W23-AS-03",
    "title": "The parts list on the sheet shows the hand counts and follows a model edit",
    "runtime_status": "NOT_RUN",
-   "waits_for": ["#3874: a parts list placed on a sheet (P8)"],
-   "pending_commands": {"place_parts_list": "the command that puts a parts list on a sheet, named when it lands"},
+   "waits_for": ["#11828: drawing.table.add, a parts list saved on a sheet", "#3874: the parts list drawn on paper (text on the sheet)"],
+   "pending_commands": {"place_parts_list": "drawing.table.add (#11828): a parts list of the design's first level, its corner on paper"},
    "steps": [
     {"do": "assembly.bom.renumber", "params": {"levels": "top"}, "drawing": "closed"},
     {"do": "drawing.create", "drawing": "open"},
@@ -68,7 +68,8 @@
    "id": "W23-AS-04",
    "title": "A balloon per holder shows its row's item number; the deleted holder's balloon is lost, never moved or removed",
    "runtime_status": "NOT_RUN",
-   "waits_for": ["#3874: a balloon showing its parts list row's item number", "W23-AS-03's parts list on the sheet"],
+   "waits_for": ["the balloon-reads-its-row PR on #11828 (#3874)", "W23-AS-03's parts list on the sheet"],
+   "confirmed": "https://github.com/tangency-labs/solidcraft/pull/11881#issuecomment-6626379382",
    "steps": [
     {"from": "W23-AS-03", "until": "place_parts_list"},
     {"do": "drawing.balloon.add", "params": {"edge": {"point": [50, 10, 40], "path": ["first_holder", "block"]}, "at": [0, 60]}, "drawing": "open", "as": "first_balloon"},
@@ -78,18 +79,26 @@
     {"do": "drawing.open", "check": "second_lost"},
     {"do": "drawing.close"},
     {"do": "edit.undo", "drawing": "closed"},
-    {"do": "drawing.open", "check": "both_ok"}
+    {"do": "drawing.open", "check": "both_ok"},
+    {"do": "drawing.close"},
+    {"do": "component.metadata.set", "params": {"component": "Holder", "bom_type": "phantom"}, "drawing": "closed"},
+    {"do": "drawing.open", "check": "holder_phantom"}
    ],
    "expect": {
     "both_ok": {
-     "first_balloon": {"status": "ok", "item": "2", "occurrence": ["first_holder", "block"]},
-     "second_balloon": {"status": "ok", "item": "2", "occurrence": ["second_holder", "block"]}
+     "first_balloon": {"status": "ok", "row": "HL-300", "item": "2", "occurrence": ["first_holder", "block"]},
+     "second_balloon": {"status": "ok", "row": "HL-300", "item": "2", "occurrence": ["second_holder", "block"]}
     },
     "second_lost": {
-     "first_balloon": {"status": "ok", "item": "2", "occurrence": ["first_holder", "block"]},
-     "second_balloon": {"status": "lost", "shown_as": "lost (pink)", "occurrence": ["second_holder", "block"], "moved_to_first_holder": false, "removed": false}
+     "first_balloon": {"status": "ok", "row": "HL-300", "item": "2", "occurrence": ["first_holder", "block"]},
+     "second_balloon": {"status": "lost", "row": "not found", "shown_as": "lost (pink)", "occurrence": ["second_holder", "block"], "moved_to_first_holder": false, "removed": false}
     },
-    "item_rule": "a balloon through a holder shows the first-level row it is counted in (HL-300, item 2); to confirm with the balloon PR when it lands"
+    "holder_phantom": {
+     "first_balloon": {"status": "ok", "row": "BL-200", "occurrence": ["first_holder", "block"]},
+     "second_balloon": {"status": "ok", "row": "BL-200", "occurrence": ["second_holder", "block"]}
+    },
+    "row_rule": "A balloon only picks the row its placement is counted in: the row of the longest member path its occurrence path starts with (row_of in crates/doc/src/bom.rs, pinned by row_of_finds_the_row_a_placement_is_counted_in in bom_tests.rs). Through a holder in a first-level list that is HL-300's row, and with HL-300 a phantom it is BL-200's. The item shown is that row's number, which the list's numbering gives and bom_tests.rs checks.",
+    "lost_reads": "the deleted holder's balloon: its reference status lost, and drawing.inspect reports its row as not found"
    }
   },
   {

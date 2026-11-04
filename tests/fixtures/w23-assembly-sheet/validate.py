@@ -15,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 
 # Commands that change the model, refused while a drawing is open.
-MODEL_COMMANDS = {"assembly.bom.renumber", "selection.delete", "occurrence.move", "edit.undo", "edit.redo"}
+MODEL_COMMANDS = {"assembly.bom.renumber", "component.metadata.set", "selection.delete", "occurrence.move", "edit.undo", "edit.redo"}
 IDS = ["W23-AS-03", "W23-AS-04", "W23-AS-05", "W23-AS-06"]
 
 
@@ -130,19 +130,28 @@ def main():
             require(r["quantity"] == counts[r["part_number"]], f"W23-AS-03 {key}: {r['part_number']} quantity")
             require(r["description"] == asm.descriptions[r["part_number"]], f"W23-AS-03 {key}: {r['part_number']} description")
 
-    # W23-AS-04: each balloon goes through its own holder to the block, shows the holder's item,
-    # and the deleted holder's balloon is lost, never moved or removed.
-    holder_item = next(r["item"] for r in rows["rows"] if r["part_number"] == asm.part_numbers["Holder"])
+    # W23-AS-04: a balloon picks the row its placement is counted in, the row of the longest member
+    # path its occurrence path starts with (CamWight on #11881). Through a holder that's the holder's
+    # first-level row, and with the holder a phantom the block's own. The item shown is that row's
+    # number from the list; the deleted holder's balloon is lost, its row not found, never moved.
+    holder, block = asm.part_numbers["Holder"], asm.part_numbers[asm.placed["block"][0]]
+    holder_item = next(r["item"] for r in rows["rows"] if r["part_number"] == holder)
     balloons = cases[1]["expect"]
-    for check in ("both_ok", "second_lost"):
-        for name, holder in (("first_balloon", "first_holder"), ("second_balloon", "second_holder")):
+    for check, row in (("both_ok", holder), ("second_lost", holder), ("holder_phantom", block)):
+        for name, through in (("first_balloon", "first_holder"), ("second_balloon", "second_holder")):
             b = balloons[check][name]
-            require(b["occurrence"] == [holder, "block"], f"W23-AS-04 {check}: {name} through its own holder")
+            require(b["occurrence"] == [through, "block"], f"W23-AS-04 {check}: {name} through its own holder")
             if b["status"] == "ok":
-                require(b["item"] == holder_item, f"W23-AS-04 {check}: {name} shows item {holder_item}")
+                require(b["row"] == row, f"W23-AS-04 {check}: {name} reads {row}'s row")
+                require(b.get("item", holder_item if row == holder else None) == (holder_item if row == holder else None),
+                        f"W23-AS-04 {check}: {name}'s item is its row's number")
     lost = balloons["second_lost"]["second_balloon"]
-    require(lost["status"] == "lost" and lost["moved_to_first_holder"] is False and lost["removed"] is False, "W23-AS-04: lost, never moved or removed")
+    require(lost["status"] == "lost" and lost["row"] == "not found", "W23-AS-04: lost, its row not found")
+    require(lost["moved_to_first_holder"] is False and lost["removed"] is False, "W23-AS-04: never moved or removed")
     require(balloons["second_lost"]["first_balloon"]["status"] == "ok", "W23-AS-04: the first holder's balloon stays ok")
+    phantom = [s for s in cases[1]["steps"] if s.get("do") == "component.metadata.set"]
+    require(phantom == [{"do": "component.metadata.set", "params": {"component": "Holder", "bom_type": "phantom"}, "drawing": "closed"}],
+            "W23-AS-04: the holder made a phantom, by a model command with the drawing closed")
 
     # W23-AS-05: three revisions, the second deleted, the next is still one past the highest.
     rev = cases[2]["expect"]
