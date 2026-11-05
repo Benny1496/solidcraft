@@ -1,0 +1,109 @@
+name: "SolidCraft Test 73: why clippy fails on PR 8288 at drawings 188192c - the bare base next to the patched tree (fork only)"
+
+on:
+  push:
+    branches:
+      - tests/w23-assembly-sheet-bom-20261104
+    paths:
+      - .github/workflows/solidcraft-clippy-why-73.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-clippy-why-73
+  cancel-in-progress: false
+
+env:
+  BASE_SHA: 188192cb8bc1eac9f515120df80df5d5f66205f1
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+
+jobs:
+  clippy:
+    name: "Test 73 - clippy on the engine, ${{ matrix.tree }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        tree: [bare-188192c, pr8288-0881b93]
+    steps:
+      - name: Make room on the runner
+        shell: bash
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+      - name: Checkout the patches (this fork branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout drawings at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 188192cb8bc1eac9f515120df80df5d5f66205f1
+          path: src
+          persist-credentials: false
+      - name: Apply PR 8288 (patched tree only)
+        if: matrix.tree == 'pr8288-0881b93'
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git apply --index ../overlay/tests/fixtures/t72/pr8288-on-188192c.diff
+          git diff --cached --stat
+      - name: Setup stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src
+          key: t73-${{ matrix.tree }}
+          cache-on-failure: true
+      - name: Clippy -D warnings, exactly as in Test 72, every error raised as an annotation
+        shell: bash
+        working-directory: src
+        run: |
+          set +e
+          set -uo pipefail
+          mkdir -p ../t73-report
+          rustc -V | tee ../t73-report/toolchain.txt
+          cargo clippy -V | tee -a ../t73-report/toolchain.txt
+          timeout 100m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t73-report/clippy.log 2>&1
+          code=$?
+          echo "T73_CLIPPY_EXIT=$code (${{ matrix.tree }})"
+          python3 - "$code" <<'PY'
+          import re, sys
+          from pathlib import Path
+          text = Path("../t73-report/clippy.log").read_text(errors="replace")
+          blocks = re.split(r"\n(?=(?:error|warning)(?:\[[^\]]*\])?: )", "\n" + text)
+          shown = 0
+          for b in blocks:
+              b = b.strip("\n")
+              if not re.match(r"(error|warning)", b) or b.startswith("warning: build failed") or "generated" in b.splitlines()[0]:
+                  continue
+              where = re.search(r"--> ([^:\s]+):(\d+):(\d+)", b)
+              loc = f" file={where.group(1)},line={where.group(2)}" if where else ""
+              msg = b[:1800].replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+              print(f"::error{loc}::{msg}")
+              shown += 1
+              if shown >= 25:
+                  break
+          tail = "\n".join(text.splitlines()[-30:])
+          print("T73_LOG_TAIL\n" + tail)
+          if sys.argv[1] != "0" and shown == 0:
+              print("::error::clippy failed without a lint message; last lines:%0A" + tail[-1500:].replace("%", "%25").replace("\n", "%0A"))
+          PY
+          test "$code" = 0
+      - name: Preserve original output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t73-${{ matrix.tree }}
+          path: t73-report/
+          if-no-files-found: warn
+          retention-days: 14
