@@ -600,3 +600,60 @@ fn balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay() 
     assert_eq!(saved(&s), record);
     assert_eq!(run(&mut s, "drawing.inspect", json!({}))["revisions"], revisions);
 }
+
+/// Recipe 4 of #11773 (W23-AS-04), on #11897: on the assembly sheet's first-level parts list, a
+/// balloon through either holder to its block reads HL-300's row, item 2. The second holder deleted,
+/// its balloon is lost and its row not found, and it is never moved to the first holder or removed;
+/// undone, both read item 2 again. With HL-300 a phantom, both read BL-200's row. Every model edit
+/// is made with the drawing closed.
+#[test]
+fn balloons_on_the_assembly_sheet_read_their_holders_row() {
+    let (mut s, [_, _, first, second, block]) = assembly_sheet();
+    run(&mut s, "assembly.bom.renumber", json!({"levels": "top"}));
+    run(&mut s, "drawing.create", json!({}));
+    let top = run(&mut s, "drawing.view.base", json!({"sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [150, 150]}))["view"].clone();
+    let parts_list = list(&mut s, json!({"list": {"levels": "top"}}));
+    let drawing = ids::encode(s.drawing("test").unwrap().id);
+    let put = |s: &mut Session, point: [f64; 3], holder: u64, at: [f64; 2]| {
+        let reply = run(s, ADD, json!({"view": top, "edge": {"point": point, "path": [holder, block]}, "at": at}));
+        reply["balloon"].as_str().unwrap().to_string()
+    };
+    let balloons = [put(&mut s, [50.0, 10.0, 40.0], first, [0.0, 60.0]), put(&mut s, [50.0, 50.0, 40.0], second, [40.0, 60.0])];
+    // Each balloon as {status, row_status, item, parts_list, occurrence}.
+    let rows = |s: &mut Session| {
+        balloons.clone().map(|b| {
+            let r = read(s, &b);
+            json!({"status": r["status"], "row_status": r["row_status"], "item": r["item"], "parts_list": r["parts_list"], "occurrence": r["occurrence"]})
+        })
+    };
+    let row =
+        |holder: u64, item: Value| json!({"status": "ok", "row_status": "ok", "item": item, "parts_list": parts_list, "occurrence": [holder, block]});
+    assert_eq!(rows(&mut s), [row(first, json!("2")), row(second, json!("2"))]);
+    let with_drawing_closed = |s: &mut Session, id: &str, p: Value| {
+        run(s, "drawing.close", json!({}));
+        let reply = run(s, id, p);
+        run(s, "drawing.open", json!({"drawing": drawing}));
+        reply
+    };
+
+    // The second holder deleted: its balloon is lost, its row not found; still its own and still there.
+    with_drawing_closed(&mut s, "selection.delete", json!({"occurrences": [second]}));
+    let [kept, gone] = rows(&mut s);
+    assert_eq!(kept, row(first, json!("2")));
+    assert_eq!((&gone["status"], &gone["row_status"]), (&json!("lost"), &json!("not_found")), "{gone}");
+    assert_eq!(gone["occurrence"], json!([second, block]), "never moved to the first holder");
+    assert_eq!(s.drawing("test").unwrap().balloons.len(), 2, "never removed");
+    with_drawing_closed(&mut s, "edit.undo", json!({}));
+    assert_eq!(rows(&mut s), [row(first, json!("2")), row(second, json!("2"))], "undone");
+
+    // HL-300 a phantom: both balloons read BL-200's row, with the item the list gives it.
+    with_drawing_closed(&mut s, "component.metadata.set", json!({"component": "Holder", "bom_type": "phantom"}));
+    let listed = with_drawing_closed(&mut s, "assembly.bom", json!({"levels": "top"}));
+    let block_row = listed["rows"].as_array().unwrap().iter().find(|r| r["part_number"] == "BL-200").unwrap();
+    let item = match &block_row["item"] {
+        Value::Number(n) => json!(n.to_string()),
+        other => other.clone(),
+    };
+    assert!(item.is_string(), "BL-200 has an item on the first level: {listed}");
+    assert_eq!(rows(&mut s), [row(first, item.clone()), row(second, item)]);
+}
