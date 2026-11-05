@@ -1,0 +1,116 @@
+diff --git a/crates/engine/src/cmd/drawing_balloon_tests.rs b/crates/engine/src/cmd/drawing_balloon_tests.rs
+index 90aa7de0e..9c83d3577 100644
+--- a/crates/engine/src/cmd/drawing_balloon_tests.rs
++++ b/crates/engine/src/cmd/drawing_balloon_tests.rs
+@@ -657,3 +657,111 @@ fn balloons_on_the_assembly_sheet_read_their_holders_row() {
+     assert!(item.is_string(), "BL-200 has an item on the first level: {listed}");
+     assert_eq!(rows(&mut s), [row(first, item.clone()), row(second, item)]);
+ }
++
++/// Fork prototype for #11773 on #11873: saved top views of the assembly sheet at 1:1 that choose
++/// what they draw, each size worked out by hand from `assembly.json`. The plate is 120 x 80; a
++/// holder's block is 20 x 20 at x 40..60 and its screws are Ø6 at x 35, so one holder is 28 x 28 and
++/// both, 40 apart along Y, are 28 x 68. Moving the second holder 30 along Y and deleting it change
++/// only the views that draw it; a view that hides it never changes, and one that draws only it is a
++/// placeholder once it's gone. The drawing's record never changes with the model, and save and
++/// reopen keep it and the sizes. Every model edit is made with the drawing closed.
++#[test]
++fn the_assembly_sheets_views_keep_what_they_show_through_the_model() {
++    let (mut s, [plate, _, first, second, block]) = assembly_sheet();
++    run(&mut s, "drawing.create", json!({}));
++    let id = s.drawing("test").unwrap().id;
++    let drawing = json!({"drawing": ids::encode(id)});
++    let mut base = |at: [f64; 2], choice: Value| {
++        let mut p = json!({"sheet": "Sheet 1", "view": "top", "scale": "1:1", "position_mm": at});
++        for (key, value) in choice.as_object().unwrap() {
++            p[key] = value.clone();
++        }
++        let reply = run(&mut s, "drawing.view.base", p);
++        reply["view"].as_str().unwrap().to_string()
++    };
++    let views = [
++        base([100.0, 100.0], json!({})),
++        base([250.0, 100.0], json!({"source": {"occurrences": [[first]]}})),
++        base([350.0, 100.0], json!({"source": {"occurrences": [[first], [second]]}})),
++        base([100.0, 300.0], json!({"hide": [[plate]]})),
++        base([250.0, 300.0], json!({"source": {"occurrences": [[first, block]]}})),
++        base([350.0, 300.0], json!({"source": {"occurrences": [[first]]}, "hide": [[first, block]]})),
++        base([480.0, 100.0], json!({"source": {"occurrences": [[second]]}})),
++        base([480.0, 300.0], json!({"hide": [[second]]})),
++    ];
++    let authored = s.drawing("test").unwrap().to_json().unwrap();
++    let sizes = |s: &mut Session, label: &str| {
++        let sized = views.clone().map(|view| {
++            let r = run(s, "drawing.view.inspect", json!({"view": view}));
++            let (min, max) = (&r["boundary_mm"]["min"], &r["boundary_mm"]["max"]);
++            let along = |i: usize| max[i].as_f64().unwrap_or(f64::NAN) - min[i].as_f64().unwrap_or(f64::NAN);
++            ([along(0), along(1)], r["extents"]["status"].clone(), r["extents"]["provenance"].clone())
++        });
++        eprintln!("T80_OBSERVE {label}: {sized:?}");
++        sized
++    };
++    // A view's boundary is read from the display mesh (`approximate`), whose chords sit inside a
++    // round screw: never wider than worked out, and within 0.01 mm of it.
++    let near = |got: [f64; 2], want: [f64; 2]| (0..2).all(|i| got[i] <= want[i] + 1e-9 && want[i] - got[i] < 0.01);
++    let expect = |s: &mut Session, label: &str, want: [Option<[f64; 2]>; 8]| {
++        let sized = sizes(s, label);
++        for (i, ((got, status, provenance), want)) in sized.iter().zip(want).enumerate() {
++            match want {
++                Some(want) => assert!(near(*got, want), "{label}, view {i}: {got:?}, want {want:?}"),
++                None => assert_eq!((status.as_str(), provenance.as_str()), (Some("placeholder"), Some("nothing_chosen")), "{label}, view {i}"),
++            }
++        }
++    };
++    let on_the_model = |s: &mut Session, id: &str, p: Value| {
++        run(s, "drawing.close", json!({}));
++        run(s, id, p);
++        run(s, "drawing.open", drawing.clone());
++    };
++    let start = [[120.0, 80.0], [28.0, 28.0], [28.0, 68.0], [106.0, 68.0], [20.0, 20.0], [6.0, 26.0], [28.0, 28.0], [120.0, 80.0]].map(Some);
++    expect(&mut s, "as made", start);
++
++    // The second holder 30 along Y: its block reaches y 100, its screws y 98.
++    on_the_model(&mut s, "occurrence.move", json!({"occurrence": second, "space": "world", "translate": [0, 30, 0]}));
++    let moved = [[120.0, 100.0], [28.0, 28.0], [28.0, 98.0], [106.0, 98.0], [20.0, 20.0], [6.0, 26.0], [28.0, 28.0], [120.0, 80.0]].map(Some);
++    expect(&mut s, "second holder moved", moved);
++    assert_eq!(s.drawing("test").unwrap().to_json().unwrap(), authored, "the record never changes with the model");
++    on_the_model(&mut s, "edit.undo", json!({}));
++    expect(&mut s, "move undone", start);
++
++    // The second holder deleted: the corner screws end at y 68, the first holder's at y 2.
++    on_the_model(&mut s, "selection.delete", json!({"occurrences": [second]}));
++    let mut deleted = [[120.0, 80.0], [28.0, 28.0], [28.0, 28.0], [106.0, 66.0], [20.0, 20.0], [6.0, 26.0], [0.0, 0.0], [120.0, 80.0]].map(Some);
++    deleted[6] = None;
++    expect(&mut s, "second holder deleted", deleted);
++    assert_eq!(s.drawing("test").unwrap().to_json().unwrap(), authored, "the paths stay, for an undo");
++
++    // Balloons on a view that hides the second holder: observed only.
++    for (holder, point) in [(first, [50.0, 10.0, 40.0]), (second, [50.0, 50.0, 40.0])] {
++        let p = json!({"view": views[7], "edge": {"point": point, "path": [holder, block]}, "at": [0.0, 60.0]});
++        let tried = s.execute(ADD, &p).map(|r| r["balloon"].clone()).map_err(|e| e.to_string());
++        eprintln!("T80_OBSERVE balloon on the view hiding the second holder, holder {holder}, second deleted: {tried:?}");
++    }
++    while s.drawing("test").unwrap().to_json().unwrap() != authored {
++        run(&mut s, "edit.undo", json!({}));
++    }
++    on_the_model(&mut s, "edit.undo", json!({}));
++    expect(&mut s, "delete undone", start);
++    for (holder, point) in [(first, [50.0, 10.0, 40.0]), (second, [50.0, 50.0, 40.0])] {
++        let p = json!({"view": views[7], "edge": {"point": point, "path": [holder, block]}, "at": [0.0, 60.0]});
++        let tried = s.execute(ADD, &p).map(|r| r["balloon"].clone()).map_err(|e| e.to_string());
++        eprintln!("T80_OBSERVE balloon on the view hiding the second holder, holder {holder}: {tried:?}");
++    }
++    while s.drawing("test").unwrap().to_json().unwrap() != authored {
++        run(&mut s, "edit.undo", json!({}));
++    }
++
++    // Saved and opened again: the same record and the same sizes.
++    let folder = Folder::new("assembly-sheet-views");
++    let path = folder.path("assembly.solidcraft");
++    run(&mut s, "file.save", json!({"path": path}));
++    let mut opened = Session::default();
++    run(&mut opened, "doc.open", json!({"path": path}));
++    run(&mut opened, "drawing.open", drawing.clone());
++    assert_eq!(opened.drawing("test").unwrap().to_json().unwrap(), authored, "opened again");
++    expect(&mut opened, "opened again", start);
++}
