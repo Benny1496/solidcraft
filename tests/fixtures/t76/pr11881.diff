@@ -1,0 +1,964 @@
+diff --git a/crates/engine/src/cmd/bom_tests.rs b/crates/engine/src/cmd/bom_tests.rs
+index 6b5731e4a..e6f56995a 100644
+--- a/crates/engine/src/cmd/bom_tests.rs
++++ b/crates/engine/src/cmd/bom_tests.rs
+@@ -2174,3 +2174,164 @@ fn hostile_quantities_are_refused_without_a_change() {
+     assert_eq!(s.doc.to_json(), design);
+     assert_eq!(s.undo.len(), undo);
+ }
++
++/// The W23 assembly sheet's test assembly (#11773), from its command script: a base plate placed
++/// once, a screw placed four times on it, and a holder placed twice, each holding one block and two
++/// of the screws. Returns the session and the two holders.
++fn assembly_sheet() -> (Session, [u64; 2]) {
++    let script: Value = serde_json::from_str(include_str!("../../../../tests/fixtures/w23-assembly-sheet/assembly.json")).unwrap();
++    let mut s = Session::default();
++    let made = s.run_script(&script).unwrap();
++    let placed = |name: &str| {
++        let step = script["commands"].as_array().unwrap().iter().position(|c| c["as"] == name).unwrap();
++        made[step]["occurrence"].as_u64().unwrap()
++    };
++    let holders = [placed("first_holder"), placed("second_holder")];
++    (s, holders)
++}
++
++/// The assembly sheet's parts list against the hand counts: parts only, the first level, all levels
++/// and one holder's own list. Reading them changes nothing.
++#[test]
++fn the_assembly_sheets_parts_list_matches_the_hand_counts() {
++    let (mut s, _) = assembly_sheet();
++    let undo = s.undo.len();
++    let flat = run(&mut s, "assembly.bom", json!({}));
++    assert_eq!(typed(&flat), [row("BL-200", "normal", 2), row("BP-100", "normal", 1), row("SC-M6", "normal", 8)], "4 + 2 x 2 screws: {flat}");
++    assert_eq!((flat["total_occurrences"].as_u64(), flat["numbered"].as_bool()), (Some(11), Some(false)));
++    let top = run(&mut s, "assembly.bom", json!({"levels": "top"}));
++    assert_eq!(typed(&top), [row("BP-100", "normal", 1), row("HL-300", "normal", 2), row("SC-M6", "normal", 4)], "{top}");
++    assert_eq!(top["total_occurrences"], 7, "1 + 2 + 4");
++    let all = run(&mut s, "assembly.bom", json!({"levels": "all"}));
++    assert_eq!(
++        deep(&all),
++        [
++            deep_row("1", "BP-100", "normal", 1, 1),
++            deep_row("2", "HL-300", "normal", 2, 2),
++            deep_row("2.1", "BL-200", "normal", 1, 2),
++            deep_row("2.2", "SC-M6", "normal", 2, 4),
++            deep_row("3", "SC-M6", "normal", 4, 4),
++        ],
++        "{all}"
++    );
++    assert_eq!(all["total_occurrences"], 13, "1 + 2 + 2 + 4 + 4");
++    let holder = run(&mut s, "assembly.bom", json!({"component": "Holder"}));
++    assert_eq!(typed(&holder), [row("BL-200", "normal", 1), row("SC-M6", "normal", 2)], "{holder}");
++    assert_eq!(s.undo.len(), undo, "a parts list only reads");
++}
++
++/// The assembly sheet's item numbers: renumbered from 10 in tens in one undo step; a new part takes
++/// 31 and keeps it through undo and redo; the second holder deleted keeps every number and leaves 1
++/// block and 6 screws; the first level is numbered on its own; all of it is the same after save and
++/// open, in both formats.
++#[test]
++fn the_assembly_sheets_item_numbers_hold_through_edits_undo_and_reopening() {
++    let dir = scratch("assembly-sheet");
++    let (mut s, holders) = assembly_sheet();
++    let undo = s.undo.len();
++    let numbered = run(&mut s, "assembly.bom.renumber", json!({"start": 10, "step": 10}));
++    let three = [numbered_row("10", "BL-200", ""), numbered_row("20", "BP-100", ""), numbered_row("30", "SC-M6", "")];
++    assert_eq!((numbered["numbered"].as_bool(), numbers(&numbered)), (Some(true), three.to_vec()), "{numbered}");
++    assert_eq!(s.undo.len(), undo + 1, "one undo step");
++
++    // A new part takes the highest number + 1. Undone, it goes with its number; redone, both come back.
++    run(&mut s, "component.create", json!({"name": "Washer", "activate": false}));
++    run(&mut s, "component.metadata.set", json!({"component": "Washer", "part_number": "WS-010", "description": "Washer M6"}));
++    let four =
++        [numbered_row("10", "BL-200", ""), numbered_row("20", "BP-100", ""), numbered_row("30", "SC-M6", ""), numbered_row("31", "WS-010", "")];
++    assert_eq!(numbers(&run(&mut s, "assembly.bom", json!({}))), four);
++    run(&mut s, "edit.undo", json!({}));
++    run(&mut s, "edit.undo", json!({}));
++    assert_eq!(numbers(&run(&mut s, "assembly.bom", json!({}))), three);
++    run(&mut s, "edit.redo", json!({}));
++    run(&mut s, "edit.redo", json!({}));
++    assert_eq!(numbers(&run(&mut s, "assembly.bom", json!({}))), four, "the washer is 31 again");
++
++    // The second holder deleted: 1 block and 6 screws, every number kept. Undone: 2 and 8 again.
++    run(&mut s, "selection.delete", json!({"occurrences": [holders[1]]}));
++    let fewer = run(&mut s, "assembly.bom", json!({}));
++    assert_eq!(
++        typed(&fewer),
++        [row("BL-200", "normal", 1), row("BP-100", "normal", 1), row("SC-M6", "normal", 6), row("WS-010", "normal", 1)],
++        "{fewer}"
++    );
++    assert_eq!(numbers(&fewer), four, "a model edit keeps the numbers");
++    run(&mut s, "edit.undo", json!({}));
++    let back = run(&mut s, "assembly.bom", json!({}));
++    assert_eq!(typed(&back)[2], row("SC-M6", "normal", 8), "{back}");
++    assert_eq!(numbers(&back), four);
++
++    // The first level numbered on its own, 1 to 4; parts only keeps its numbers.
++    let top = run(&mut s, "assembly.bom.renumber", json!({"levels": "top"}));
++    assert_eq!(
++        numbers(&top),
++        [numbered_row("1", "BP-100", ""), numbered_row("2", "HL-300", ""), numbered_row("3", "SC-M6", ""), numbered_row("4", "WS-010", "")],
++        "{top}"
++    );
++    assert_eq!(numbers(&run(&mut s, "assembly.bom", json!({}))), four, "each view keeps its own numbers");
++    assert_eq!(s.doc.assembly.item_numbers.len(), 2);
++
++    // Saved and opened again, in both formats: the same rows, counts and numbers in every view.
++    for (file, format) in [("assembly.json", "json"), ("assembly.solidcraft", "container")] {
++        let path = dir.join(file);
++        run(&mut s, "file.save_as", json!({"path": path, "format": format}));
++        let mut opened = Session::default();
++        run(&mut opened, "doc.open", json!({"path": path}));
++        for view in [json!({}), json!({"levels": "top"}), json!({"levels": "all"})] {
++            let (was, is) = (run(&mut s, "assembly.bom", view.clone()), run(&mut opened, "assembly.bom", view.clone()));
++            assert_eq!((numbers(&is), deep(&is)), (numbers(&was), deep(&was)), "{format} {view}");
++        }
++        assert_eq!(opened.doc.assembly.item_numbers, s.doc.assembly.item_numbers, "{format}");
++    }
++    let _ = std::fs::remove_dir_all(&dir);
++}
++
++/// The assembly sheet with the screw bought: every count stays as counted by hand, and the screw's
++/// rows say purchased. Undone, the rows are normal again.
++#[test]
++fn a_purchased_screw_keeps_the_assembly_sheets_counts() {
++    let (mut s, _) = assembly_sheet();
++    set_type(&mut s, "Screw", "purchased");
++    let flat = run(&mut s, "assembly.bom", json!({}));
++    assert_eq!(typed(&flat), [row("BL-200", "normal", 2), row("BP-100", "normal", 1), row("SC-M6", "purchased", 8)], "{flat}");
++    let top = run(&mut s, "assembly.bom", json!({"levels": "top"}));
++    assert_eq!(typed(&top), [row("BP-100", "normal", 1), row("HL-300", "normal", 2), row("SC-M6", "purchased", 4)], "{top}");
++    let all = run(&mut s, "assembly.bom", json!({"levels": "all"}));
++    assert_eq!(
++        deep(&all),
++        [
++            deep_row("1", "BP-100", "normal", 1, 1),
++            deep_row("2", "HL-300", "normal", 2, 2),
++            deep_row("2.1", "BL-200", "normal", 1, 2),
++            deep_row("2.2", "SC-M6", "purchased", 2, 4),
++            deep_row("3", "SC-M6", "purchased", 4, 4),
++        ],
++        "{all}"
++    );
++    let holder = run(&mut s, "assembly.bom", json!({"component": "Holder"}));
++    assert_eq!(typed(&holder), [row("BL-200", "normal", 1), row("SC-M6", "purchased", 2)], "{holder}");
++    run(&mut s, "edit.undo", json!({}));
++    assert_eq!(typed(&run(&mut s, "assembly.bom", json!({})))[2], row("SC-M6", "normal", 8));
++}
++
++/// The assembly sheet with the holder a phantom: it has no row of its own, and what it holds counts
++/// where it is placed, so the first level lists 2 blocks, 1 plate and 8 screws (4 + 2 x 2). Parts
++/// only doesn't change. Undone, the holder is a row again.
++#[test]
++fn a_phantom_holder_puts_what_it_holds_on_the_assembly_sheets_first_level() {
++    let (mut s, _) = assembly_sheet();
++    set_type(&mut s, "Holder", "phantom");
++    let top = run(&mut s, "assembly.bom", json!({"levels": "top"}));
++    assert_eq!(typed(&top), [row("BL-200", "normal", 2), row("BP-100", "normal", 1), row("SC-M6", "normal", 8)], "{top}");
++    assert_eq!(top["total_occurrences"], 11, "2 + 1 + 8");
++    let flat = run(&mut s, "assembly.bom", json!({}));
++    assert_eq!(typed(&flat), [row("BL-200", "normal", 2), row("BP-100", "normal", 1), row("SC-M6", "normal", 8)], "{flat}");
++    let all = run(&mut s, "assembly.bom", json!({"levels": "all"}));
++    assert_eq!(
++        deep(&all),
++        [deep_row("1", "BL-200", "normal", 2, 2), deep_row("2", "BP-100", "normal", 1, 1), deep_row("3", "SC-M6", "normal", 8, 8)],
++        "{all}"
++    );
++    run(&mut s, "edit.undo", json!({}));
++    assert_eq!(typed(&run(&mut s, "assembly.bom", json!({"levels": "top"})))[1], row("HL-300", "normal", 2));
++}
+diff --git a/crates/engine/src/cmd/drawing_balloon_tests.rs b/crates/engine/src/cmd/drawing_balloon_tests.rs
+index a76b85b19..90aa7de0e 100644
+--- a/crates/engine/src/cmd/drawing_balloon_tests.rs
++++ b/crates/engine/src/cmd/drawing_balloon_tests.rs
+@@ -5,6 +5,7 @@ use solidcraft_geom::drawing_view::NamedView;
+ 
+ use super::*;
+ use crate::schema::tests::conforms;
++use crate::tests::Folder;
+ 
+ fn run(s: &mut Session, id: &str, p: Value) -> Value {
+     let reply = s.execute(id, &p).unwrap_or_else(|e| panic!("{id}: {e}"));
+@@ -483,3 +484,176 @@ fn a_balloon_reads_a_components_list_below_it() {
+     s.execute("drawing.open", &json!({"drawing": drawing})).unwrap();
+     assert_eq!(read(&mut s, &balloon)["row_status"], json!("not_found"));
+ }
++
++/// The W23 assembly sheet's test assembly (#11773), from its command script, and the occurrences
++/// the script names: the plate, the first screw, the two holders and the block placed in each.
++fn assembly_sheet() -> (Session, [u64; 5]) {
++    let script: Value = serde_json::from_str(include_str!("../../../../tests/fixtures/w23-assembly-sheet/assembly.json")).unwrap();
++    let mut s = Session::default();
++    let made = s.run_script(&script).unwrap();
++    let named = |name: &str| {
++        let step = script["commands"].as_array().unwrap().iter().position(|c| c["as"] == name).unwrap();
++        made[step]["occurrence"].as_u64().unwrap()
++    };
++    let occurrences = ["plate", "screw", "first_holder", "second_holder", "block"].map(named);
++    (s, occurrences)
++}
++
++/// Balloons on the assembly sheet's top view and the drawing's revision rows, through model edits
++/// made with the drawing closed, their undo and redo, and save and reopen: a balloon follows its
++/// occurrence; the second holder's balloon reads lost when that holder is deleted, and is never
++/// moved to the first holder or removed; the drawing's saved record and its revision rows never
++/// change with the model.
++#[test]
++fn balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay() {
++    let (mut s, [plate, screw, first, second, block]) = assembly_sheet();
++    run(&mut s, "drawing.create", json!({}));
++    let top = run(&mut s, "drawing.view.base", json!({"sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [150, 150]}))["view"].clone();
++    let drawing = ids::encode(s.drawing("test").unwrap().id);
++
++    // Four balloons: the plate's top front edge, the first screw's top rim, and the block by its
++    // top front edge through each holder.
++    let put = |s: &mut Session, point: [f64; 3], path: Value, at: [f64; 2]| {
++        let reply = run(s, ADD, json!({"view": top, "edge": {"point": point, "path": path}, "at": at}));
++        assert_eq!((&reply["status"], &reply["occurrence"]), (&json!("ok"), &path), "{reply}");
++        reply
++    };
++    let on_plate = put(&mut s, [60.0, 0.0, 10.0], json!([plate]), [-60.0, -50.0]);
++    let on_screw = put(&mut s, [8.0, 5.0, 30.0], json!([screw]), [-70.0, 40.0]);
++    let on_first = put(&mut s, [50.0, 10.0, 40.0], json!([first, block]), [0.0, 60.0]);
++    let on_second = put(&mut s, [50.0, 50.0, 40.0], json!([second, block]), [40.0, 60.0]);
++    ends_at(&on_plate, [60.0, 0.0, 10.0]);
++    ends_at(&on_first, [50.0, 10.0, 40.0]);
++    ends_at(&on_second, [50.0, 50.0, 40.0]);
++    assert_ne!(on_first["record"]["edge"], on_second["record"]["edge"], "one block, two placements, two balloons");
++    let balloons = [&on_plate, &on_screw, &on_first, &on_second].map(|b| b["balloon"].clone());
++
++    // Revision rows 1, 2 and 3; row 2 deleted: 1 and 3 stay, and the next is still 4.
++    let mut rows = Vec::new();
++    for (description, date) in [("First issue", "2026-11-03"), ("Withdrawn", "2026-11-04"), ("Holder moved", "2026-11-05")] {
++        rows.push(run(&mut s, "drawing.revision.add", json!({"set": {"description": description, "designer": "BS", "date": date}}))["row"].clone());
++    }
++    run(&mut s, "drawing.revision.delete", json!({"row": rows[1]}));
++    let revisions = run(&mut s, "drawing.inspect", json!({}))["revisions"].clone();
++    let numbers: Vec<&str> = revisions["rows"].as_array().unwrap().iter().map(|r| r["revision"].as_str().unwrap()).collect();
++    assert_eq!((numbers, revisions["next"].as_str()), (vec!["1", "3"], Some("4")), "{revisions}");
++
++    // The model is edited with the drawing closed, then the drawing is opened again.
++    let record = saved(&s);
++    let on_the_model = |s: &mut Session, id: &str, p: Value| {
++        run(s, "drawing.close", json!({}));
++        run(s, id, p);
++        run(s, "drawing.open", json!({"drawing": drawing}));
++    };
++    let read = |s: &mut Session| balloons.clone().map(|b| run(s, INSPECT, json!({"balloon": b})));
++    let statuses = |reads: &[Value; 4]| reads.clone().map(|r| r["status"].as_str().unwrap().to_string());
++    let ok = ["ok", "ok", "ok", "ok"].map(String::from);
++
++    // The second holder moved 30 mm along Y: its balloon's arrow follows, the others stay.
++    on_the_model(&mut s, "occurrence.move", json!({"occurrence": second, "space": "world", "translate": [0, 30, 0]}));
++    let moved = read(&mut s);
++    assert_eq!(statuses(&moved), ok);
++    ends_at(&moved[0], [60.0, 0.0, 10.0]);
++    ends_at(&moved[2], [50.0, 10.0, 40.0]);
++    ends_at(&moved[3], [50.0, 80.0, 40.0]);
++    assert_eq!(saved(&s), record, "a model edit leaves the drawing's record alone");
++    on_the_model(&mut s, "edit.undo", json!({}));
++    ends_at(&read(&mut s)[3], [50.0, 50.0, 40.0]);
++
++    // The second holder deleted: its balloon is lost, says why, keeps its occurrence and is still
++    // there; the others stay ok.
++    on_the_model(&mut s, "selection.delete", json!({"occurrences": [second]}));
++    let gone = read(&mut s);
++    assert_eq!(statuses(&gone), ["ok", "ok", "ok", "lost"].map(String::from), "{gone:?}");
++    assert!(gone[3]["why"].is_string(), "{}", gone[3]);
++    assert_eq!(gone[3]["occurrence"], json!([second, block]), "never moved to the first holder");
++    assert_eq!(gone[3]["record"], on_second["record"], "never removed or changed");
++    ends_at(&gone[2], [50.0, 10.0, 40.0]);
++    assert_eq!(saved(&s), record);
++
++    // Saved with the holder deleted and opened again: the same record, statuses and revisions.
++    let folder = Folder::new("assembly-sheet-balloons");
++    let path = folder.path("assembly.solidcraft");
++    run(&mut s, "file.save", json!({"path": path}));
++    let mut opened = Session::default();
++    run(&mut opened, "doc.open", json!({"path": path}));
++    run(&mut opened, "drawing.open", json!({"drawing": drawing}));
++    assert_eq!(saved(&opened), record, "opened again");
++    let again = read(&mut opened);
++    assert_eq!(statuses(&again), statuses(&gone));
++    for (was, is) in gone.iter().zip(&again) {
++        assert_eq!((&is["record"], &is["occurrence"]), (&was["record"], &was["occurrence"]), "{is}");
++    }
++    assert_eq!(run(&mut opened, "drawing.inspect", json!({}))["revisions"], revisions, "revision rows opened again");
++
++    // Undone: the second holder and its balloon are back; redone, lost again; undone once more.
++    on_the_model(&mut s, "edit.undo", json!({}));
++    let back = read(&mut s);
++    assert_eq!(statuses(&back), ok, "{back:?}");
++    ends_at(&back[3], [50.0, 50.0, 40.0]);
++    on_the_model(&mut s, "edit.redo", json!({}));
++    assert_eq!(statuses(&read(&mut s))[3], "lost");
++    on_the_model(&mut s, "edit.undo", json!({}));
++    assert_eq!(statuses(&read(&mut s)), ok);
++
++    // Through every model edit, the drawing's record and its revision rows are as they were.
++    assert_eq!(saved(&s), record);
++    assert_eq!(run(&mut s, "drawing.inspect", json!({}))["revisions"], revisions);
++}
++
++/// Recipe 4 of #11773 (W23-AS-04), on #11897: on the assembly sheet's first-level parts list, a
++/// balloon through either holder to its block reads HL-300's row, item 2. The second holder deleted,
++/// its balloon is lost and its row not found, and it is never moved to the first holder or removed;
++/// undone, both read item 2 again. With HL-300 a phantom, both read BL-200's row. Every model edit
++/// is made with the drawing closed.
++#[test]
++fn balloons_on_the_assembly_sheet_read_their_holders_row() {
++    let (mut s, [_, _, first, second, block]) = assembly_sheet();
++    run(&mut s, "assembly.bom.renumber", json!({"levels": "top"}));
++    run(&mut s, "drawing.create", json!({}));
++    let top = run(&mut s, "drawing.view.base", json!({"sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [150, 150]}))["view"].clone();
++    let parts_list = list(&mut s, json!({"list": {"levels": "top"}}));
++    let drawing = ids::encode(s.drawing("test").unwrap().id);
++    let put = |s: &mut Session, point: [f64; 3], holder: u64, at: [f64; 2]| {
++        let reply = run(s, ADD, json!({"view": top, "edge": {"point": point, "path": [holder, block]}, "at": at}));
++        reply["balloon"].as_str().unwrap().to_string()
++    };
++    let balloons = [put(&mut s, [50.0, 10.0, 40.0], first, [0.0, 60.0]), put(&mut s, [50.0, 50.0, 40.0], second, [40.0, 60.0])];
++    // Each balloon as {status, row_status, item, parts_list, occurrence}.
++    let rows = |s: &mut Session| {
++        balloons.clone().map(|b| {
++            let r = read(s, &b);
++            json!({"status": r["status"], "row_status": r["row_status"], "item": r["item"], "parts_list": r["parts_list"], "occurrence": r["occurrence"]})
++        })
++    };
++    let row =
++        |holder: u64, item: Value| json!({"status": "ok", "row_status": "ok", "item": item, "parts_list": parts_list, "occurrence": [holder, block]});
++    assert_eq!(rows(&mut s), [row(first, json!("2")), row(second, json!("2"))]);
++    let with_drawing_closed = |s: &mut Session, id: &str, p: Value| {
++        run(s, "drawing.close", json!({}));
++        let reply = run(s, id, p);
++        run(s, "drawing.open", json!({"drawing": drawing}));
++        reply
++    };
++
++    // The second holder deleted: its balloon is lost, its row not found; still its own and still there.
++    with_drawing_closed(&mut s, "selection.delete", json!({"occurrences": [second]}));
++    let [kept, gone] = rows(&mut s);
++    assert_eq!(kept, row(first, json!("2")));
++    assert_eq!((&gone["status"], &gone["row_status"]), (&json!("lost"), &json!("not_found")), "{gone}");
++    assert_eq!(gone["occurrence"], json!([second, block]), "never moved to the first holder");
++    assert_eq!(s.drawing("test").unwrap().balloons.len(), 2, "never removed");
++    with_drawing_closed(&mut s, "edit.undo", json!({}));
++    assert_eq!(rows(&mut s), [row(first, json!("2")), row(second, json!("2"))], "undone");
++
++    // HL-300 a phantom: both balloons read BL-200's row, with the item the list gives it.
++    with_drawing_closed(&mut s, "component.metadata.set", json!({"component": "Holder", "bom_type": "phantom"}));
++    let listed = with_drawing_closed(&mut s, "assembly.bom", json!({"levels": "top"}));
++    let block_row = listed["rows"].as_array().unwrap().iter().find(|r| r["part_number"] == "BL-200").unwrap();
++    let item = match &block_row["item"] {
++        Value::Number(n) => json!(n.to_string()),
++        other => other.clone(),
++    };
++    assert!(item.is_string(), "BL-200 has an item on the first level: {listed}");
++    assert_eq!(rows(&mut s), [row(first, item.clone()), row(second, item)]);
++}
+diff --git a/crates/engine/src/cmd/drawing_table_tests.rs b/crates/engine/src/cmd/drawing_table_tests.rs
+index be2b292af..2f0971f43 100644
+--- a/crates/engine/src/cmd/drawing_table_tests.rs
++++ b/crates/engine/src/cmd/drawing_table_tests.rs
+@@ -260,3 +260,99 @@ fn a_view_that_cant_be_numbered_still_places_its_list() {
+     assert!(s.doc.assembly.item_numbers.is_empty());
+     assert_eq!(s.drawing("test").unwrap().tables.len(), 1);
+ }
++
++/// Recipes 3, 5 and 6 of #11773 on the W23 assembly sheet, from its command script. An assembly's
++/// drawing starts on A2. The first-level parts list, placed at (330, 60), keeps items 1, 2 and 3 for
++/// BP-100 1, HL-300 2 and SC-M6 4; with the second holder deleted only HL-300 drops to 1, and undo
++/// brings it back. Revision rows 1, 2 and 3 with row 2 deleted leave 1 and 3, next 4, and a tag on 3
++/// at (200, 120) shows 3. Moving the second holder changes none of it, nor the drawing's record. The
++/// sheet exports the same SVG after save and reopen. Every model edit is made with the drawing closed.
++#[test]
++fn the_assembly_sheet_keeps_its_parts_list_revisions_and_tag_through_the_model() {
++    let script: Value = serde_json::from_str(include_str!("../../../../tests/fixtures/w23-assembly-sheet/assembly.json")).unwrap();
++    let mut s = Session::default();
++    let made = s.run_script(&script).unwrap();
++    let step = script["commands"].as_array().unwrap().iter().position(|c| c["as"] == "second_holder").unwrap();
++    let second = made[step]["occurrence"].as_u64().unwrap();
++    let exec = |s: &mut Session, id: &str, p: Value| s.execute(id, &p).unwrap_or_else(|e| panic!("{id} {p}: {e}"));
++
++    exec(&mut s, "assembly.bom.renumber", json!({"levels": "top"}));
++    let created = exec(&mut s, "drawing.create", json!({}));
++    assert_eq!(created["sheets"][0]["size_mm"], json!([594.0, 420.0]), "an assembly's drawing starts on A2: {created}");
++    let drawing = ids::encode(s.drawing("test").unwrap().id);
++    let sheet = sheet_of(&s);
++    exec(&mut s, "drawing.view.base", json!({"sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [150, 150]}));
++    let list =
++        run(&mut s, ADD, json!({"sheet": "Sheet 1", "kind": "parts_list", "set": {"list": {"levels": "top"}, "place": {"at": [330.0, 60.0]}}}));
++    let list = list["table"].clone();
++    run(&mut s, ADD, json!({"sheet": "Sheet 1", "kind": "revision"}));
++    let mut rows = Vec::new();
++    for (description, date) in [("First issue", "2026-11-03"), ("Withdrawn", "2026-11-04"), ("Holder moved", "2026-11-05")] {
++        rows.push(exec(&mut s, "drawing.revision.add", json!({"set": {"description": description, "designer": "BS", "date": date}}))["row"].clone());
++    }
++    let three = exec(&mut s, "drawing.inspect", json!({}))["revisions"].clone();
++    let numbers = |r: &Value| r["rows"].as_array().unwrap().iter().map(|r| r["revision"].as_str().unwrap().to_string()).collect::<Vec<_>>();
++    assert_eq!((numbers(&three), three["next"].as_str()), (vec!["1".to_string(), "2".into(), "3".into()], Some("4")), "{three}");
++    exec(&mut s, "drawing.revision.delete", json!({"row": rows[1]}));
++    let tag = exec(&mut s, "drawing.revision.tag.add", json!({"row": rows[2], "sheet": sheet, "at": [200.0, 120.0]}))["tag"].clone();
++
++    let text = |v: &Value| v.as_str().map_or_else(|| v.to_string(), str::to_string);
++    // The list's items as the drawing has them, its revisions, and the drawing's record.
++    let printed = |s: &mut Session| {
++        let inspect = exec(s, "drawing.inspect", json!({}));
++        let on_list = inspect["parts_lists"].as_array().unwrap().iter().find(|l| l["table"] == list).cloned().unwrap_or_else(|| panic!("{inspect}"));
++        let items: Vec<String> = on_list["ballooned"].as_array().unwrap_or_else(|| panic!("{on_list}")).iter().map(|r| text(&r["item"])).collect();
++        (items, inspect["revisions"].clone(), s.drawing("test").unwrap().to_json().unwrap())
++    };
++    // The first level as the model counts it: item, part number, count. A model read, so with the drawing closed.
++    let counted = |s: &mut Session| {
++        exec(s, "drawing.close", json!({}));
++        let top = exec(s, "assembly.bom", json!({"levels": "top"}));
++        exec(s, "drawing.open", json!({"drawing": drawing}));
++        let rows = top["rows"].as_array().unwrap().iter();
++        rows.map(|r| (text(&r["item"]), r["part_number"].as_str().unwrap().to_string(), r["count"].as_u64().unwrap())).collect::<Vec<_>>()
++    };
++    let on_the_model = |s: &mut Session, id: &str, p: Value| {
++        exec(s, "drawing.close", json!({}));
++        exec(s, id, p);
++        exec(s, "drawing.open", json!({"drawing": drawing}));
++    };
++    let first_level =
++        |holders: u64| vec![("1".to_string(), "BP-100".to_string(), 1), ("2".into(), "HL-300".into(), holders), ("3".into(), "SC-M6".into(), 4)];
++
++    let (items, revisions, record) = printed(&mut s);
++    assert_eq!(items, ["1", "2", "3"], "the list's items on the sheet");
++    assert_eq!(counted(&mut s), first_level(2), "the hand counts");
++    assert_eq!((numbers(&revisions), revisions["next"].as_str()), (vec!["1".to_string(), "3".into()], Some("4")), "{revisions}");
++    let tags = &revisions["tags"];
++    assert_eq!(
++        (&tags[0]["tag"], &tags[0]["shows"], &tags[0]["lost"], &tags[0]["at"]),
++        (&tag, &json!("3"), &json!(false), &json!([200.0, 120.0])),
++        "{tags}"
++    );
++
++    // The second holder deleted: only HL-300 drops to 1, every item stays; undone, back to 2.
++    on_the_model(&mut s, "selection.delete", json!({"occurrences": [second]}));
++    assert_eq!(counted(&mut s), first_level(1), "the second holder deleted");
++    assert_eq!(printed(&mut s), (items.clone(), revisions.clone(), record.clone()), "the drawing as it was");
++    on_the_model(&mut s, "edit.undo", json!({}));
++    assert_eq!(counted(&mut s), first_level(2), "undone");
++
++    // The second holder moved 30 mm along Y: the list, the revisions, the tag and the record stay.
++    on_the_model(&mut s, "occurrence.move", json!({"occurrence": second, "space": "world", "translate": [0, 30, 0]}));
++    assert_eq!(counted(&mut s), first_level(2));
++    assert_eq!(printed(&mut s), (items.clone(), revisions.clone(), record.clone()), "a model edit leaves the drawing alone");
++
++    // Saved and opened again: the same SVG, list, revisions, tag and record.
++    let svg = |s: &mut Session| exec(s, "drawing.export", json!({"sheet": "Sheet 1"}))["svg"].as_str().unwrap().to_string();
++    let before = svg(&mut s);
++    let folder = crate::tests::Folder::new("assembly-sheet-tables");
++    let path = folder.path("assembly.solidcraft");
++    exec(&mut s, "file.save", json!({"path": path}));
++    let mut opened = Session::default();
++    exec(&mut opened, "doc.open", json!({"path": path}));
++    exec(&mut opened, "drawing.open", json!({"drawing": drawing}));
++    assert_eq!(svg(&mut opened), before, "the same SVG after save and reopen");
++    assert_eq!(printed(&mut opened), (items, revisions, record), "opened again");
++    assert_eq!(counted(&mut opened), first_level(2));
++}
+diff --git a/tests/fixtures/w23-assembly-sheet/README.md b/tests/fixtures/w23-assembly-sheet/README.md
+new file mode 100644
+index 000000000..777871501
+--- /dev/null
++++ b/tests/fixtures/w23-assembly-sheet/README.md
+@@ -0,0 +1,92 @@
++# W23 assembly sheet
++
++The test assembly for #11773 (part of #4894): a small assembly from plain shapes whose parts list,
++balloons and revision table are checked against values counted by hand. Parts lists and balloons
++are planned on #3874, the revision table with the title block on #3875.
++
++`assembly.json` builds it by commands (`Session::run_script`). A step's `as` names the occurrence
++its reply returns, so a test can find the holders without counting steps.
++
++## The assembly
++
++| Part | Part number | Shape | Placed |
++|---|---|---|---|
++| Base plate | BP-100 | box 120 x 80 x 10 mm | once |
++| Screw | SC-M6 | cylinder Ø6 x 20 mm | 4 on the plate, and 2 in each holder |
++| Holder | HL-300 | assembly | twice, the second 40 mm along Y |
++| Block | BL-200 | box 20 x 20 x 30 mm | once in each holder |
++
++## Counted by hand
++
++- **Parts only:** BL-200 2, BP-100 1, SC-M6 8 (4 + 2 x 2).
++- **First level:** BP-100 1, HL-300 2, SC-M6 4.
++- **All levels:** 1 BP-100 1; 2 HL-300 2; 2.1 BL-200 1 each, 2 in all; 2.2 SC-M6 2 each, 4 in all;
++  3 SC-M6 4.
++- **SC-M6 purchased:** the same counts, its rows say purchased.
++- **HL-300 phantom:** no row of its own; the first level is BL-200 2, BP-100 1, SC-M6 8.
++- **The second holder deleted:** parts only is BL-200 1, BP-100 1, SC-M6 6.
++
++## What runs
++
++In `crates/engine/src/cmd/bom_tests.rs`:
++
++- `the_assembly_sheets_parts_list_matches_the_hand_counts`
++- `the_assembly_sheets_item_numbers_hold_through_edits_undo_and_reopening`
++- `a_purchased_screw_keeps_the_assembly_sheets_counts`
++- `a_phantom_holder_puts_what_it_holds_on_the_assembly_sheets_first_level`
++
++In `crates/engine/src/cmd/drawing_balloon_tests.rs`:
++
++- `balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay`: four balloons on
++  the top view at 1:2 (the plate, a screw, and the block through each holder); model edits made
++  with the drawing closed; the second holder moved, its arrow follows; deleted, its balloon is
++  `lost`, keeps its occurrence and record and is never moved to the first holder; undo and redo;
++  save and reopen; revision rows 1 and 3 after row 2 is deleted, the next still 4, and the
++  drawing's record unchanged by every model edit.
++- `balloons_on_the_assembly_sheet_read_their_holders_row` (recipe 4): the first-level parts list on
++  the sheet and a balloon through each holder to its block, both reading HL-300's row, item 2; the
++  second holder deleted, its balloon is `lost` with `row_status: not_found`, stays on its own
++  occurrence and isn't removed; undone, both read item 2 again; with HL-300 a phantom, both read
++  BL-200's row.
++
++In `crates/engine/src/cmd/drawing_table_tests.rs`:
++
++- `the_assembly_sheet_keeps_its_parts_list_revisions_and_tag_through_the_model` (recipes 3, 5 and
++  6): the assembly's drawing starts on A2; the first-level parts list placed at (330, 60) keeps
++  items 1, 2 and 3 for BP-100 1, HL-300 2 and SC-M6 4, and with the second holder deleted only
++  HL-300 drops to 1; a revision table, revisions 1 and 3 with 4 next, and a tag on 3 at
++  (200, 120) showing 3; moving the second holder changes none of it, nor the drawing's record; the
++  sheet exports the same SVG after save and reopen.
++
++## Recipes on paper, NOT RUN yet
++
++`cases.json` holds recipes 3 to 6 of #11773 as the full checks on the sheet. Every model edit in
++them is made with the drawing closed, then the drawing is opened again. The commands they use are
++all on `drawings` now, and each recipe names the native tests that run its engine part. What they
++still wait for is the sheet drawing what they check.
++
++- **W23-AS-03, the parts list on the sheet** (waits for the list drawn on paper, #3874): the first
++  level numbered 1, 2, 3 with the script's descriptions; the second holder deleted, HL-300 reads 1
++  and the numbers stay.
++- **W23-AS-04, balloons** (waits for the balloons and the list drawn on paper, #3874): a balloon
++  picks the row its placement is counted in, as `row_of` does, and shows that row's number. One
++  balloon through each holder to its block, both on HL-300's row, item 2; the second holder
++  deleted, its balloon is lost (pink) and its row not found, never moved to the first holder or
++  removed; undone, both are ok again; with HL-300 a phantom, both read BL-200's row.
++- **W23-AS-05, the revision table** (waits for the table drawn on the sheet, #3875): revisions 1,
++  2, 3; 2 deleted leaves 1 and 3 with 4 next; a tag on 3; unchanged by a model edit and through
++  save and reopen.
++- **W23-AS-06, the sheet export** (waits for the three above drawn on paper and text on the sheet,
++  #4890): the same SVG bytes before saving and after opening again; DXF and PDF as each writer
++  lands.
++
++`validate.py` checks the recipes without running SolidCraft: it works the hand counts out again
++from `assembly.json`, checks every model edit is made with the drawing closed, that each recipe's
++expected values follow from the script (quantities, descriptions, item numbers, revisions, where
++the tag goes), that everything placed fits the A2 sheet an assembly's drawing starts on (#12000),
++and that the native tests each recipe names are in their files. It never reports a recipe as
++passed.
++
++```
++python3 tests/fixtures/w23-assembly-sheet/validate.py
++```
+diff --git a/tests/fixtures/w23-assembly-sheet/assembly.json b/tests/fixtures/w23-assembly-sheet/assembly.json
+new file mode 100644
+index 000000000..996054a94
+--- /dev/null
++++ b/tests/fixtures/w23-assembly-sheet/assembly.json
+@@ -0,0 +1,25 @@
++{
++ "description": "W23 assembly sheet (#11773, part of #4894): a small test assembly whose parts list is counted by hand. A base plate BP-100 (120 x 80 x 10 mm) placed once; a screw SC-M6 (Ø6 x 20 mm) placed four times on the plate's corners; a holder HL-300, an assembly placed twice (the second 40 mm along Y), each holding one block BL-200 (20 x 20 x 30 mm) and two of the same screws. Parts only: BL-200 2, BP-100 1, SC-M6 8 (4 + 2 x 2). A step's `as` names the occurrence its reply returns, for the tests that read this script.",
++ "commands": [
++  {"command": "component.create", "params": {"name": "BasePlate"}, "as": "plate"},
++  {"command": "solid.box", "params": {"length": 120, "width": 80, "height": 10, "body_name": "Plate"}},
++  {"command": "component.activate", "params": {"component": 0}},
++  {"command": "component.create", "params": {"name": "Screw"}, "as": "screw"},
++  {"command": "solid.cylinder", "params": {"diameter": 6, "height": 20, "base": [5, 5, 10]}},
++  {"command": "component.activate", "params": {"component": 0}},
++  {"command": "occurrence.copy", "params": {"component": "Screw", "translate": [100, 0, 0]}},
++  {"command": "occurrence.copy", "params": {"component": "Screw", "translate": [0, 60, 0]}},
++  {"command": "occurrence.copy", "params": {"component": "Screw", "translate": [100, 60, 0]}},
++  {"command": "component.create", "params": {"name": "Holder", "activate": false}, "as": "first_holder"},
++  {"command": "component.create", "params": {"name": "Block", "parent": "Holder"}, "as": "block"},
++  {"command": "solid.box", "params": {"length": 20, "width": 20, "height": 30, "corner": [40, 10, 10], "body_name": "Block"}},
++  {"command": "component.activate", "params": {"component": 0}},
++  {"command": "occurrence.copy", "params": {"component": "Screw", "parent": "Holder", "translate": [30, 0, 0]}},
++  {"command": "occurrence.copy", "params": {"component": "Screw", "parent": "Holder", "translate": [30, 20, 0]}},
++  {"command": "occurrence.copy", "params": {"component": "Holder", "translate": [0, 40, 0]}, "as": "second_holder"},
++  {"command": "component.metadata.set", "params": {"component": "BasePlate", "part_number": "BP-100", "description": "Base plate 120 x 80 x 10"}},
++  {"command": "component.metadata.set", "params": {"component": "Screw", "part_number": "SC-M6", "description": "Screw M6 x 20"}},
++  {"command": "component.metadata.set", "params": {"component": "Holder", "part_number": "HL-300", "description": "Holder"}},
++  {"command": "component.metadata.set", "params": {"component": "Block", "part_number": "BL-200", "description": "Block 20 x 20 x 30"}}
++ ]
++}
+diff --git a/tests/fixtures/w23-assembly-sheet/cases.json b/tests/fixtures/w23-assembly-sheet/cases.json
+new file mode 100644
+index 000000000..eb0217f16
+--- /dev/null
++++ b/tests/fixtures/w23-assembly-sheet/cases.json
+@@ -0,0 +1,156 @@
++{
++ "schema": "w23-assembly-sheet-acceptance/1",
++ "purpose": "Recipes 3 to 6 of #11773: what the assembly sheet must show with its parts list, balloon item numbers and revision table. A written contract, checked by validate.py; no command here is run. The engine part of each recipe runs as the native tests named in `native`; the recipes themselves stay NOT RUN until what they show is drawn on paper.",
++ "issue": "https://github.com/tangency-labs/solidcraft/issues/11773",
++ "assembly": "assembly.json",
++ "no_runtime_pass_claimed": true,
++ "ui_workflow_policy": {
++  "model_commands_while_drawing_open": "refused",
++  "model_edit_sequence": ["drawing.close", "the model edit, undo or redo", "drawing.open"],
++  "source": "https://github.com/tangency-labs/solidcraft/pull/8288#issuecomment-6599897742"
++ },
++ "sheet": {"size": "ISO A2 landscape", "paper_mm": [594, 420], "template": "iso-a2-assembly, what drawing.create starts an assembly's drawing on (#12000)", "view": "top", "scale": "1:2", "position_mm": [150, 150]},
++ "hand_counts": {
++  "parts_only": {"BL-200": 2, "BP-100": 1, "SC-M6": 8},
++  "first_level": {"BP-100": 1, "HL-300": 2, "SC-M6": 4},
++  "second_holder_deleted": {
++   "parts_only": {"BL-200": 1, "BP-100": 1, "SC-M6": 6},
++   "first_level": {"BP-100": 1, "HL-300": 1, "SC-M6": 4}
++  }
++ },
++ "already_native": {
++  "crates/engine/src/cmd/bom_tests.rs": [
++   "the_assembly_sheets_parts_list_matches_the_hand_counts",
++   "the_assembly_sheets_item_numbers_hold_through_edits_undo_and_reopening",
++   "a_purchased_screw_keeps_the_assembly_sheets_counts",
++   "a_phantom_holder_puts_what_it_holds_on_the_assembly_sheets_first_level"
++  ],
++  "crates/engine/src/cmd/drawing_balloon_tests.rs": [
++   "balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay",
++   "balloons_on_the_assembly_sheet_read_their_holders_row"
++  ],
++  "crates/engine/src/cmd/drawing_table_tests.rs": [
++   "the_assembly_sheet_keeps_its_parts_list_revisions_and_tag_through_the_model"
++  ]
++ },
++ "cases": [
++  {
++   "id": "W23-AS-03",
++   "title": "The parts list on the sheet shows the hand counts and follows a model edit",
++   "runtime_status": "NOT_RUN",
++   "waits_for": ["#3874: the parts list drawn on paper (text on the sheet)"],
++   "native": ["the_assembly_sheet_keeps_its_parts_list_revisions_and_tag_through_the_model"],
++   "steps": [
++    {"do": "assembly.bom.renumber", "params": {"levels": "top"}, "drawing": "closed"},
++    {"do": "drawing.create", "drawing": "open"},
++    {"do": "drawing.view.base", "params": {"sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [150, 150]}, "drawing": "open"},
++    {"do": "drawing.table.add", "params": {"sheet": "Sheet 1", "kind": "parts_list", "set": {"list": {"levels": "top"}, "place": {"at": [330, 60]}}}, "drawing": "open", "check": "rows"},
++    {"do": "drawing.close"},
++    {"do": "selection.delete", "params": {"occurrences": ["second_holder"]}, "drawing": "closed"},
++    {"do": "drawing.open", "check": "rows_after_delete"},
++    {"do": "drawing.close"},
++    {"do": "edit.undo", "drawing": "closed"},
++    {"do": "drawing.open", "check": "rows"}
++   ],
++   "expect": {
++    "columns": "the parts list's default columns; these recipes check item, part number, description and quantity",
++    "rows": [
++     {"item": "1", "part_number": "BP-100", "description": "Base plate 120 x 80 x 10", "quantity": 1},
++     {"item": "2", "part_number": "HL-300", "description": "Holder", "quantity": 2},
++     {"item": "3", "part_number": "SC-M6", "description": "Screw M6 x 20", "quantity": 4}
++    ],
++    "rows_after_delete": [
++     {"item": "1", "part_number": "BP-100", "description": "Base plate 120 x 80 x 10", "quantity": 1},
++     {"item": "2", "part_number": "HL-300", "description": "Holder", "quantity": 1},
++     {"item": "3", "part_number": "SC-M6", "description": "Screw M6 x 20", "quantity": 4}
++    ],
++    "item_numbers_kept_through_the_edit": true,
++    "drawing_record_unchanged_by_the_model_edit": true
++   }
++  },
++  {
++   "id": "W23-AS-04",
++   "title": "A balloon per holder shows its row's item number; the deleted holder's balloon is lost, never moved or removed",
++   "runtime_status": "NOT_RUN",
++   "waits_for": ["the balloons and W23-AS-03's parts list drawn on paper (#3874)"],
++   "native": ["balloons_on_the_assembly_sheet_read_their_holders_row", "balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay"],
++   "confirmed": "https://github.com/tangency-labs/solidcraft/pull/11881#issuecomment-6626379382",
++   "steps": [
++    {"from": "W23-AS-03", "until": "drawing.table.add"},
++    {"do": "drawing.balloon.add", "params": {"edge": {"point": [50, 10, 40], "path": ["first_holder", "block"]}, "at": [0, 60]}, "drawing": "open", "as": "first_balloon"},
++    {"do": "drawing.balloon.add", "params": {"edge": {"point": [50, 50, 40], "path": ["second_holder", "block"]}, "at": [40, 60]}, "drawing": "open", "as": "second_balloon", "check": "both_ok"},
++    {"do": "drawing.close"},
++    {"do": "selection.delete", "params": {"occurrences": ["second_holder"]}, "drawing": "closed"},
++    {"do": "drawing.open", "check": "second_lost"},
++    {"do": "drawing.close"},
++    {"do": "edit.undo", "drawing": "closed"},
++    {"do": "drawing.open", "check": "both_ok"},
++    {"do": "drawing.close"},
++    {"do": "component.metadata.set", "params": {"component": "Holder", "bom_type": "phantom"}, "drawing": "closed"},
++    {"do": "drawing.open", "check": "holder_phantom"}
++   ],
++   "expect": {
++    "both_ok": {
++     "first_balloon": {"status": "ok", "row": "HL-300", "item": "2", "occurrence": ["first_holder", "block"]},
++     "second_balloon": {"status": "ok", "row": "HL-300", "item": "2", "occurrence": ["second_holder", "block"]}
++    },
++    "second_lost": {
++     "first_balloon": {"status": "ok", "row": "HL-300", "item": "2", "occurrence": ["first_holder", "block"]},
++     "second_balloon": {"status": "lost", "row": "not found", "shown_as": "lost (pink)", "occurrence": ["second_holder", "block"], "moved_to_first_holder": false, "removed": false}
++    },
++    "holder_phantom": {
++     "first_balloon": {"status": "ok", "row": "BL-200", "occurrence": ["first_holder", "block"]},
++     "second_balloon": {"status": "ok", "row": "BL-200", "occurrence": ["second_holder", "block"]}
++    },
++    "row_rule": "A balloon only picks the row its placement is counted in: the row of the longest member path its occurrence path starts with (row_of in crates/doc/src/bom.rs, pinned by row_of_finds_the_row_a_placement_is_counted_in in bom_tests.rs). Through a holder in a first-level list that is HL-300's row, and with HL-300 a phantom it is BL-200's. The item shown is that row's number, which the list's numbering gives and bom_tests.rs checks.",
++    "lost_reads": "the deleted holder's balloon: its reference status lost, and drawing.inspect reports its row as not found"
++   }
++  },
++  {
++   "id": "W23-AS-05",
++   "title": "The revision table numbers 1, 2, 3, keeps 4 as next after row 2 is deleted, and never changes with the model",
++   "runtime_status": "NOT_RUN",
++   "waits_for": ["#3875: the revision table drawn on the sheet"],
++   "native": ["the_assembly_sheet_keeps_its_parts_list_revisions_and_tag_through_the_model", "balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay"],
++   "steps": [
++    {"do": "drawing.create", "drawing": "open"},
++    {"do": "drawing.table.add", "params": {"sheet": "Sheet 1", "kind": "revision"}, "drawing": "open"},
++    {"do": "drawing.revision.add", "params": {"set": {"description": "First issue", "designer": "BS", "date": "2026-11-03"}}, "drawing": "open"},
++    {"do": "drawing.revision.add", "params": {"set": {"description": "Withdrawn", "designer": "BS", "date": "2026-11-04"}}, "drawing": "open"},
++    {"do": "drawing.revision.add", "params": {"set": {"description": "Holder moved", "designer": "BS", "date": "2026-11-05"}}, "drawing": "open", "check": "three_rows"},
++    {"do": "drawing.revision.delete", "params": {"row": "revision 2"}, "drawing": "open", "check": "after_delete"},
++    {"do": "drawing.revision.tag.add", "params": {"row": "revision 3", "sheet": "Sheet 1", "at": [200, 120]}, "drawing": "open"},
++    {"do": "drawing.close"},
++    {"do": "occurrence.move", "params": {"occurrence": "second_holder", "space": "world", "translate": [0, 30, 0]}, "drawing": "closed"},
++    {"do": "drawing.open", "check": "after_delete"},
++    {"do": "file.save", "params": {"path": "assembly.solidcraft"}},
++    {"do": "doc.open", "params": {"path": "assembly.solidcraft"}},
++    {"do": "drawing.open", "check": "after_delete"}
++   ],
++   "expect": {
++    "three_rows": {"revisions": ["1", "2", "3"], "next": "4"},
++    "after_delete": {"revisions": ["1", "3"], "next": "4", "tags": [{"revision": "3", "at_mm": [200, 120]}]},
++    "drawing_record_unchanged_by_the_model_edit": true
++   }
++  },
++  {
++   "id": "W23-AS-06",
++   "title": "The sheet exports the same after save and reopen",
++   "runtime_status": "NOT_RUN",
++   "waits_for": ["the parts list, the balloons and the revision table drawn on the sheet (#3874, #3875)", "text on the sheet (B1, #4890)", "DXF and PDF writers as each lands (#4890)"],
++   "native": ["the_assembly_sheet_keeps_its_parts_list_revisions_and_tag_through_the_model"],
++   "steps": [
++    {"from": "W23-AS-05", "until": "end", "with": ["W23-AS-03's parts list", "W23-AS-04's balloons"]},
++    {"do": "drawing.export", "params": {"sheet": "Sheet 1", "format": "svg"}, "as": "before"},
++    {"do": "file.save", "params": {"path": "assembly.solidcraft"}},
++    {"do": "doc.open", "params": {"path": "assembly.solidcraft"}},
++    {"do": "drawing.open"},
++    {"do": "drawing.export", "params": {"sheet": "Sheet 1", "format": "svg"}, "as": "after", "check": "same_export"}
++   ],
++   "expect": {
++    "same_export": {"bytes_equal": ["before", "after"], "formats_now": ["svg"], "formats_later": ["dxf", "pdf"], "png": "written since #4890, not part of this recipe yet"},
++    "on_the_sheet": ["the parts list rows of W23-AS-03", "two balloons showing item 2", "revision rows 1 and 3, tag 3"]
++   }
++  }
++ ]
++}
+diff --git a/tests/fixtures/w23-assembly-sheet/validate.py b/tests/fixtures/w23-assembly-sheet/validate.py
+new file mode 100644
+index 000000000..19eb3a24c
+--- /dev/null
++++ b/tests/fixtures/w23-assembly-sheet/validate.py
+@@ -0,0 +1,205 @@
++#!/usr/bin/env python3
++"""Check the W23 assembly sheet recipes (#11773) against the assembly they start from.
++
++The hand counts are worked out again here from assembly.json itself, the command
++script the native tests run, so the recipes can't drift from the assembly. This
++is a static check of a written contract: it runs no SolidCraft command and never
++reports a recipe as passed.
++"""
++import json
++import re
++from collections import Counter
++from pathlib import Path
++
++HERE = Path(__file__).resolve().parent
++ROOT = HERE.parents[2]
++
++# Commands that change the model, refused while a drawing is open.
++MODEL_COMMANDS = {"assembly.bom.renumber", "component.metadata.set", "selection.delete", "occurrence.move", "edit.undo", "edit.redo"}
++IDS = ["W23-AS-03", "W23-AS-04", "W23-AS-05", "W23-AS-06"]
++
++
++def require(ok, message):
++    if not ok:
++        raise ValueError(message)
++
++
++def read(name):
++    return json.loads((HERE / name).read_text(encoding="utf-8"))
++
++
++class Assembly:
++    """The placements assembly.json makes: which component sits how often in which parent."""
++
++    def __init__(self, script):
++        self.placed = {}  # name -> [(component, parent)] for every `as` step
++        self.parents = {}  # component -> parent it was created in
++        self.inside = Counter()  # (parent, component) -> placements
++        self.part_numbers, self.descriptions = {}, {}
++        for step in script["commands"]:
++            command, p = step["command"], step["params"]
++            if command == "component.create":
++                parent = p.get("parent", "root")
++                self.parents[p["name"]] = parent
++                self.inside[(parent, p["name"])] += 1
++                placed = (p["name"], parent)
++            elif command == "occurrence.copy":
++                parent = p.get("parent", "root")
++                self.inside[(parent, p["component"])] += 1
++                placed = (p["component"], parent)
++            elif command == "component.metadata.set":
++                self.part_numbers[p["component"]] = p["part_number"]
++                self.descriptions[p["part_number"]] = p["description"]
++                continue
++            else:
++                continue
++            if "as" in step:
++                self.placed[step["as"]] = placed
++
++    def children(self, parent, without=Counter()):
++        return Counter({c: n - without[(parent, c)] for (p, c), n in self.inside.items() if p == parent}) - Counter()
++
++    def first_level(self, without=Counter()):
++        return {self.part_numbers[c]: n for c, n in self.children("root", without).items()}
++
++    def parts_only(self, without=Counter()):
++        counts = Counter()
++
++        def walk(component, times):
++            inside = self.children(component, without)
++            if not inside:
++                counts[self.part_numbers[component]] += times
++            for child, n in inside.items():
++                walk(child, times * n)
++
++        for child, n in self.children("root", without).items():
++            walk(child, n)
++        return dict(counts)
++
++
++def main():
++    data = read("cases.json")
++    asm = Assembly(read(data["assembly"]))
++    require(data["schema"] == "w23-assembly-sheet-acceptance/1", "unexpected schema")
++    require(data["no_runtime_pass_claimed"] is True, "no recipe may claim a pass")
++    cases = data["cases"]
++    require([c["id"] for c in cases] == IDS, "recipes 3 to 6 of #11773, in order")
++    require(all(c["runtime_status"] == "NOT_RUN" and c["waits_for"] for c in cases), "each recipe waits for what it needs")
++    native = {name for tests in data["already_native"].values() for name in tests}
++    for case in cases:
++        require(case["native"] and set(case["native"]) <= native, f"{case['id']}: its native tests are listed in already_native")
++    require(data["sheet"]["size"] == "ISO A2 landscape" and data["sheet"]["paper_mm"] == [594, 420], "an assembly's drawing starts on A2 (#12000)")
++
++    # The hand counts, worked out again from the script.
++    hand = data["hand_counts"]
++    second = Counter({asm.placed["second_holder"][::-1]: 1})
++    require(asm.parts_only() == hand["parts_only"], f"parts only: {asm.parts_only()}")
++    require(asm.first_level() == hand["first_level"], f"first level: {asm.first_level()}")
++    require(asm.parts_only(second) == hand["second_holder_deleted"]["parts_only"], "parts only without the second holder")
++    require(asm.first_level(second) == hand["second_holder_deleted"]["first_level"], "first level without the second holder")
++    require(any(n > 1 for n in asm.parts_only().values()), "at least one part used more than once")
++
++    # Every name a recipe uses is one the script gives.
++    names = set(asm.placed)
++    for case in cases:
++        for word in re.findall(r'"(first_holder|second_holder|block|plate|screw)"', json.dumps(case)):
++            require(word in names, f"{case['id']}: {word} is not named in the script")
++
++    # Model edits only with the drawing closed, then the drawing opened again before a check.
++    for case in cases:
++        state = "closed"
++        for step in case["steps"]:
++            command = step.get("do")
++            if command in MODEL_COMMANDS:
++                require(state == "closed", f"{case['id']}: {command} with the drawing open")
++            if "from" in step or command in ("drawing.create", "drawing.open"):
++                # A recipe continued from another starts where that one left the drawing: open.
++                state = "open"
++            elif command in ("drawing.close", "doc.open"):
++                state = "closed"
++            if "drawing" in step:
++                require(step["drawing"] == state, f"{case['id']}: {command or step.get('pending')} says the drawing is {step['drawing']}")
++            if "check" in step:
++                require(state == "open" or command == "drawing.export", f"{case['id']}: a check with the drawing closed")
++                require(step["check"] in case["expect"], f"{case['id']}: no expected values for {step['check']}")
++
++    # W23-AS-03: the rows are the first level, numbered 1, 2, 3 in part-number order, with the
++    # script's descriptions; the delete changes only the holder's quantity.
++    rows = cases[0]["expect"]
++    for key, counts in (("rows", asm.first_level()), ("rows_after_delete", asm.first_level(second))):
++        listed = rows[key]
++        require([r["part_number"] for r in listed] == sorted(counts), f"W23-AS-03 {key}: part numbers")
++        require([r["item"] for r in listed] == [str(i) for i in range(1, len(listed) + 1)], f"W23-AS-03 {key}: items")
++        for r in listed:
++            require(r["quantity"] == counts[r["part_number"]], f"W23-AS-03 {key}: {r['part_number']} quantity")
++            require(r["description"] == asm.descriptions[r["part_number"]], f"W23-AS-03 {key}: {r['part_number']} description")
++
++    # W23-AS-04: a balloon picks the row its placement is counted in, the row of the longest member
++    # path its occurrence path starts with (CamWight on #11881). Through a holder that's the holder's
++    # first-level row, and with the holder a phantom the block's own. The item shown is that row's
++    # number from the list; the deleted holder's balloon is lost, its row not found, never moved.
++    holder, block = asm.part_numbers["Holder"], asm.part_numbers[asm.placed["block"][0]]
++    holder_item = next(r["item"] for r in rows["rows"] if r["part_number"] == holder)
++    balloons = cases[1]["expect"]
++    for check, row in (("both_ok", holder), ("second_lost", holder), ("holder_phantom", block)):
++        for name, through in (("first_balloon", "first_holder"), ("second_balloon", "second_holder")):
++            b = balloons[check][name]
++            require(b["occurrence"] == [through, "block"], f"W23-AS-04 {check}: {name} through its own holder")
++            if b["status"] == "ok":
++                require(b["row"] == row, f"W23-AS-04 {check}: {name} reads {row}'s row")
++                require(b.get("item", holder_item if row == holder else None) == (holder_item if row == holder else None),
++                        f"W23-AS-04 {check}: {name}'s item is its row's number")
++    lost = balloons["second_lost"]["second_balloon"]
++    require(lost["status"] == "lost" and lost["row"] == "not found", "W23-AS-04: lost, its row not found")
++    require(lost["moved_to_first_holder"] is False and lost["removed"] is False, "W23-AS-04: never moved or removed")
++    require(balloons["second_lost"]["first_balloon"]["status"] == "ok", "W23-AS-04: the first holder's balloon stays ok")
++    phantom = [s for s in cases[1]["steps"] if s.get("do") == "component.metadata.set"]
++    require(phantom == [{"do": "component.metadata.set", "params": {"component": "Holder", "bom_type": "phantom"}, "drawing": "closed"}],
++            "W23-AS-04: the holder made a phantom, by a model command with the drawing closed")
++
++    # W23-AS-05: three revisions, the second deleted, the next is still one past the highest.
++    rev = cases[2]["expect"]
++    made = [s for s in cases[2]["steps"] if s.get("do") == "drawing.revision.add"]
++    require(rev["three_rows"]["revisions"] == [str(i) for i in range(1, len(made) + 1)], "W23-AS-05: numbered 1, 2, 3")
++    left = [r for r in rev["three_rows"]["revisions"] if r != "2"]
++    require(rev["after_delete"]["revisions"] == left and rev["after_delete"]["next"] == str(len(made) + 1), "W23-AS-05: 1 and 3, next 4")
++    require(all(t["revision"] in left for t in rev["after_delete"]["tags"]), "W23-AS-05: a tag names a revision that is there")
++    tagged = [s["params"] for s in cases[2]["steps"] if s.get("do") == "drawing.revision.tag.add"]
++    require([(p["row"], p["at"]) for p in tagged] == [(f"revision {t['revision']}", t["at_mm"]) for t in rev["after_delete"]["tags"]],
++            "W23-AS-05: each tag is added where the recipe expects it")
++    require(cases[2]["expect"]["drawing_record_unchanged_by_the_model_edit"] is True, "W23-AS-05: unchanged by the model")
++
++    # W23-AS-06: the same bytes before saving and after opening again.
++    export = cases[3]["expect"]["same_export"]
++    require(export["bytes_equal"] == ["before", "after"] and export["formats_now"] == ["svg"], "W23-AS-06: same SVG bytes")
++
++    # Everything placed on paper fits the sheet: views, tables and tags.
++    width, height = data["sheet"]["paper_mm"]
++    placed = re.findall(r'"(?:at_mm|position_mm)": \[([0-9.-]+), ([0-9.-]+)\]', json.dumps(data))
++    for case in cases:
++        for step in case["steps"]:
++            p = step.get("params", {})
++            if step.get("do") == "drawing.table.add" and "place" in p.get("set", {}):
++                placed.append(tuple(map(str, p["set"]["place"]["at"])))
++            elif step.get("do") == "drawing.revision.tag.add":
++                placed.append(tuple(map(str, p["at"])))
++    require(len(placed) >= 4, "the view, the parts list and the tag are placed")
++    for at in placed:
++        x, y = map(float, at)
++        require(0 <= x <= width and 0 <= y <= height, f"{at} is off the {data['sheet']['size']} sheet")
++
++    # The native tests the recipes rely on are there, and the README names every recipe.
++    for file, tests in data["already_native"].items():
++        text = (ROOT / file).read_text(encoding="utf-8")
++        for name in tests:
++            require(re.search(r"#\[test\]\s*\nfn " + name + r"\(\)", text), f"{file}: no test {name}")
++    readme = (HERE / "README.md").read_text(encoding="utf-8")
++    require(all(i in readme for i in IDS), "the README names every recipe")
++
++    print("STATIC CONTRACT PASS: recipes 3 to 6 match the hand counts worked out from assembly.json.")
++    print("NATIVE: the engine part of each recipe is in", ", ".join(sorted(native)))
++    print("RECIPES W23-AS-03 to W23-AS-06 on paper: NOT RUN (static only).")
++
++
++if __name__ == "__main__":
++    main()
