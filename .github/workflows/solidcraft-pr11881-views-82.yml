@@ -1,4 +1,4 @@
-name: "SolidCraft Test 82: PR 11881 plus a prototype of the assembly sheet views (source and hide, #11873), on drawings 8267a0a (fork only)"
+name: "SolidCraft Test 82: PR 11881 plus a prototype of the assembly sheet views (source and hide, #11873), on drawings 8067a0a (fork only)"
 
 on:
   push:
@@ -17,13 +17,13 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BASE_SHA: 8267a0af2350320d714d142be87697b14208a834
+  BASE_SHA: 8067a0af2350320d714d142be87697b14208a834
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: never
 
 jobs:
   proto:
-    name: "Test 82 - on drawings@8267a0a, ${{ matrix.tree }}: repository checks, clippy, the prototypes, all engine tests, known-failing"
+    name: "Test 82 - on drawings@8067a0a, ${{ matrix.tree }}: repository checks, clippy, the prototypes, all engine tests, known-failing"
     runs-on: ubuntu-24.04
     timeout-minutes: 340
     strategy:
@@ -43,15 +43,15 @@ jobs:
           sudo docker image prune --all --force >/dev/null 2>&1 || true
           df -h /
       - name: Checkout the patches (this fork branch)
-        uses: actions/checkout@3d3c42e5aac5ba825825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: overlay
           persist-credentials: false
       - name: Checkout drawings at the pinned commit
-        uses: actions/checkout@3d3c42e5aac5ba825825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tangency-labs/solidcraft
-          ref: 8267a0af2350320d714d142be87697b14208a834
+          ref: 8067a0af2350320d714d142be87697b14208a834
           path: src
           persist-credentials: false
       - name: Apply PR 11881 (9c630db), then the prototype
