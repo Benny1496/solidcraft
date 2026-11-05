@@ -85,6 +85,10 @@ def main():
     cases = data["cases"]
     require([c["id"] for c in cases] == IDS, "recipes 3 to 6 of #11773, in order")
     require(all(c["runtime_status"] == "NOT_RUN" and c["waits_for"] for c in cases), "each recipe waits for what it needs")
+    native = {name for tests in data["already_native"].values() for name in tests}
+    for case in cases:
+        require(case["native"] and set(case["native"]) <= native, f"{case['id']}: its native tests are listed in already_native")
+    require(data["sheet"]["size"] == "ISO A2 landscape" and data["sheet"]["paper_mm"] == [594, 420], "an assembly's drawing starts on A2 (#12000)")
 
     # The hand counts, worked out again from the script.
     hand = data["hand_counts"]
@@ -155,22 +159,34 @@ def main():
 
     # W23-AS-05: three revisions, the second deleted, the next is still one past the highest.
     rev = cases[2]["expect"]
-    made = [s for s in cases[2]["steps"] if s.get("pending") == "revise"]
+    made = [s for s in cases[2]["steps"] if s.get("do") == "drawing.revision.add"]
     require(rev["three_rows"]["revisions"] == [str(i) for i in range(1, len(made) + 1)], "W23-AS-05: numbered 1, 2, 3")
     left = [r for r in rev["three_rows"]["revisions"] if r != "2"]
     require(rev["after_delete"]["revisions"] == left and rev["after_delete"]["next"] == str(len(made) + 1), "W23-AS-05: 1 and 3, next 4")
     require(all(t["revision"] in left for t in rev["after_delete"]["tags"]), "W23-AS-05: a tag names a revision that is there")
+    tagged = [s["params"] for s in cases[2]["steps"] if s.get("do") == "drawing.revision.tag.add"]
+    require([(p["row"], p["at"]) for p in tagged] == [(f"revision {t['revision']}", t["at_mm"]) for t in rev["after_delete"]["tags"]],
+            "W23-AS-05: each tag is added where the recipe expects it")
     require(cases[2]["expect"]["drawing_record_unchanged_by_the_model_edit"] is True, "W23-AS-05: unchanged by the model")
 
     # W23-AS-06: the same bytes before saving and after opening again.
     export = cases[3]["expect"]["same_export"]
     require(export["bytes_equal"] == ["before", "after"] and export["formats_now"] == ["svg"], "W23-AS-06: same SVG bytes")
 
-    # Everything placed on paper fits the sheet.
+    # Everything placed on paper fits the sheet: views, tables and tags.
     width, height = data["sheet"]["paper_mm"]
-    for at in re.findall(r'"(?:at_mm|position_mm)": \[([0-9.]+), ([0-9.]+)\]', json.dumps(data)):
+    placed = re.findall(r'"(?:at_mm|position_mm)": \[([0-9.-]+), ([0-9.-]+)\]', json.dumps(data))
+    for case in cases:
+        for step in case["steps"]:
+            p = step.get("params", {})
+            if step.get("do") == "drawing.table.add" and "place" in p.get("set", {}):
+                placed.append(tuple(map(str, p["set"]["place"]["at"])))
+            elif step.get("do") == "drawing.revision.tag.add":
+                placed.append(tuple(map(str, p["at"])))
+    require(len(placed) >= 4, "the view, the parts list and the tag are placed")
+    for at in placed:
         x, y = map(float, at)
-        require(0 <= x <= width and 0 <= y <= height, f"{at} is off the A3 sheet")
+        require(0 <= x <= width and 0 <= y <= height, f"{at} is off the {data['sheet']['size']} sheet")
 
     # The native tests the recipes rely on are there, and the README names every recipe.
     for file, tests in data["already_native"].items():
@@ -181,7 +197,8 @@ def main():
     require(all(i in readme for i in IDS), "the README names every recipe")
 
     print("STATIC CONTRACT PASS: recipes 3 to 6 match the hand counts worked out from assembly.json.")
-    print("RECIPES W23-AS-03 to W23-AS-06: NOT RUN (static only).")
+    print("NATIVE: the engine part of each recipe is in", ", ".join(sorted(native)))
+    print("RECIPES W23-AS-03 to W23-AS-06 on paper: NOT RUN (static only).")
 
 
 if __name__ == "__main__":

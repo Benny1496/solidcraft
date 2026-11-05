@@ -1,6 +1,6 @@
 {
  "schema": "w23-assembly-sheet-acceptance/1",
- "purpose": "Recipes 3 to 6 of #11773: what the assembly sheet must show once the parts list on a sheet, balloon item numbers and the revision table land on drawings. A written contract, checked by validate.py; no command here is run.",
+ "purpose": "Recipes 3 to 6 of #11773: what the assembly sheet must show with its parts list, balloon item numbers and revision table. A written contract, checked by validate.py; no command here is run. The engine part of each recipe runs as the native tests named in `native`; the recipes themselves stay NOT RUN until what they show is drawn on paper.",
  "issue": "https://github.com/tangency-labs/solidcraft/issues/11773",
  "assembly": "assembly.json",
  "no_runtime_pass_claimed": true,
@@ -9,7 +9,7 @@
   "model_edit_sequence": ["drawing.close", "the model edit, undo or redo", "drawing.open"],
   "source": "https://github.com/tangency-labs/solidcraft/pull/8288#issuecomment-6599897742"
  },
- "sheet": {"size": "ISO A3 landscape", "paper_mm": [420, 297], "view": "top", "scale": "1:2", "position_mm": [150, 150]},
+ "sheet": {"size": "ISO A2 landscape", "paper_mm": [594, 420], "template": "iso-a2-assembly, what drawing.create starts an assembly's drawing on (#12000)", "view": "top", "scale": "1:2", "position_mm": [150, 150]},
  "hand_counts": {
   "parts_only": {"BL-200": 2, "BP-100": 1, "SC-M6": 8},
   "first_level": {"BP-100": 1, "HL-300": 2, "SC-M6": 4},
@@ -26,7 +26,11 @@
    "a_phantom_holder_puts_what_it_holds_on_the_assembly_sheets_first_level"
   ],
   "crates/engine/src/cmd/drawing_balloon_tests.rs": [
-   "balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay"
+   "balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay",
+   "balloons_on_the_assembly_sheet_read_their_holders_row"
+  ],
+  "crates/engine/src/cmd/drawing_table_tests.rs": [
+   "the_assembly_sheet_keeps_its_parts_list_revisions_and_tag_through_the_model"
   ]
  },
  "cases": [
@@ -34,13 +38,13 @@
    "id": "W23-AS-03",
    "title": "The parts list on the sheet shows the hand counts and follows a model edit",
    "runtime_status": "NOT_RUN",
-   "waits_for": ["#11828: drawing.table.add, a parts list saved on a sheet", "#3874: the parts list drawn on paper (text on the sheet)"],
-   "pending_commands": {"place_parts_list": "drawing.table.add (#11828): a parts list of the design's first level, its corner on paper"},
+   "waits_for": ["#3874: the parts list drawn on paper (text on the sheet)"],
+   "native": ["the_assembly_sheet_keeps_its_parts_list_revisions_and_tag_through_the_model"],
    "steps": [
     {"do": "assembly.bom.renumber", "params": {"levels": "top"}, "drawing": "closed"},
     {"do": "drawing.create", "drawing": "open"},
     {"do": "drawing.view.base", "params": {"sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [150, 150]}, "drawing": "open"},
-    {"pending": "place_parts_list", "params": {"levels": "top", "at_mm": [330, 60]}, "drawing": "open", "check": "rows"},
+    {"do": "drawing.table.add", "params": {"sheet": "Sheet 1", "kind": "parts_list", "set": {"list": {"levels": "top"}, "place": {"at": [330, 60]}}}, "drawing": "open", "check": "rows"},
     {"do": "drawing.close"},
     {"do": "selection.delete", "params": {"occurrences": ["second_holder"]}, "drawing": "closed"},
     {"do": "drawing.open", "check": "rows_after_delete"},
@@ -68,10 +72,11 @@
    "id": "W23-AS-04",
    "title": "A balloon per holder shows its row's item number; the deleted holder's balloon is lost, never moved or removed",
    "runtime_status": "NOT_RUN",
-   "waits_for": ["the balloon-reads-its-row PR on #11828 (#3874)", "W23-AS-03's parts list on the sheet"],
+   "waits_for": ["the balloons and W23-AS-03's parts list drawn on paper (#3874)"],
+   "native": ["balloons_on_the_assembly_sheet_read_their_holders_row", "balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay"],
    "confirmed": "https://github.com/tangency-labs/solidcraft/pull/11881#issuecomment-6626379382",
    "steps": [
-    {"from": "W23-AS-03", "until": "place_parts_list"},
+    {"from": "W23-AS-03", "until": "drawing.table.add"},
     {"do": "drawing.balloon.add", "params": {"edge": {"point": [50, 10, 40], "path": ["first_holder", "block"]}, "at": [0, 60]}, "drawing": "open", "as": "first_balloon"},
     {"do": "drawing.balloon.add", "params": {"edge": {"point": [50, 50, 40], "path": ["second_holder", "block"]}, "at": [40, 60]}, "drawing": "open", "as": "second_balloon", "check": "both_ok"},
     {"do": "drawing.close"},
@@ -105,15 +110,16 @@
    "id": "W23-AS-05",
    "title": "The revision table numbers 1, 2, 3, keeps 4 as next after row 2 is deleted, and never changes with the model",
    "runtime_status": "NOT_RUN",
-   "waits_for": ["#11803: drawing.revise", "#11813: revisions numbered 1, 2, 3", "#11821: revision tags on a sheet", "#3875: the revision table on the sheet"],
-   "pending_commands": {"revise": "drawing.revise (#11803)", "tag": "the revision tag command (#11821), named when it lands"},
+   "waits_for": ["#3875: the revision table drawn on the sheet"],
+   "native": ["the_assembly_sheet_keeps_its_parts_list_revisions_and_tag_through_the_model", "balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay"],
    "steps": [
     {"do": "drawing.create", "drawing": "open"},
-    {"pending": "revise", "params": {"description": "First issue", "designer": "BS", "date": "2026-11-03"}, "drawing": "open"},
-    {"pending": "revise", "params": {"description": "Withdrawn", "designer": "BS", "date": "2026-11-04"}, "drawing": "open"},
-    {"pending": "revise", "params": {"description": "Holder moved", "designer": "BS", "date": "2026-11-05"}, "drawing": "open", "check": "three_rows"},
+    {"do": "drawing.table.add", "params": {"sheet": "Sheet 1", "kind": "revision"}, "drawing": "open"},
+    {"do": "drawing.revision.add", "params": {"set": {"description": "First issue", "designer": "BS", "date": "2026-11-03"}}, "drawing": "open"},
+    {"do": "drawing.revision.add", "params": {"set": {"description": "Withdrawn", "designer": "BS", "date": "2026-11-04"}}, "drawing": "open"},
+    {"do": "drawing.revision.add", "params": {"set": {"description": "Holder moved", "designer": "BS", "date": "2026-11-05"}}, "drawing": "open", "check": "three_rows"},
     {"do": "drawing.revision.delete", "params": {"row": "revision 2"}, "drawing": "open", "check": "after_delete"},
-    {"pending": "tag", "params": {"revision": "3", "at_mm": [200, 120]}, "drawing": "open"},
+    {"do": "drawing.revision.tag.add", "params": {"row": "revision 3", "sheet": "Sheet 1", "at": [200, 120]}, "drawing": "open"},
     {"do": "drawing.close"},
     {"do": "occurrence.move", "params": {"occurrence": "second_holder", "space": "world", "translate": [0, 30, 0]}, "drawing": "closed"},
     {"do": "drawing.open", "check": "after_delete"},
@@ -131,7 +137,8 @@
    "id": "W23-AS-06",
    "title": "The sheet exports the same after save and reopen",
    "runtime_status": "NOT_RUN",
-   "waits_for": ["W23-AS-03, W23-AS-04 and W23-AS-05", "text on the sheet (B1, #4890)", "PNG, DXF and PDF writers as each lands (#4890)"],
+   "waits_for": ["the parts list, the balloons and the revision table drawn on the sheet (#3874, #3875)", "text on the sheet (B1, #4890)", "DXF and PDF writers as each lands (#4890)"],
+   "native": ["the_assembly_sheet_keeps_its_parts_list_revisions_and_tag_through_the_model"],
    "steps": [
     {"from": "W23-AS-05", "until": "end", "with": ["W23-AS-03's parts list", "W23-AS-04's balloons"]},
     {"do": "drawing.export", "params": {"sheet": "Sheet 1", "format": "svg"}, "as": "before"},
@@ -141,7 +148,7 @@
     {"do": "drawing.export", "params": {"sheet": "Sheet 1", "format": "svg"}, "as": "after", "check": "same_export"}
    ],
    "expect": {
-    "same_export": {"bytes_equal": ["before", "after"], "formats_now": ["svg"], "formats_later": ["png", "dxf", "pdf"]},
+    "same_export": {"bytes_equal": ["before", "after"], "formats_now": ["svg"], "formats_later": ["dxf", "pdf"], "png": "written since #4890, not part of this recipe yet"},
     "on_the_sheet": ["the parts list rows of W23-AS-03", "two balloons showing item 2", "revision rows 1 and 3, tag 3"]
    }
   }
