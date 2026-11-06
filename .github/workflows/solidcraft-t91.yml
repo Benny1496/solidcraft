@@ -1,0 +1,255 @@
+name: "SolidCraft Test 91 - full engine and 3D-to-2D visual dimension evidence"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t91
+    paths:
+      - .github/workflows/solidcraft-t91.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-t91-full-validation
+  cancel-in-progress: false
+
+jobs:
+  all-engine:
+    name: "T91 full engine suite - known failures classified"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PINNED_PR_HEAD: "e571b8998e6217787a92a25ceb565ece736ebf2d"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Verify isolated fork-only branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t91"
+
+      - name: Checkout isolated test harness from fork
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout exact PR11881 code read-only
+        uses: actions/checkout@v4
+        with:
+          repository: Benny1496/solidcraft
+          ref: e571b8998e6217787a92a25ceb565ece736ebf2d
+          path: src
+          persist-credentials: false
+
+      - name: Verify commit and start report
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../t91-engine-report
+          test "$(git rev-parse HEAD)" = "$PINNED_PR_HEAD"
+          printf "TEST=91\nTRACK=FULL_ENGINE\nHEAD=%s\n" "$PINNED_PR_HEAD" > ../t91-engine-report/summary.txt
+
+      - name: Install Rust and Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache full engine build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t91-full-engine
+          cache-on-failure: true
+
+      - name: Validate Rust formatting and engine Clippy
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../t91-engine-report/fmt.log 2>&1 || {
+            tail -70 ../t91-engine-report/fmt.log; exit 1;
+          }
+          echo "FMT=PASS" >> ../t91-engine-report/summary.txt
+          timeout 30m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t91-engine-report/clippy.log 2>&1 || {
+            tail -100 ../t91-engine-report/clippy.log; exit 1;
+          }
+          echo "CLIPPY=PASS" >> ../t91-engine-report/summary.txt
+
+      - name: Compile entire engine test executable without running it
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 66m cargo test -p solidcraft-engine --profile ci --locked --no-run --message-format=json > ../t91-engine-report/build-artifacts.jsonl 2> ../t91-engine-report/compile.log || {
+            tail -120 ../t91-engine-report/compile.log; exit 1;
+          }
+          echo "ENGINE_COMPILED=PASS" >> ../t91-engine-report/summary.txt
+
+      - name: Run ALL engine unit tests and distinguish known failures from regressions
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ../overlay/tests/fixtures/t91/run_full_engine.py ../t91-engine-report/build-artifacts.jsonl ../t91-engine-report . | tee ../t91-engine-report/evaluation.log
+          grep -F "FINAL=ENGINE_SUITE_BASELINE_VALID" ../t91-engine-report/evaluation.log
+          echo "ENGINE_ALL_BASELINE=PASS" >> ../t91-engine-report/summary.txt
+
+      - name: Run all engine doc tests
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 12m cargo test --doc -p solidcraft-engine --profile ci --locked -- --test-threads=2 > ../t91-engine-report/doc-tests.log 2>&1 || {
+            tail -100 ../t91-engine-report/doc-tests.log; exit 1;
+          }
+          echo "ENGINE_DOC_TESTS=PASS" >> ../t91-engine-report/summary.txt
+          echo "FINAL=FULL_ENGINE_BASELINE_AND_DOCS_PASS" | tee -a ../t91-engine-report/summary.txt
+
+      - name: Preserve complete engine logs and baseline report even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t91-full-engine
+          path: t91-engine-report/
+          retention-days: 14
+          if-no-files-found: warn
+
+  visual-dimensions:
+    name: "T91 real SVG/PNG and UI-egui 3D to 2D dimensions"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PINNED_PR_HEAD: "e571b8998e6217787a92a25ceb565ece736ebf2d"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Verify isolated fork-only branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t91"
+
+      - name: Checkout isolated visual-test harness
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout exact PR11881 code read-only
+        uses: actions/checkout@v4
+        with:
+          repository: Benny1496/solidcraft
+          ref: e571b8998e6217787a92a25ceb565ece736ebf2d
+          path: src
+          persist-credentials: false
+
+      - name: Inject only evidence-export test into temporary engine checkout
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../t91-visual-report/visual
+          test "$(git rev-parse HEAD)" = "$PINNED_PR_HEAD"
+          printf "TEST=91\nTRACK=REAL_PAPER_EXPORT_AND_UI\nHEAD=%s\n" "$PINNED_PR_HEAD" > ../t91-visual-report/summary.txt
+          python3 ../overlay/tests/fixtures/t91/inject_visual_test.py | tee ../t91-visual-report/injection.log
+          git diff --check
+          test "$(git diff --name-only)" = "crates/engine/src/cmd/drawing_export_tests.rs"
+          git diff > ../t91-visual-report/injected-unformatted.patch
+          echo "INJECTION=PASS" >> ../t91-visual-report/summary.txt
+
+      - name: Install Rust and Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache visual and native UI build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t91-real-paper-ui
+          cache-on-failure: true
+
+      - name: Format and lint visual export test
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t91-visual-report/fmt-apply.log 2>&1
+          cargo fmt --all -- --check > ../t91-visual-report/fmt.log 2>&1 || {
+            tail -100 ../t91-visual-report/fmt.log; exit 1;
+          }
+          git diff --check
+          test "$(git diff --name-only)" = "crates/engine/src/cmd/drawing_export_tests.rs"
+          git diff > ../t91-visual-report/evidence-test-only.patch
+          echo "FMT=PASS" >> ../t91-visual-report/summary.txt
+          timeout 35m cargo clippy -p solidcraft-engine -p solidcraft-ui-egui --all-targets --profile ci --locked -- -D warnings > ../t91-visual-report/clippy.log 2>&1 || {
+            tail -120 ../t91-visual-report/clippy.log; exit 1;
+          }
+          echo "CLIPPY=PASS" >> ../t91-visual-report/summary.txt
+
+      - name: Compile engine and native egui tests once
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 66m cargo test -p solidcraft-engine -p solidcraft-ui-egui --profile ci --locked --no-run --message-format=json > ../t91-visual-report/build-artifacts.jsonl 2> ../t91-visual-report/compile.log || {
+            tail -120 ../t91-visual-report/compile.log; exit 1;
+          }
+          echo "TEST_BINARIES_COMPILED=PASS" >> ../t91-visual-report/summary.txt
+
+      - name: Render real PNG/SVG before and after a 3D model edit and verify drawing annotations
+        working-directory: src
+        shell: bash
+        env:
+          SOLIDCRAFT_T91_EVIDENCE_DIR: ${{ github.workspace }}/t91-visual-report/visual
+        run: |
+          set -euo pipefail
+          run=../overlay/tests/fixtures/t91/run_prebuilt.py
+          artifacts=../t91-visual-report/build-artifacts.jsonl
+          python3 "$run" "$artifacts" solidcraft_engine t91_a_3d_edit_redraws_the_2d_sheet_and_keeps_its_dimension_in_png_and_svg ../t91-visual-report/visual-export.log pass 1 | tee ../t91-visual-report/evidence-outcome.log
+          python3 "$run" "$artifacts" solidcraft_engine a_views_dimensions_swap_with_its_lines ../t91-visual-report/dimension-swap.log pass 1 | tee ../t91-visual-report/dimension-swap-outcome.log
+          python3 "$run" "$artifacts" solidcraft_engine a_lost_dimension_leaves_the_sheet_drawn_and_is_listed ../t91-visual-report/lost-dimension.log pass 1 | tee ../t91-visual-report/lost-dimension-outcome.log
+          python3 "$run" "$artifacts" solidcraft_engine after_a_model_change_the_last_scene_shows_until_its_views_are_drawn_again ../t91-visual-report/model-to-view.log pass 1 | tee ../t91-visual-report/model-to-view-outcome.log
+          python3 "$run" "$artifacts" solidcraft_engine a_dimension_is_refused_on_a_part_its_view_leaves_out ../t91-visual-report/dimension-refusal.log pass 1 | tee ../t91-visual-report/dimension-refusal-outcome.log
+          python3 "$run" "$artifacts" solidcraft_ui_egui ticks_draw_the_sheet_beside_the_window ../t91-visual-report/egui-scene.log pass 1 | tee ../t91-visual-report/egui-scene-outcome.log
+          python3 "$run" "$artifacts" solidcraft_engine the_assembly_sheet_refuses_a_balloon_on_its_hidden_second_holder ../t91-visual-report/w23-control.log pass 1 | tee ../t91-visual-report/w23-control-outcome.log
+          for name in before.svg after.svg before.png after.png; do
+            test -s "../t91-visual-report/visual/$name" || { echo "Missing evidence: $name"; exit 1; }
+          done
+          sha256sum ../t91-visual-report/visual/* | tee ../t91-visual-report/visual-sha256.txt
+          cmp -s ../t91-visual-report/visual/before.png ../t91-visual-report/visual/after.png && {
+            echo "3D edit did not change visual PNG"; exit 1;
+          }
+          cmp -s ../t91-visual-report/visual/before.svg ../t91-visual-report/visual/after.svg && {
+            echo "3D edit did not change SVG"; exit 1;
+          }
+          echo "FINAL=VISUAL_PNG_SVG_AND_SEVEN_TARGETED_TESTS_PASS" | tee -a ../t91-visual-report/summary.txt
+          echo "Captured real native paper SVG/PNG, not interactive browser screenshots." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Add side-by-side evidence viewer to artifact
+        if: always()
+        shell: bash
+        run: |
+          if [ -f t91-visual-report/visual/before.png ] && [ -f t91-visual-report/visual/after.png ]; then
+            cat > t91-visual-report/visual/comparison.html <<'HTML'
+          <!doctype html><html lang="en"><meta charset="utf-8"><title>SolidCraft T91 real paper exports</title>
+          <style>body{font:16px system-ui;background:#edf0f4;color:#1d2733;margin:24px}main{display:grid;grid-template-columns:1fr 1fr;gap:20px}img{max-width:100%;background:white;border:1px solid #bcc5d0}h2{margin-bottom:10px}</style>
+          <h1>Test 91: real SVG and PNG of the drawing sheet</h1><p>Before and after: the 3D box height changes from 20 mm to 40 mm. A bottom-edge dimension remains attached. These are native SolidCraft paper exports, not browser UI captures.</p>
+          <main><section><h2>Before (20 mm)</h2><img src="before.png" alt="Drawing before height change"><p><a href="before.svg">Original SVG</a></p></section>
+          <section><h2>After (40 mm)</h2><img src="after.png" alt="Drawing after height change"><p><a href="after.svg">Original SVG</a></p></section></main></html>
+          HTML
+          fi
+
+      - name: Preserve actual visuals and every original test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t91-visual-and-dimensions
+          path: t91-visual-report/
+          retention-days: 14
+          if-no-files-found: warn
