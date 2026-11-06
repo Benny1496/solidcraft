@@ -47,7 +47,7 @@ output_file = report_dir / "engine-all-tests.log"
 with output_file.open("w") as output:
     try:
         completed = subprocess.run(
-            [binary, "--test-threads=2", "--nocapture"],
+            [binary, "--test-threads=2"],
             cwd=dir_engine, text=True, stdout=output, stderr=subprocess.STDOUT, timeout=65 * 60
         )
         code = completed.returncode
