@@ -1,0 +1,229 @@
+name: "SolidCraft Test 88 - model to drawing and deferred-export regression"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t88
+    paths:
+      - .github/workflows/solidcraft-t88.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-test88-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  focused:
+    name: "T88 ${{ matrix.label }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: "10881 model edits / undo / assembly"
+            pr: 10881
+            head: 767d2f138ebc8007fdb4ee40ceaee566f4daf715
+            kind: model
+          - label: "10431 scratch export known regression"
+            pr: 10431
+            head: c51daba4d2e072e95427241e86be58cc14a51977
+            kind: scratch
+          - label: "12394 annotation hidden-parts verification"
+            pr: 12394
+            head: c406d80b04735f3147ce4c597cc61f5ee87c449c
+            kind: anno
+          - label: "7579 broken view engine and UI verification"
+            pr: 7579
+            head: bcc5ed6668edc83691157a3bd43450ed78f28313
+            kind: broken
+
+    env:
+      DRAWINGS_SHA: a7c0310abadd8d7787f57a6982457c2f6c9eebd9
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+
+    steps:
+      - name: Verify fork and exact test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t88"
+
+      - name: Checkout test-only scripts from own fork
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout pinned official drawings
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: a7c0310abadd8d7787f57a6982457c2f6c9eebd9
+          path: src
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Merge exact upstream PR into ephemeral checkout
+        id: merge
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t88-report
+          test "$(git rev-parse HEAD)" = "$DRAWINGS_SHA"
+          git config user.name "SolidCraft Test Runner"
+          git config user.email "runner@users.noreply.github.com"
+          git fetch origin "refs/pull/${{ matrix.pr }}/head"
+          actual="$(git rev-parse FETCH_HEAD)"
+          test "$actual" = "${{ matrix.head }}" || { echo "HEAD changed, stop test"; exit 1; }
+          git merge --no-ff --no-edit -m "Temporary PR #${{ matrix.pr }} on pinned drawings" FETCH_HEAD > ../t88-report/merge.log 2>&1 || {
+            cat ../t88-report/merge.log
+            echo "MERGE_STATUS=FAIL" > ../t88-report/summary.txt
+            exit 1
+          }
+          printf "PR=${{ matrix.pr }}\nHEAD=%s\nBASE=%s\nMERGE_STATUS=PASS\n" "$actual" "$DRAWINGS_SHA" > ../t88-report/summary.txt
+          git log -2 --oneline | tee -a ../t88-report/merge.log
+
+      - name: Inject reviewed test case or import fix only in temporary checkout
+        id: prepare
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          case "${{ matrix.kind }}" in
+            scratch) python3 ../overlay/tests/fixtures/t88/add_deferred_scratch_regression.py ;;
+            anno|broken) python3 ../overlay/tests/fixtures/t87/fix_theironchef.py "${{ matrix.pr }}" ;;
+            model) echo "Use unchanged #10881 tests" ;;
+            *) exit 1 ;;
+          esac
+          git diff --check
+          git diff > ../t88-report/test-only-changes.diff
+          if [ "${{ matrix.kind }}" != model ]; then
+            test -s ../t88-report/test-only-changes.diff
+          fi
+          echo "PREPARE=PASS" >> ../t88-report/summary.txt
+
+      - name: Install Rust and Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t88-pr${{ matrix.pr }}
+          cache-on-failure: true
+
+      - name: Check source formatting and focused Clippy
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../t88-report/fmt.log 2>&1 || {
+            tail -70 ../t88-report/fmt.log
+            exit 1
+          }
+          echo "FMT=PASS" >> ../t88-report/summary.txt
+          case "${{ matrix.kind }}" in
+            model|anno|scratch)
+              timeout 30m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t88-report/clippy.log 2>&1 ;;
+            broken)
+              timeout 30m cargo clippy -p solidcraft-geom -p solidcraft-engine -p solidcraft-ui-egui --all-targets --profile ci --locked -- -D warnings > ../t88-report/clippy.log 2>&1 ;;
+          esac || {
+            tail -100 ../t88-report/clippy.log
+            exit 1
+          }
+          echo "CLIPPY=PASS" >> ../t88-report/summary.txt
+
+      - name: Compile all required tests once with sufficient time budget
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.kind }}" = broken ]; then
+            timeout 65m cargo test -p solidcraft-geom -p solidcraft-engine -p solidcraft-ui-egui --profile ci --locked --no-run > ../t88-report/compile-tests.log 2>&1 || {
+              tail -110 ../t88-report/compile-tests.log
+              exit 1
+            }
+          else
+            timeout 65m cargo test -p solidcraft-engine --profile ci --locked --no-run > ../t88-report/compile-tests.log 2>&1 || {
+              tail -110 ../t88-report/compile-tests.log
+              exit 1
+            }
+          fi
+          echo "COMPILE_TESTS=PASS" >> ../t88-report/summary.txt
+
+      - name: Run target tests (only intended cases)
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          run_filter() {
+            label="$1"; package="$2"; filter="$3"
+            timeout 10m cargo test -p "$package" "$filter" --profile ci --locked -- --nocapture > "../t88-report/${label}.log" 2>&1 || {
+              tail -100 "../t88-report/${label}.log"
+              return 1
+            }
+            if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed' "../t88-report/${label}.log"; then
+              echo "ERROR: zero tests matched: ${label}"
+              return 1
+            fi
+            grep 'test result:' "../t88-report/${label}.log" | tail -1
+            echo "TEST_${label}=PASS" >> ../t88-report/summary.txt
+          }
+          case "${{ matrix.kind }}" in
+            model)
+              run_filter save-reopen solidcraft-engine the_milestone_plate_exports_the_same_after_it_is_saved_and_opened
+              run_filter model-edit-undo solidcraft-engine the_milestone_plate_follows_its_model_and_undo_brings_its_sheet_back
+              run_filter assembly-occurrences solidcraft-engine an_assembly_sheet_follows_its_occurrences
+              echo "FINAL=THREE_3D_TO_2D_REGRESSIONS_PASS" | tee -a ../t88-report/summary.txt
+              ;;
+            anno)
+              run_filter hidden-balloon solidcraft-engine a_balloon_is_refused_on_a_part_its_view_leaves_out
+              run_filter hidden-note solidcraft-engine a_notes_leader_is_refused_on_a_part_its_view_leaves_out
+              run_filter hidden-dimension solidcraft-engine a_dimension_is_refused_on_a_part_its_view_leaves_out
+              echo "FINAL=THREE_ANNOTATION_REGRESSIONS_PASS" | tee -a ../t88-report/summary.txt
+              ;;
+            broken)
+              run_filter break-geom solidcraft-geom drawing_break
+              run_filter break-engine solidcraft-engine drawing_break
+              run_filter break-ui solidcraft-ui-egui broken_view
+              echo "FINAL=THREE_BROKEN_VIEW_TEST_GROUPS_PASS" | tee -a ../t88-report/summary.txt
+              ;;
+            scratch)
+              set +e
+              timeout 10m cargo test -p solidcraft-engine a_held_deferred_drawing_exports_the_same_from_a_scratch_copy --profile ci --locked -- --nocapture > ../t88-report/scratch-regression.log 2>&1
+              code=$?
+              set -e
+              if [ "$code" -eq 101 ] &&
+                 grep -Eq 'test .*a_held_deferred_drawing_exports_the_same_from_a_scratch_copy .* FAILED' ../t88-report/scratch-regression.log &&
+                 grep -q 'assertion .*left == right.* failed' ../t88-report/scratch-regression.log; then
+                echo "FINAL=KNOWN_BACKGROUND_EXPORT_BUG_REPRODUCED_NOT_FIXED" | tee -a ../t88-report/summary.txt
+                echo "Expected negative test: product bug CONFIRMED; this is NOT a passing regression." >> "$GITHUB_STEP_SUMMARY"
+              elif [ "$code" -eq 0 ]; then
+                echo "FINAL=UNEXPECTED_BUG_NOT_REPRODUCED" | tee -a ../t88-report/summary.txt
+                echo "::error title=Known bug changed::Investigate whether #10431 already fixes the bug"
+                exit 1
+              else
+                echo "FINAL=REGRESSION_TEST_NOT_EVALUABLE_EXIT_${code}" | tee -a ../t88-report/summary.txt
+                tail -120 ../t88-report/scratch-regression.log
+                exit 1
+              fi
+              ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Upload all original logs, successful or failed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t88-${{ matrix.kind }}
+          path: t88-report/
+          retention-days: 14
+          if-no-files-found: warn
