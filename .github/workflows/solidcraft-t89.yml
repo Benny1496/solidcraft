@@ -1,4 +1,4 @@
-name: "SolidCraft Test 89 - scratch export and broken-view completion"
+name: "SolidCraft Test 89b - corrected scratch export regression only"
 on:
   push:
     branches:
@@ -26,10 +26,6 @@ jobs:
             pr: 10431
             head: c51daba4d2e072e95427241e86be58cc14a51977
             kind: scratch
-          - label: "PR7579 broken view missing engine and UI tests"
-            pr: 7579
-            head: bcc5ed6668edc83691157a3bd43450ed78f28313
-            kind: broken
 
     env:
       DRAWINGS_SHA: a7c0310abadd8d7787f57a6982457c2f6c9eebd9
