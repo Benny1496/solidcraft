@@ -17,8 +17,7 @@ marker = (
 name = "a_held_deferred_drawing_exports_the_same_from_a_scratch_copy"
 assert s.count(marker) == 1, "Unexpected drawing scene test source; refusing insertion"
 assert name not in s, "Regression already present; refusing duplicate injection"
-test = """
-/// Reviewer-provided regression case for a held deferred drawing when exported
+test = """/// Reviewer-provided regression case for a held deferred drawing when exported
 /// through the worker's scratch Session (PR #10431); expected FAIL until fixed.
 #[test]
 fn a_held_deferred_drawing_exports_the_same_from_a_scratch_copy() {
