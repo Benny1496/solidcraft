@@ -1,0 +1,176 @@
+name: "SolidCraft Test 89 - scratch export and broken-view completion"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t89
+    paths:
+      - .github/workflows/solidcraft-t89.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-test89-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  focused:
+    name: "T89 ${{ matrix.label }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: "PR10431 deferred scratch export known-bug regression"
+            pr: 10431
+            head: c51daba4d2e072e95427241e86be58cc14a51977
+            kind: scratch
+          - label: "PR7579 broken view missing engine and UI tests"
+            pr: 7579
+            head: bcc5ed6668edc83691157a3bd43450ed78f28313
+            kind: broken
+
+    env:
+      DRAWINGS_SHA: a7c0310abadd8d7787f57a6982457c2f6c9eebd9
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+
+    steps:
+      - name: Verify fork-only and exact test branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t89"
+
+      - name: Checkout fork-only CI scripts
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout pinned upstream drawings source
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: a7c0310abadd8d7787f57a6982457c2f6c9eebd9
+          path: src
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Merge exact open PR into temporary source checkout
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t89-report
+          test "$(git rev-parse HEAD)" = "$DRAWINGS_SHA"
+          git config user.name "SolidCraft CI Validation"
+          git config user.email "runner@users.noreply.github.com"
+          git fetch origin "refs/pull/${{ matrix.pr }}/head"
+          actual="$(git rev-parse FETCH_HEAD)"
+          test "$actual" = "${{ matrix.head }}" || {
+            echo "::error::Pinned PR HEAD changed - refuse nonreproducible test"
+            exit 1
+          }
+          git merge --no-ff --no-edit -m "T89 temporary integration PR#${{ matrix.pr }}" FETCH_HEAD > ../t89-report/merge.log 2>&1 || {
+            tail -100 ../t89-report/merge.log
+            exit 1
+          }
+          printf "PR=${{ matrix.pr }}\nHEAD=%s\nBASE=%s\nMERGE=PASS\n" "$actual" "$DRAWINGS_SHA" > ../t89-report/summary.txt
+          git log -2 --oneline | tee -a ../t89-report/merge.log
+
+      - name: Apply only the reviewed regression or import fix inside runner
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          case "${{ matrix.kind }}" in
+            scratch) python3 ../overlay/tests/fixtures/t89/add_scratch_regression.py ;;
+            broken) python3 ../overlay/tests/fixtures/t87/fix_theironchef.py 7579 ;;
+            *) exit 1 ;;
+          esac
+          git diff --check
+          git diff > ../t89-report/test-only.patch
+          test -s ../t89-report/test-only.patch
+          echo "TEST_PATCH=PASS" >> ../t89-report/summary.txt
+
+      - name: Install Rust toolchain and Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Restore Rust cache from fork
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t89-pr${{ matrix.pr }}
+          cache-on-failure: true
+
+      - name: Verify formatting and Clippy
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../t89-report/fmt.log 2>&1 || {
+            tail -100 ../t89-report/fmt.log
+            exit 1
+          }
+          echo "FMT=PASS" >> ../t89-report/summary.txt
+          if [ "${{ matrix.kind }}" = scratch ]; then
+            timeout 25m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t89-report/clippy.log 2>&1 || {
+              tail -100 ../t89-report/clippy.log; exit 1;
+            }
+          else
+            timeout 25m cargo clippy -p solidcraft-geom -p solidcraft-engine -p solidcraft-ui-egui --all-targets --profile ci --locked -- -D warnings > ../t89-report/clippy.log 2>&1 || {
+              tail -100 ../t89-report/clippy.log; exit 1;
+            }
+          fi
+          echo "CLIPPY=PASS" >> ../t89-report/summary.txt
+
+      - name: Compile each required Rust unit-test binary once and record its exact executable
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.kind }}" = scratch ]; then
+            timeout 64m cargo test -p solidcraft-engine --profile ci --locked --no-run --message-format=json > ../t89-report/build-artifacts.jsonl 2> ../t89-report/compile.log || {
+              tail -100 ../t89-report/compile.log; exit 1;
+            }
+          else
+            timeout 64m cargo test -p solidcraft-engine -p solidcraft-ui-egui --profile ci --locked --no-run --message-format=json > ../t89-report/build-artifacts.jsonl 2> ../t89-report/compile.log || {
+              tail -100 ../t89-report/compile.log; exit 1;
+            }
+          fi
+          echo "TEST_BINARIES_COMPILED=PASS" >> ../t89-report/summary.txt
+
+      - name: Execute only selected precompiled unit-test binaries - never recompile per filter
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          prebuilt=../overlay/tests/fixtures/t89/run_prebuilt_tests.py
+          case "${{ matrix.kind }}" in
+            scratch)
+              python3 "$prebuilt" ../t89-report/build-artifacts.jsonl solidcraft_engine a_held_deferred_drawing_exports_the_same_from_a_scratch_copy ../t89-report/scratch-negative.log known_scratch_fail 1 | tee ../t89-report/outcome.log
+              grep -F "RESULT=KNOWN_SCRATCH_EXPORT_BUG_REPRODUCED_NOT_FIXED" ../t89-report/outcome.log
+              echo "FINAL=KNOWN_BUG_REPRODUCED_NOT_FIXED" | tee -a ../t89-report/summary.txt
+              echo "Regression reproduces the known background-export failure. It does NOT certify a fix." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            broken)
+              python3 "$prebuilt" ../t89-report/build-artifacts.jsonl solidcraft_engine drawing_break ../t89-report/engine.log pass 3 | tee ../t89-report/engine-outcome.log
+              python3 "$prebuilt" ../t89-report/build-artifacts.jsonl solidcraft_ui_egui broken_view_preview ../t89-report/ui.log pass 5 | tee ../t89-report/ui-outcome.log
+              echo "FINAL=ENGINE_AND_UI_PASS" | tee -a ../t89-report/summary.txt
+              ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Preserve all original logs and outcomes - even when a job fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t89-${{ matrix.kind }}
+          path: t89-report/
+          retention-days: 14
+          if-no-files-found: warn
