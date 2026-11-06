@@ -1,0 +1,203 @@
+name: "SolidCraft Test 87: theironchef review fixes - before vs after (fork only)"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t87
+    paths:
+      - .github/workflows/solidcraft-t87.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-test87-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  before-after:
+    name: "T87 PR #${{ matrix.pr }} - raw vs reviewer fix"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pr: 12394
+            head: c406d80b04735f3147ce4c597cc61f5ee87c449c
+            crate: solidcraft-engine
+          - pr: 9704
+            head: 9b86def875d6993bfdc56dc18bf56f74ae8c9325
+            crate: solidcraft-geom
+          - pr: 7579
+            head: bcc5ed6668edc83691157a3bd43450ed78f28313
+            crate: solidcraft-ui-egui
+          - pr: 9720
+            head: c5ee0b9744d83b9be3a3f22c7f85c770fb2d1b78
+            crate: solidcraft-geom
+
+    env:
+      BASE_SHA: a7c0310abadd8d7787f57a6982457c2f6c9eebd9
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+
+    steps:
+      - name: Verify fork-only execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          echo "T87: fork guard passed"
+
+      - name: Checkout test-only correction script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout exact official drawings baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: a7c0310abadd8d7787f57a6982457c2f6c9eebd9
+          path: src
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Prepare isolated PR merge
+        id: merge
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t87-report
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git config user.name "SolidCraft Test Runner"
+          git config user.email "runner@users.noreply.github.com"
+          git fetch origin "refs/pull/${{ matrix.pr }}/head"
+          actual=$(git rev-parse FETCH_HEAD)
+          test "$actual" = "${{ matrix.head }}"
+          set +e
+          git merge --no-ff --no-edit -m "Temporary PR #${{ matrix.pr }} on pinned drawings base" FETCH_HEAD > ../t87-report/merge.log 2>&1
+          merged=$?
+          set -e
+          cat ../t87-report/merge.log
+          echo "MERGE_EXIT=$merged" | tee ../t87-report/metadata.txt
+          if [ "$merged" -ne 0 ]; then
+            echo "::error title=PR merge failed::PR #${{ matrix.pr }} could not merge cleanly on pinned drawings; no valid before/after comparison"
+            exit 1
+          fi
+          git log -2 --oneline | tee -a ../t87-report/metadata.txt
+
+      - name: Install Rust compiler
+        if: ${{ steps.merge.outcome == 'success' }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust builds
+        if: ${{ steps.merge.outcome == 'success' }}
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src
+          key: t87-pr${{ matrix.pr }}
+          cache-on-failure: true
+
+      - name: BEFORE - compile original PR on pinned drawings
+        if: ${{ steps.merge.outcome == 'success' }}
+        id: raw
+        shell: bash
+        working-directory: src
+        run: |
+          set -uo pipefail
+          set +e
+          timeout 36m cargo check -p "${{ matrix.crate }}" --all-targets --profile ci --locked > ../t87-report/before-cargo-check.log 2>&1
+          code=$?
+          set -e
+          echo "RAW_EXIT=$code" | tee -a ../t87-report/metadata.txt
+          if [ "$code" -eq 0 ]; then
+            echo "RAW_RESULT=COMPILES_AS_IS" | tee -a ../t87-report/metadata.txt
+          elif [ "$code" -eq 124 ]; then
+            echo "RAW_RESULT=TIMEOUT" | tee -a ../t87-report/metadata.txt
+            echo "::error title=Raw compile timeout::Cannot compare compiler results"
+            exit 1
+          else
+            if grep -Eiq 'E0004|unresolved import|no method named|private|could not compile' ../t87-report/before-cargo-check.log; then
+              echo "RAW_RESULT=EXPECTED_CLASS_COMPILE_FAILURE" | tee -a ../t87-report/metadata.txt
+            else
+              echo "RAW_RESULT=UNCLASSIFIED_FAILURE" | tee -a ../t87-report/metadata.txt
+              echo "::error title=Unexpected raw failure::See before-cargo-check.log"
+              exit 1
+            fi
+          fi
+          grep -E 'error(\[E[0-9]+\])?:|error:' ../t87-report/before-cargo-check.log | head -20 || true
+
+      - name: AFTER - apply exact reviewer correction in runner only
+        if: ${{ steps.raw.outcome == 'success' }}
+        id: fix
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          python3 ../overlay/tests/fixtures/t87/fix_theironchef.py "${{ matrix.pr }}" | tee ../t87-report/fix.log
+          git diff --check
+          git diff -- crates/engine/src/cmd/drawing_view.rs crates/geom/src/drawing_arrange.rs crates/geom/src/drawing_arrange_tests.rs crates/engine/src/cmd/drawing_break.rs crates/geom/src/drawing_break.rs crates/ui-egui/src/broken_view_preview.rs crates/geom/src/drawing_detail.rs crates/geom/src/drawing_detail_tests.rs > ../t87-report/reviewer-fix.diff
+          test -s ../t87-report/reviewer-fix.diff
+          echo "FIX_PATCH=APPLIED" | tee -a ../t87-report/metadata.txt
+
+      - name: AFTER - rustfmt and targeted clippy
+        if: ${{ steps.fix.outcome == 'success' }}
+        id: clippy
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../t87-report/fmt.log 2>&1 || { tail -70 ../t87-report/fmt.log; exit 1; }
+          case "${{ matrix.pr }}" in
+            12394) pkgs="-p solidcraft-engine" ;;
+            9704|9720) pkgs="-p solidcraft-geom" ;;
+            7579) pkgs="-p solidcraft-geom -p solidcraft-engine -p solidcraft-ui-egui" ;;
+            *) exit 2 ;;
+          esac
+          timeout 37m cargo clippy $pkgs --all-targets --profile ci --locked -- -D warnings > ../t87-report/after-clippy.log 2>&1 || { tail -100 ../t87-report/after-clippy.log; exit 1; }
+          echo "AFTER_CLIPPY=PASS" | tee -a ../t87-report/metadata.txt
+
+      - name: AFTER - targeted regression modules
+        if: ${{ steps.clippy.outcome == 'success' }}
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          run_filter() {
+            label="$1"; pkg="$2"; filter="$3"
+            timeout 15m cargo test -p "$pkg" "$filter" --profile ci --locked > "../t87-report/test-${label}.log" 2>&1 || { tail -90 "../t87-report/test-${label}.log"; exit 1; }
+            if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed' "../t87-report/test-${label}.log"; then
+              echo "::error title=No matching tests::${label}: cargo test returned success but zero matching tests"
+              exit 1
+            fi
+            grep 'test result:' "../t87-report/test-${label}.log" | tail -2
+            echo "TARGETED_${label}=PASS" | tee -a ../t87-report/metadata.txt
+          }
+          case "${{ matrix.pr }}" in
+            12394)
+              run_filter drawing-view solidcraft-engine drawing_view
+              run_filter drawing-dimension solidcraft-engine drawing_dimension
+              run_filter drawing-balloon solidcraft-engine drawing_balloon ;;
+            9704) run_filter drawing-arrange solidcraft-geom drawing_arrange ;;
+            7579)
+              run_filter drawing-break-geom solidcraft-geom drawing_break
+              run_filter drawing-break-engine solidcraft-engine drawing_break
+              run_filter broken-view-ui solidcraft-ui-egui broken_view ;;
+            9720) run_filter drawing-detail solidcraft-geom drawing_detail ;;
+            *) exit 2 ;;
+          esac
+          echo "FINAL_RESULT=FIX_PASS" | tee -a ../t87-report/metadata.txt
+
+      - name: Upload diagnostics - including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t87-pr${{ matrix.pr }}
+          path: t87-report/
+          if-no-files-found: warn
+          retention-days: 14
