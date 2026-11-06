@@ -1,0 +1,148 @@
+name: "SolidCraft Test 90 - W23 hidden-holder regression"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t90
+    paths:
+      - .github/workflows/solidcraft-t90.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-test90-w23
+  cancel-in-progress: false
+
+jobs:
+  focused:
+    name: "T90 PR11881 W23 hidden-holder regression"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      DRAWINGS_SHA: "67a325808f5748e52b254849d7aef4b41ecfdce7"
+      PR_HEAD: "62c1fbe95173c00878fb733f9a5f2b32f39eb560"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Verify fork and isolated test branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t90"
+
+      - name: Checkout fork test fixtures
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout pinned official drawings source read-only
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 67a325808f5748e52b254849d7aef4b41ecfdce7
+          path: src
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Merge pinned PR11881 into temporary official drawings checkout
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t90-report
+          printf "TEST=90\nBASE=%s\nPR=11881\nHEAD=%s\n" "$DRAWINGS_SHA" "$PR_HEAD" > ../t90-report/summary.txt
+          test "$(git rev-parse HEAD)" = "$DRAWINGS_SHA"
+          git config user.name "SolidCraft CI Validation"
+          git config user.email "runner@users.noreply.github.com"
+          git fetch origin refs/pull/11881/head
+          actual="$(git rev-parse FETCH_HEAD)"
+          test "$actual" = "$PR_HEAD" || {
+            echo "Pinned #11881 HEAD has changed; stopping rather than testing a different PR"
+            echo "FINAL=PR_SHA_MISMATCH" >> ../t90-report/summary.txt
+            exit 1
+          }
+          if ! git merge --no-ff --no-edit -m "T90 temporary integration PR11881" FETCH_HEAD > ../t90-report/merge.log 2>&1; then
+            git status --short > ../t90-report/merge-conflicts.txt
+            echo "FINAL=MERGE_CONFLICT_REQUIRES_REVIEW" >> ../t90-report/summary.txt
+            cat ../t90-report/merge.log
+            cat ../t90-report/merge-conflicts.txt
+            exit 1
+          fi
+          grep -F "fn assembly_sheet()" crates/engine/src/cmd/drawing_balloon_tests.rs
+          grep -F "fn a_balloon_is_refused_on_a_part_its_view_leaves_out()" crates/engine/src/cmd/drawing_balloon_tests.rs
+          echo "MERGE=PASS" >> ../t90-report/summary.txt
+          git log -4 --oneline >> ../t90-report/merge.log
+
+      - name: Insert reviewed hidden-holder regression only in temporary checkout
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          python3 ../overlay/tests/fixtures/t90/add_w23_regression.py | tee ../t90-report/injection.log
+          git diff --check
+          test -n "$(git diff --name-only)"
+          echo "TEST_PATCH=PASS" >> ../t90-report/summary.txt
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Restore Rust compilation cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t90-w23-pr11881
+          cache-on-failure: true
+
+      - name: Format isolated Rust test and verify Clippy
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t90-report/fmt-apply.log 2>&1
+          cargo fmt --all -- --check > ../t90-report/fmt.log 2>&1 || {
+            tail -80 ../t90-report/fmt.log; exit 1;
+          }
+          git diff --check
+          git diff > ../t90-report/test-only.patch
+          test -s ../t90-report/test-only.patch
+          echo "FMT=PASS" >> ../t90-report/summary.txt
+          timeout 28m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t90-report/clippy.log 2>&1 || {
+            tail -100 ../t90-report/clippy.log; exit 1;
+          }
+          echo "CLIPPY=PASS" >> ../t90-report/summary.txt
+
+      - name: Compile engine test executable once
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 64m cargo test -p solidcraft-engine --profile ci --locked --no-run --message-format=json > ../t90-report/build-artifacts.jsonl 2> ../t90-report/compile.log || {
+            tail -100 ../t90-report/compile.log; exit 1;
+          }
+          echo "TEST_BINARIES_COMPILED=PASS" >> ../t90-report/summary.txt
+
+      - name: Run new W23 regression and established acceptance controls
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          prebuilt=../overlay/tests/fixtures/t89/run_prebuilt_tests.py
+          python3 "$prebuilt" ../t90-report/build-artifacts.jsonl solidcraft_engine the_assembly_sheet_refuses_a_balloon_on_its_hidden_second_holder ../t90-report/w23-hide-regression.log pass 1 | tee ../t90-report/new-outcome.log
+          python3 "$prebuilt" ../t90-report/build-artifacts.jsonl solidcraft_engine balloons_on_the_assembly_sheet_follow_the_model_and_its_revision_rows_stay ../t90-report/w23-model-control.log pass 1 | tee ../t90-report/model-outcome.log
+          python3 "$prebuilt" ../t90-report/build-artifacts.jsonl solidcraft_engine balloons_on_the_assembly_sheet_read_their_holders_row ../t90-report/w23-bom-control.log pass 1 | tee ../t90-report/bom-outcome.log
+          python3 "$prebuilt" ../t90-report/build-artifacts.jsonl solidcraft_engine a_balloon_is_refused_on_a_part_its_view_leaves_out ../t90-report/merged-upstream-control.log pass 1 | tee ../t90-report/upstream-outcome.log
+          echo "FINAL=W23_REFUSAL_AND_CONTROLS_PASS" | tee -a ../t90-report/summary.txt
+          echo "This is a native Rust-engine test; the full visual UI/paper E2E still remains open." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve original logs and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t90-w23-regression
+          path: t90-report/
+          retention-days: 14
+          if-no-files-found: warn
