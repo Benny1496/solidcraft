@@ -1,0 +1,2118 @@
+diff --git a/crates/engine/src/cmd/drawing_dimension_tests.rs b/crates/engine/src/cmd/drawing_dimension_tests.rs
+index b6e1831f4..52c01357a 100644
+--- a/crates/engine/src/cmd/drawing_dimension_tests.rs
++++ b/crates/engine/src/cmd/drawing_dimension_tests.rs
+@@ -1145,3 +1145,671 @@ fn a_copied_dimension_keeps_its_saved_value() {
+     let copy = d.dimensions.iter().find(|x| x.id != dimension).unwrap();
+     assert_eq!(copy.last_good, Some(80.0));
+ }
++
++fn workshop_plate_round_index(s: &Session, body: &str, centre: [f64; 3], radius: f64) -> usize {
++    let centre = Vec3::from(centre);
++    let state = s.model.state();
++    let mesh = state.body(body).unwrap().mesh();
++    mesh.edges.iter().position(|line| line.iter().all(|p| (p.dist(centre) - radius).abs() < 1e-6)).unwrap()
++}
++
++/// One command-script plate with two independently authored, positioned bore dimensions.
++fn workshop_plate_dimensions() -> (Session, u64, Value, Value) {
++    let mut s = Session::default();
++    let script: Value = serde_json::from_str(include_str!("../../../../examples/acceptance/drawing_m2.json")).unwrap();
++    let made = s.run_script(&script).unwrap();
++    let top = made.last().unwrap()["view"].clone();
++    let drawing = s.drawing("test").unwrap().id;
++    let bore1 = json!({"body": "Plate", "index": workshop_plate_round_index(&s, "Plate", [20.0, 20.0, 20.0], 5.0)});
++    let bore2 = json!({"body": "Plate", "index": workshop_plate_round_index(&s, "Plate", [60.0, 50.0, 20.0], 5.0)});
++    let first = run(&mut s, "drawing.dimension.add", json!({"view": top, "kind": {"radial": {"edge": bore1}}, "text": {"at": [12.0, 24.0]}}));
++    let second = run(&mut s, "drawing.dimension.add", json!({"view": top, "kind": {"radial": {"edge": bore2}}, "text": {"at": [-18.0, 15.0]}}));
++    reads(&first, 10.0, "Ø10.00");
++    reads(&second, 10.0, "Ø10.00");
++    assert_ne!(first["dimension"], second["dimension"], "each bore needs its own dimension");
++    (s, drawing, first, second)
++}
++
++/// A lost workshop bore retains its last Ø10 measurement without becoming a live value.
++fn reads_lost_bore(reply: &Value) {
++    assert_eq!(reply["status"], "lost", "{reply}");
++    assert!(reply.get("value").is_none(), "{reply}");
++    assert!(reply["why"].as_str().is_some_and(|why| !why.is_empty()), "{reply}");
++    assert!(reply["last_good"].as_f64().is_some_and(|value| (value - 10.0).abs() < 1e-9), "last measured diameter must stay Ø10: {reply}");
++}
++
++/// Changing Bore1's diameter updates its measurement without rebinding the reference.
++#[test]
++fn changing_a_bores_diameter_keeps_its_dimension() {
++    let (mut s, drawing, first, second) = workshop_plate_dimensions();
++    run(&mut s, "drawing.close", json!({}));
++    run(&mut s, "parameters.change", json!({"name": "bore1_d", "expression": "12 mm"}));
++    run(&mut s, "drawing.open", json!({"drawing": ids::encode(drawing)}));
++
++    let changed = run(&mut s, "drawing.dimension.inspect", json!({"dimension": first["dimension"]}));
++    assert_eq!(changed["record"]["kind"], first["record"]["kind"], "Bore1 reference moved");
++    reads(&changed, 12.0, "Ø12.00");
++    let other = run(&mut s, "drawing.dimension.inspect", json!({"dimension": second["dimension"]}));
++    assert_eq!(other["record"]["kind"], second["record"]["kind"], "Bore2 reference moved");
++    reads(&other, 10.0, "Ø10.00");
++}
++
++/// Deleting Bore1 loses its own measured reference without rebinding it to Bore2.
++#[test]
++fn deleting_a_bore_loses_its_dimension_and_never_moves_it() {
++    let (mut s, drawing, first, second) = workshop_plate_dimensions();
++    run(&mut s, "drawing.close", json!({}));
++    run(&mut s, "timeline.delete", json!({"feature": "Bore1"}));
++    run(&mut s, "drawing.open", json!({"drawing": ids::encode(drawing)}));
++
++    let lost = run(&mut s, "drawing.dimension.inspect", json!({"dimension": first["dimension"]}));
++    assert_eq!(lost["record"]["kind"], first["record"]["kind"], "deleted Bore1 reference moved");
++    reads_lost_bore(&lost);
++    let surviving = run(&mut s, "drawing.dimension.inspect", json!({"dimension": second["dimension"]}));
++    assert_eq!(surviving["record"]["kind"], second["record"]["kind"], "Bore2 reference moved");
++    reads(&surviving, 10.0, "Ø10.00");
++}
++
++/// Undo and redo of a bore resize leave the authored drawing and labels unchanged.
++#[test]
++fn undo_and_redo_a_diameter_change_keep_its_dimension() {
++    let (mut s, drawing, first, second) = workshop_plate_dimensions();
++    let authored = s.drawing("test").unwrap().to_json().unwrap();
++    run(&mut s, "drawing.close", json!({}));
++    run(&mut s, "parameters.change", json!({"name": "bore1_d", "expression": "12 mm"}));
++    run(&mut s, "drawing.open", json!({"drawing": ids::encode(drawing)}));
++    let changed = run(&mut s, "drawing.dimension.inspect", json!({"dimension": first["dimension"]}));
++    assert_eq!(changed["record"]["kind"], first["record"]["kind"]);
++    reads(&changed, 12.0, "Ø12.00");
++
++    run(&mut s, "drawing.close", json!({}));
++    run(&mut s, "edit.undo", json!({}));
++    run(&mut s, "drawing.open", json!({"drawing": ids::encode(drawing)}));
++    assert_eq!(s.drawing("test").unwrap().to_json().unwrap(), authored, "model undo changed the authored drawing");
++    let undone = run(&mut s, "drawing.dimension.inspect", json!({"dimension": first["dimension"]}));
++    assert_eq!(undone["record"]["kind"], first["record"]["kind"]);
++    reads(&undone, 10.0, "Ø10.00");
++    let other = run(&mut s, "drawing.dimension.inspect", json!({"dimension": second["dimension"]}));
++    assert_eq!(other["record"]["kind"], second["record"]["kind"]);
++    reads(&other, 10.0, "Ø10.00");
++
++    run(&mut s, "drawing.close", json!({}));
++    run(&mut s, "edit.redo", json!({}));
++    run(&mut s, "drawing.open", json!({"drawing": ids::encode(drawing)}));
++    assert_eq!(s.drawing("test").unwrap().to_json().unwrap(), authored, "model redo changed the authored drawing");
++    let redone = run(&mut s, "drawing.dimension.inspect", json!({"dimension": first["dimension"]}));
++    assert_eq!(redone["record"]["kind"], first["record"]["kind"]);
++    reads(&redone, 12.0, "Ø12.00");
++    let other = run(&mut s, "drawing.dimension.inspect", json!({"dimension": second["dimension"]}));
++    assert_eq!(other["record"]["kind"], second["record"]["kind"]);
++    reads(&other, 10.0, "Ø10.00");
++}
++
++/// Undo and redo of deleting Bore1 preserve both authored references and their positions.
++#[test]
++fn undo_and_redo_a_deleted_bore_restore_its_dimension() {
++    let (mut s, drawing, first, second) = workshop_plate_dimensions();
++    let authored = s.drawing("test").unwrap().to_json().unwrap();
++    run(&mut s, "drawing.close", json!({}));
++    run(&mut s, "timeline.delete", json!({"feature": "Bore1"}));
++    run(&mut s, "drawing.open", json!({"drawing": ids::encode(drawing)}));
++    let deleted = run(&mut s, "drawing.dimension.inspect", json!({"dimension": first["dimension"]}));
++    assert_eq!(deleted["record"]["kind"], first["record"]["kind"]);
++    reads_lost_bore(&deleted);
++    let other = run(&mut s, "drawing.dimension.inspect", json!({"dimension": second["dimension"]}));
++    assert_eq!(other["record"]["kind"], second["record"]["kind"]);
++    reads(&other, 10.0, "Ø10.00");
++
++    run(&mut s, "drawing.close", json!({}));
++    run(&mut s, "edit.undo", json!({}));
++    run(&mut s, "drawing.open", json!({"drawing": ids::encode(drawing)}));
++    assert_eq!(s.drawing("test").unwrap().to_json().unwrap(), authored, "undo changed authored drawing");
++    let recovered = run(&mut s, "drawing.dimension.inspect", json!({"dimension": first["dimension"]}));
++    assert_eq!(recovered["record"]["kind"], first["record"]["kind"]);
++    reads(&recovered, 10.0, "Ø10.00");
++
++    run(&mut s, "drawing.close", json!({}));
++    run(&mut s, "edit.redo", json!({}));
++    run(&mut s, "drawing.open", json!({"drawing": ids::encode(drawing)}));
++    assert_eq!(s.drawing("test").unwrap().to_json().unwrap(), authored, "redo changed authored drawing");
++    let lost_again = run(&mut s, "drawing.dimension.inspect", json!({"dimension": first["dimension"]}));
++    assert_eq!(lost_again["record"]["kind"], first["record"]["kind"]);
++    reads_lost_bore(&lost_again);
++    let other = run(&mut s, "drawing.dimension.inspect", json!({"dimension": second["dimension"]}));
++    assert_eq!(other["record"]["kind"], second["record"]["kind"]);
++    reads(&other, 10.0, "Ø10.00");
++}
++
++/// Save/reopen keeps the workshop plate's references, authored positions and lost value.
++#[test]
++fn reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value() {
++    for state in ["unchanged", "resized", "deleted"] {
++        let (mut s, drawing, first, second) = workshop_plate_dimensions();
++        run(&mut s, "drawing.close", json!({}));
++        match state {
++            "resized" => {
++                run(&mut s, "parameters.change", json!({"name": "bore1_d", "expression": "12 mm"}));
++            }
++            "deleted" => {
++                run(&mut s, "timeline.delete", json!({"feature": "Bore1"}));
++            }
++            _ => {}
++        }
++        run(&mut s, "drawing.open", json!({"drawing": ids::encode(drawing)}));
++        if state == "deleted" {
++            let lost = run(&mut s, "drawing.dimension.inspect", json!({"dimension": first["dimension"]}));
++            assert_eq!(lost["record"]["kind"], first["record"]["kind"]);
++            reads_lost_bore(&lost);
++        } else {
++            let expected = if state == "resized" { 12.0 } else { 10.0 };
++            let text = if state == "resized" { "Ø12.00" } else { "Ø10.00" };
++            reads(&run(&mut s, "drawing.dimension.inspect", json!({"dimension": first["dimension"]})), expected, text);
++        }
++        let mut opened = reopened(&mut s, drawing, &format!("w23a-e2e04-{state}.solidcraft"));
++        let bore1 = run(&mut opened, "drawing.dimension.inspect", json!({"dimension": first["dimension"]}));
++        let bore2 = run(&mut opened, "drawing.dimension.inspect", json!({"dimension": second["dimension"]}));
++        assert_eq!(bore1["record"]["kind"], first["record"]["kind"], "{state}: Bore1 reference changed");
++        assert_eq!(bore2["record"]["kind"], second["record"]["kind"], "{state}: Bore2 reference changed");
++        assert_eq!(bore1["record"]["text"], first["record"]["text"], "{state}: Bore1 label moved");
++        assert_eq!(bore2["record"]["text"], second["record"]["text"], "{state}: Bore2 label moved");
++        reads(&bore2, 10.0, "Ø10.00");
++        match state {
++            "resized" => reads(&bore1, 12.0, "Ø12.00"),
++            "deleted" => reads_lost_bore(&bore1),
++            _ => reads(&bore1, 10.0, "Ø10.00"),
++        }
++    }
++}
++
++/// The workshop plate's width as a dimension between its two side faces, which the top view sees
++/// edge-on (R1, #11871). It reads 80; with the width changed to 100 while the drawing is closed, the
++/// same dimension reads 100 when it is opened again, and 80 after the change is undone.
++#[test]
++fn the_plates_width_between_its_side_faces_follows_a_width_change() {
++    let mut s = Session::default();
++    let script: Value = serde_json::from_str(include_str!("../../../../examples/acceptance/drawing_m2.json")).unwrap();
++    let made = s.run_script(&script).unwrap();
++    let top = made.last().unwrap()["view"].clone();
++    let drawing = json!({"drawing": ids::encode(s.drawing("test").unwrap().id)});
++    let width = run(&mut s, ADD, json!({"view": top, "kind": {"faces": {"a": [50, 0, 10], "b": [50, 80, 10]}}}));
++    reads(&width, 80.0, "80.00");
++    let after = |s: &mut Session, id: &str, p: Value| {
++        run(s, "drawing.close", json!({}));
++        run(s, id, p);
++        run(s, "drawing.open", drawing.clone());
++        let read = run(s, INSPECT, json!({"dimension": width["dimension"]}));
++        assert_eq!(read["record"]["kind"], width["record"]["kind"], "the side faces' reference moved: {read}");
++        read
++    };
++    reads(&after(&mut s, "parameters.change", json!({"name": "width", "expression": "100 mm"})), 100.0, "100.00");
++    reads(&after(&mut s, "edit.undo", json!({})), 80.0, "80.00");
++}
++
++/// Bore1 suppressed reads `suppressed`, not lost (#11823), and keeps its reference; on again, the
++/// same dimension reads Ø10 `ok`; deleted, it is lost and never moves to Bore2. Bore2 reads Ø10
++/// throughout. Every model edit is made with the drawing closed.
++#[test]
++fn a_suppressed_bore_says_so_and_its_dimension_comes_back() {
++    let (mut s, drawing, first, second) = workshop_plate_dimensions();
++    let drawing = json!({"drawing": ids::encode(drawing)});
++    let after = |s: &mut Session, id: &str, p: Value| {
++        run(s, "drawing.close", json!({}));
++        run(s, id, p);
++        run(s, "drawing.open", drawing.clone());
++        let [one, two] = [&first, &second].map(|d| run(s, INSPECT, json!({"dimension": d["dimension"]})));
++        assert_eq!(one["record"]["kind"], first["record"]["kind"], "Bore1 reference moved: {one}");
++        assert_eq!(two["record"]["kind"], second["record"]["kind"], "Bore2 reference moved: {two}");
++        reads(&two, 10.0, "Ø10.00");
++        one
++    };
++    let off = after(&mut s, "timeline.suppress", json!({"feature": "Bore1", "suppressed": true}));
++    assert_eq!(off["status"], "suppressed", "{off}");
++    let on = after(&mut s, "timeline.suppress", json!({"feature": "Bore1", "suppressed": false}));
++    reads(&on, 10.0, "Ø10.00");
++    reads_lost_bore(&after(&mut s, "timeline.delete", json!({"feature": "Bore1"})));
++}
++
++/// What the plate's five dimensions read on its own model: Bore1 Ø, Bore2 Ø, the width, the length
++/// and Bore1's centre to Bore2's.
++const PLATE: [f64; 5] = [10.0, 10.0, 80.0, 100.0, 50.0];
++
++/// The workshop plate's top view with five dimensions: Bore1 Ø10, Bore2 Ø10, the width between the
++/// side faces (80), the length between the ends (100) and Bore1's centre to Bore2's, aligned (50;
++/// they are 40 across and 30 up), each centre named by its bore's rim (#9249). The session,
++/// `{drawing}` to open it again, the view's id and the five as added, in that order.
++fn plate_with_five() -> (Session, Value, u64, [Value; 5]) {
++    let (mut s, drawing, first, second) = workshop_plate_dimensions();
++    let view = first["view"].clone();
++    let rim = |s: &Session, at: [f64; 3]| json!({"centre": {"body": "Plate", "index": workshop_plate_round_index(s, "Plate", at, 5.0)}});
++    let (one, two) = (rim(&s, [20.0, 20.0, 20.0]), rim(&s, [60.0, 50.0, 20.0]));
++    let mut put = |kind: Value| run(&mut s, ADD, json!({"view": view, "kind": kind}));
++    let width = put(json!({"faces": {"a": [50, 0, 10], "b": [50, 80, 10]}}));
++    let length = put(json!({"faces": {"a": [0, 40, 10], "b": [100, 40, 10]}}));
++    let centres = put(json!({"linear": {"a": one, "b": two}}));
++    let five = [first, second, width, length, centres];
++    read_as(&mut s, &five, PLATE);
++    let view = ids::decode(view.as_str().unwrap()).unwrap();
++    (s, json!({"drawing": ids::encode(drawing)}), view, five)
++}
++
++/// Each of `five` read now, by the reference it was added with: `ok` with `values` in order, the
++/// bores' as diameters.
++fn read_as(s: &mut Session, five: &[Value; 5], values: [f64; 5]) {
++    for (i, (added, value)) in five.iter().zip(values).enumerate() {
++        let read = run(s, INSPECT, json!({"dimension": added["dimension"]}));
++        assert_eq!(read["record"]["kind"], added["record"]["kind"], "dimension {i}'s reference moved: {read}");
++        let text = if i < 2 { format!("Ø{value:.2}") } else { format!("{value:.2}") };
++        reads(&read, value, &text);
++    }
++}
++
++/// `id` with `p` made on the model, the drawing closed as a model edit has it, then opened again.
++fn closed_edit(s: &mut Session, drawing: &Value, id: &str, p: Value) {
++    run(s, "drawing.close", json!({}));
++    run(s, id, p);
++    run(s, "drawing.open", drawing.clone());
++}
++
++/// Each of the plate's parameters changed with the drawing closed moves only what it drives: Bore1's
++/// diameter to 12, Bore2's to 8, the width to 100 and the length to 120, each read and undone back to
++/// the plate with the authored drawing unchanged; then all four at once, undone one by one to the
++/// plate and redone to all four. The bores' centres stay 50 apart throughout.
++#[test]
++fn the_plates_five_dimensions_follow_each_parameter_and_its_undo() {
++    let (mut s, drawing, _, five) = plate_with_five();
++    let authored = s.drawing("test").unwrap().to_json().unwrap();
++    let changes = [("bore1_d", "12 mm", 0, 12.0), ("bore2_d", "8 mm", 1, 8.0), ("width", "100 mm", 2, 100.0), ("length", "120 mm", 3, 120.0)];
++    for (name, expression, at, value) in changes {
++        closed_edit(&mut s, &drawing, "parameters.change", json!({"name": name, "expression": expression}));
++        let mut values = PLATE;
++        values[at] = value;
++        read_as(&mut s, &five, values);
++        closed_edit(&mut s, &drawing, "edit.undo", json!({}));
++        read_as(&mut s, &five, PLATE);
++        assert_eq!(s.drawing("test").unwrap().to_json().unwrap(), authored, "{name}: the model's undo changed the authored drawing");
++    }
++    let all = [12.0, 8.0, 100.0, 120.0, 50.0];
++    for (name, expression, _, _) in changes {
++        closed_edit(&mut s, &drawing, "parameters.change", json!({"name": name, "expression": expression}));
++    }
++    read_as(&mut s, &five, all);
++    for _ in changes {
++        closed_edit(&mut s, &drawing, "edit.undo", json!({}));
++    }
++    read_as(&mut s, &five, PLATE);
++    for _ in changes {
++        closed_edit(&mut s, &drawing, "edit.redo", json!({}));
++    }
++    read_as(&mut s, &five, all);
++    assert_eq!(s.drawing("test").unwrap().to_json().unwrap(), authored, "the model's redo changed the authored drawing");
++}
++
++/// Bore1's centre to Bore2's, each named by its rim (R2, #9249): 50 aligned, 40 across and 30 up the
++/// top view. A new diameter moves no centre; Bore1 suppressed, all three say so; deleted, all three
++/// are lost with their last values and read nothing else, while Bore2 reads Ø10; undone, they read
++/// again; deleted again, they keep their last values through save and reopen.
++#[test]
++fn the_bores_centres_stay_put_and_a_lost_bore_takes_its_centre_dimensions() {
++    let (mut s, drawing, view, five) = plate_with_five();
++    let id = s.drawing("test").unwrap().id;
++    let rim = |s: &Session, at: [f64; 3]| json!({"centre": {"body": "Plate", "index": workshop_plate_round_index(s, "Plate", at, 5.0)}});
++    let (one, two) = (rim(&s, [20.0, 20.0, 20.0]), rim(&s, [60.0, 50.0, 20.0]));
++    let mut put =
++        |direction: &str| run(&mut s, ADD, json!({"view": ids::encode(view), "kind": {"linear": {"a": one, "b": two, "direction": direction}}}));
++    let (across, up) = (put("horizontal"), put("vertical"));
++    let three = [five[4].clone(), across, up];
++    let values = [50.0, 40.0, 30.0];
++    let read = |s: &mut Session| -> Vec<Value> {
++        let one = |d: &Value| {
++            let read = run(s, INSPECT, json!({"dimension": d["dimension"]}));
++            assert_eq!(read["record"]["kind"], d["record"]["kind"], "a centre's reference moved: {read}");
++            read
++        };
++        three.iter().map(one).collect()
++    };
++    let all_ok = |reads_now: Vec<Value>| {
++        for (r, v) in reads_now.iter().zip(values) {
++            reads(r, v, &format!("{v:.2}"));
++        }
++    };
++    let all_lost = |reads_now: Vec<Value>| {
++        for (r, v) in reads_now.iter().zip(values) {
++            assert_eq!(r["status"], "lost", "{r}");
++            assert!(r.get("value").is_none() && r.get("text").is_none(), "a lost centre reads nothing: {r}");
++            assert!(r["why"].as_str().is_some_and(|why| !why.is_empty()), "{r}");
++            assert!(r["last_good"].as_f64().is_some_and(|last| (last - v).abs() < 1e-9), "its last value is {v}: {r}");
++        }
++    };
++    all_ok(read(&mut s));
++    closed_edit(&mut s, &drawing, "parameters.change", json!({"name": "bore1_d", "expression": "12 mm"}));
++    all_ok(read(&mut s));
++    closed_edit(&mut s, &drawing, "edit.undo", json!({}));
++    closed_edit(&mut s, &drawing, "timeline.suppress", json!({"feature": "Bore1", "suppressed": true}));
++    assert!(read(&mut s).iter().all(|r| r["status"] == "suppressed" && r.get("value").is_none()), "{:?}", read(&mut s));
++    closed_edit(&mut s, &drawing, "timeline.suppress", json!({"feature": "Bore1", "suppressed": false}));
++    all_ok(read(&mut s));
++    closed_edit(&mut s, &drawing, "timeline.delete", json!({"feature": "Bore1"}));
++    all_lost(read(&mut s));
++    reads(&run(&mut s, INSPECT, json!({"dimension": five[1]["dimension"]})), 10.0, "Ø10.00");
++    closed_edit(&mut s, &drawing, "edit.undo", json!({}));
++    all_ok(read(&mut s));
++    closed_edit(&mut s, &drawing, "edit.redo", json!({}));
++    all_lost(read(&mut s));
++    let mut opened = reopened(&mut s, id, "w23a-centres.solidcraft");
++    all_lost(read(&mut opened));
++}
++
++/// Sheet 1 of the drawing open, drawn at once, as the sheet page and an export draw it.
++fn sheet_now(s: &Session) -> crate::drawing_scene::SheetScene {
++    let d = s.drawing("test").unwrap().clone();
++    crate::drawing_scene::build(s, &d, d.sheets[0].id).unwrap()
++}
++
++/// `added`'s lines on `sheet` as JSON, if it is drawn.
++fn lines_of(sheet: &crate::drawing_scene::SheetScene, added: &Value) -> Option<Value> {
++    let id = ids::decode(added["dimension"].as_str().unwrap()).unwrap();
++    sheet.scene.groups.iter().find(|g| g.object == id).map(|g| serde_json::to_value(g).unwrap())
++}
++
++/// Whether `a` and `b` are the same JSON, every whole number exactly and every other within 1e-9:
++/// a model evaluated again can move a point by a rounding.
++fn near_json(a: &Value, b: &Value) -> bool {
++    match (a, b) {
++        (Value::Number(x), Value::Number(y)) => match (x.as_u64(), y.as_u64()) {
++            (Some(x), Some(y)) => x == y,
++            _ => x.as_f64().zip(y.as_f64()).is_some_and(|(x, y)| (x - y).abs() < 1e-9),
++        },
++        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(x, y)| near_json(x, y)),
++        (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| near_json(v, w))),
++        _ => a == b,
++    }
++}
++
++/// Whether two of [`lines_of`]'s answers are the same lines, as [`near_json`] has it.
++fn same_lines(a: &Option<Value>, b: &Option<Value>) -> bool {
++    match (a, b) {
++        (Some(a), Some(b)) => near_json(a, b),
++        (None, None) => true,
++        _ => false,
++    }
++}
++
++/// `sheet`'s scene as JSON.
++fn scene_of(sheet: &crate::drawing_scene::SheetScene) -> Value {
++    serde_json::to_value(&sheet.scene).unwrap()
++}
++
++/// Where `added` stands on `sheet`.
++fn state_of<'a>(sheet: &'a crate::drawing_scene::SheetScene, added: &Value) -> &'a crate::drawing_scene::DimensionState {
++    let id = ids::decode(added["dimension"].as_str().unwrap()).unwrap();
++    sheet.dimensions.iter().find(|d| d.dimension == id).unwrap()
++}
++
++/// How far apart the tips of `added`'s two arrowheads are on `sheet`, in paper millimetres.
++fn tips_apart(sheet: &crate::drawing_scene::SheetScene, added: &Value) -> f64 {
++    let id = ids::decode(added["dimension"].as_str().unwrap()).unwrap();
++    let group = sheet.scene.groups.iter().find(|g| g.object == id).unwrap();
++    let tips: Vec<solidcore_record::Vec2> = group
++        .items
++        .iter()
++        .filter_map(|item| match item {
++            solidcraft_geom::paper::Item::Fill { region } => Some(region.outer.segs[0].start()),
++            _ => None,
++        })
++        .collect();
++    assert_eq!(tips.len(), 2, "{}: {tips:?}", added["dimension"]);
++    tips[0].dist(tips[1])
++}
++
++/// The box round view `view`'s lines on `sheet`, as `[min, max]` on paper.
++fn view_box(sheet: &crate::drawing_scene::SheetScene, view: u64) -> [[f64; 2]; 2] {
++    let o = sheet.objects.iter().find(|o| o.object == view).unwrap();
++    [[o.bounds_mm.min.x, o.bounds_mm.min.y], [o.bounds_mm.max.x, o.bounds_mm.max.y]]
++}
++
++/// Whether two boxes are the same within 1e-6 mm.
++fn same_box(a: [[f64; 2]; 2], b: [[f64; 2]; 2]) -> bool {
++    a.iter().flatten().zip(b.iter().flatten()).all(|(x, y)| (x - y).abs() < 1e-6)
++}
++
++/// The plate's sheet as the model has it (#8288 E2E-01 to E2E-04 on paper; no text yet): its top
++/// view at 1:2 round (150, 180), 50 x 40, with all five dimensions drawn, the width's arrowheads 40
++/// apart, the length's 50 and the centres' 25. Bore1 at Ø12 redraws the view and Bore1's dimension,
++/// and the others stay where they were. Bore1 deleted leaves out its two dimensions, which
++/// `drawing.scene` and `drawing.status` say are lost, keeps the other three where they were and
++/// still exports. Each undo draws the sheet again as it was, every point within 1e-9 mm, and exports
++/// the same SVG. The length at 120 widens the view to 60 round the same place and the length's
++/// arrowheads to 60, and a save and reopen draws the same sheet.
++#[test]
++fn the_plates_sheet_draws_what_the_model_has_and_the_same_after_undo() {
++    let (mut s, drawing, view, five) = plate_with_five();
++    let id = s.drawing("test").unwrap().id;
++    let svg = |s: &mut Session| run(s, "drawing.export", json!({"sheet": "Sheet 1"}))["svg"].as_str().unwrap().to_string();
++    let view_lines =
++        |sheet: &crate::drawing_scene::SheetScene| sheet.scene.groups.iter().find(|g| g.object == view).map(|g| serde_json::to_value(g).unwrap());
++    let base = sheet_now(&s);
++    let base_svg = svg(&mut s);
++    let as_it_was = |s: &mut Session, label: &str| {
++        assert!(near_json(&scene_of(&sheet_now(s)), &scene_of(&base)), "{label}: the sheet isn't drawn as it was");
++        assert_eq!(svg(s), base_svg, "{label}: the export isn't the one it was");
++    };
++    assert!(base.views.iter().all(|v| v.status.name() == "drawn"), "{:?}", base.views);
++    assert!(same_box(view_box(&base, view), [[125.0, 160.0], [175.0, 200.0]]), "{:?}", view_box(&base, view));
++    for added in &five {
++        let state = state_of(&base, added);
++        assert!(state.drawn && state.status == Status::Ok, "{state:?}");
++    }
++    for (at, apart) in [(2, 40.0), (3, 50.0), (4, 25.0)] {
++        assert!((tips_apart(&base, &five[at]) - apart).abs() < 1e-6, "dimension {at}: {}", tips_apart(&base, &five[at]));
++    }
++
++    closed_edit(&mut s, &drawing, "parameters.change", json!({"name": "bore1_d", "expression": "12 mm"}));
++    let wider = sheet_now(&s);
++    assert!(!same_lines(&lines_of(&wider, &five[0]), &lines_of(&base, &five[0])), "Bore1's dimension is drawn at Ø12");
++    assert!(!same_lines(&view_lines(&wider), &view_lines(&base)), "the view draws Bore1 at Ø12");
++    for added in &five[1..] {
++        assert!(same_lines(&lines_of(&wider, added), &lines_of(&base, added)), "only Bore1's dimension changes: {}", added["dimension"]);
++    }
++    closed_edit(&mut s, &drawing, "edit.undo", json!({}));
++    as_it_was(&mut s, "Bore1 at 12 undone");
++
++    closed_edit(&mut s, &drawing, "timeline.delete", json!({"feature": "Bore1"}));
++    let lost = sheet_now(&s);
++    for added in [&five[0], &five[4]] {
++        let state = state_of(&lost, added);
++        assert!(!state.drawn && matches!(state.status, Status::Lost(..)), "{state:?}");
++        assert_eq!(lines_of(&lost, added), None, "a lost dimension draws nothing");
++    }
++    for added in &five[1..4] {
++        assert!(state_of(&lost, added).drawn, "{:?}", state_of(&lost, added));
++        assert!(same_lines(&lines_of(&lost, added), &lines_of(&base, added)), "{} is drawn as it was", added["dimension"]);
++    }
++    assert!(view_lines(&lost).is_some(), "the view is still drawn");
++    let status = run(&mut s, "drawing.status", json!({}));
++    let word =
++        |added: &Value| status["dimensions"].as_array().unwrap().iter().find(|d| d["dimension"] == added["dimension"]).map(|d| d["status"].clone());
++    let words: Vec<Option<Value>> = five.iter().map(word).collect();
++    assert_eq!(words, ["lost", "ok", "ok", "ok", "lost"].map(|w| Some(json!(w))).to_vec(), "{status}");
++    assert_ne!(svg(&mut s), base_svg, "the sheet with Bore1 lost still exports, without it");
++    closed_edit(&mut s, &drawing, "edit.undo", json!({}));
++    as_it_was(&mut s, "Bore1's delete undone");
++
++    closed_edit(&mut s, &drawing, "parameters.change", json!({"name": "length", "expression": "120 mm"}));
++    let longer = sheet_now(&s);
++    assert!(same_box(view_box(&longer, view), [[120.0, 160.0], [180.0, 200.0]]), "{:?}", view_box(&longer, view));
++    for (at, apart) in [(2, 40.0), (3, 60.0), (4, 25.0)] {
++        assert!((tips_apart(&longer, &five[at]) - apart).abs() < 1e-6, "dimension {at}: {}", tips_apart(&longer, &five[at]));
++    }
++    assert!(five.iter().all(|added| state_of(&longer, added).drawn));
++    let opened = reopened(&mut s, id, "w23a-sheet.solidcraft");
++    let again = sheet_now(&opened);
++    assert!(near_json(&scene_of(&again), &scene_of(&longer)), "the reopened sheet draws the same");
++}
++
++/// Fillets that take the plate's corners leave its faces measured (#11871): the upright edge where
++/// the near end meets the front side, rounded 5, and the top edge along the front side, rounded 2.
++/// The width still reads 80 and the length 100, and the bores and their centres as they were; each
++/// fillet undone, the same.
++#[test]
++fn fillets_on_the_plates_corners_leave_its_five_dimensions_read() {
++    let (mut s, drawing, _, five) = plate_with_five();
++    for (edge, radius) in [([0, 0, 10], 5), ([50, 0, 20], 2)] {
++        closed_edit(&mut s, &drawing, "solid.fillet", json!({"body": "Plate", "radius": radius, "edges": [edge]}));
++        read_as(&mut s, &five, PLATE);
++        closed_edit(&mut s, &drawing, "edit.undo", json!({}));
++        read_as(&mut s, &five, PLATE);
++    }
++}
++
++/// A dimension on a hole that an undo took away stays lost when a new hole is made, whatever id the
++/// new hole gets (gap 2 on #4892, #5308): Bore3, Ø6 at (80, 20), gets a dimension; the hole is
++/// undone, and the dimension is lost with its last value 6; then Bore4, Ø8 at (80, 60), is made.
++/// The dimension stays lost with its last value 6 and reads nothing of Bore4, and Bore1 and Bore2
++/// still read Ø10. Every model edit is made with the drawing closed.
++#[test]
++fn a_new_hole_never_takes_the_dimension_of_an_undone_one() {
++    let (mut s, drawing, first, second) = workshop_plate_dimensions();
++    let drawing = json!({"drawing": ids::encode(drawing)});
++    let hole = |name: &str, at: [f64; 3], diameter: f64| json!({"position": at, "direction": [0, 0, -1], "diameter": diameter, "name": name, "type": "simple"});
++    closed_edit(&mut s, &drawing, "solid.hole", hole("Bore3", [80.0, 20.0, 20.0], 6.0));
++    let rim = json!({"body": "Plate", "index": workshop_plate_round_index(&s, "Plate", [80.0, 20.0, 20.0], 3.0)});
++    let on_bore3 = run(&mut s, ADD, json!({"view": first["view"], "kind": {"radial": {"edge": rim}}}));
++    reads(&on_bore3, 6.0, "Ø6.00");
++    let lost_as_bore3 = |read: &Value| {
++        assert_eq!(read["record"]["kind"], on_bore3["record"]["kind"], "Bore3's reference moved: {read}");
++        assert_eq!(read["status"], "lost", "Bore3's dimension reads another hole: {read}");
++        assert!(read.get("value").is_none() && read.get("text").is_none(), "a lost dimension reads nothing: {read}");
++        assert!(read["last_good"].as_f64().is_some_and(|last| (last - 6.0).abs() < 1e-9), "its last value is 6: {read}");
++    };
++    closed_edit(&mut s, &drawing, "edit.undo", json!({}));
++    lost_as_bore3(&run(&mut s, INSPECT, json!({"dimension": on_bore3["dimension"]})));
++    closed_edit(&mut s, &drawing, "solid.hole", hole("Bore4", [80.0, 60.0, 20.0], 8.0));
++    lost_as_bore3(&run(&mut s, INSPECT, json!({"dimension": on_bore3["dimension"]})));
++    for bore in [&first, &second] {
++        reads(&run(&mut s, INSPECT, json!({"dimension": bore["dimension"]})), 10.0, "Ø10.00");
++    }
++}
++
++/// The lost reference of `added`, read now: `lost` with Bore1's last Ø10, its record as `record`.
++fn lost_again(s: &mut Session, added: &Value, record: &Value) -> Value {
++    let read = run(s, INSPECT, json!({"dimension": added["dimension"]}));
++    reads_lost_bore(&read);
++    assert_eq!(&read["record"], record, "a lost dimension keeps its record: {read}");
++    read
++}
++
++/// The edge name in a radial dimension's record.
++fn rim_name(record: &Value) -> &Value {
++    &record["kind"]["radial"]["edge"]["name"]
++}
++
++/// Bore1's rim rounded 1 with the drawing closed (#4892 B5): its edge is gone, so Bore1's
++/// dimension is lost with its last Ø10 and some leads, and Bore2 still reads Ø10. Repaired to the
++/// circle where the round meets the bore, 1 below the top, it reads Ø10 again as one undo step, with
++/// its id, view and text place, and only the edge's name changed. Undone it's lost with the same
++/// leads, redone it reads; the same after save and reopen, where the file's copy also keeps the last
++/// value. With the round undone the repaired reference is lost and stays as it was put, and with the
++/// round redone it reads again. The repair undone and then the round,
++/// Bore1's dimension reads Ø10 by its first record.
++#[test]
++fn a_rounded_bore_rim_is_lost_and_a_repair_reads_it_again() {
++    let (mut s, id, first, second) = workshop_plate_dimensions();
++    let drawing = json!({"drawing": ids::encode(id)});
++    closed_edit(&mut s, &drawing, "solid.fillet", json!({"body": "Plate", "radius": 1, "edges": [[25, 20, 20]]}));
++    let lost = lost_again(&mut s, &first, &first["record"]);
++    reads(&run(&mut s, INSPECT, json!({"dimension": second["dimension"]})), 10.0, "Ø10.00");
++    let leads = lost["candidates"].as_array().cloned().unwrap_or_default();
++    let pick = json!({"edge": {"body": "Plate", "index": workshop_plate_round_index(&s, "Plate", [20.0, 20.0, 19.0], 5.0)}});
++    assert!(leads.contains(&pick), "the bore's circle 1 below the top is a lead: {leads:?}");
++    let before = s.drawing("test").unwrap().to_json().unwrap();
++    let steps = s.undo.len();
++    let repaired = run(&mut s, REPAIR, json!({"dimension": first["dimension"], "slot": "edge", "pick": pick}));
++    reads(&repaired, 10.0, "Ø10.00");
++    assert_eq!(s.undo.len(), steps + 1, "one undo step");
++    assert_eq!((&repaired["dimension"], &repaired["view"]), (&first["dimension"], &first["view"]));
++    assert_ne!(rim_name(&repaired["record"]), rim_name(&first["record"]), "{repaired}");
++    let mut renamed = first["record"].clone();
++    renamed["kind"]["radial"]["edge"]["name"] = rim_name(&repaired["record"]).clone();
++    assert_eq!(renamed, repaired["record"], "only the edge's name changed");
++    assert_eq!(repaired["record"]["text"], json!({"at": [12.0, 24.0]}));
++    let after = s.drawing("test").unwrap().to_json().unwrap();
++
++    run(&mut s, "edit.undo", json!({}));
++    assert_eq!(s.drawing("test").unwrap().to_json().unwrap(), before, "the repair undone");
++    let again = lost_again(&mut s, &first, &first["record"]);
++    assert_eq!(again["candidates"], lost["candidates"], "the same leads");
++    run(&mut s, "edit.redo", json!({}));
++    assert_eq!(s.drawing("test").unwrap().to_json().unwrap(), after, "the repair redone");
++    reads(&run(&mut s, INSPECT, json!({"dimension": first["dimension"]})), 10.0, "Ø10.00");
++
++    let mut opened = reopened(&mut s, id, "w23-repair-rounded-rim.solidcraft");
++    let read = run(&mut opened, INSPECT, json!({"dimension": first["dimension"]}));
++    reads(&read, 10.0, "Ø10.00");
++    // The file's copy of a record also keeps its last good value.
++    let mut saved = read["record"].clone();
++    let last_good = saved.as_object_mut().and_then(|record| record.remove("last_good"));
++    assert_eq!(last_good, Some(json!(10.0)), "{read}");
++    assert_eq!(saved, repaired["record"], "the repair is saved");
++
++    closed_edit(&mut s, &drawing, "edit.undo", json!({}));
++    let unrounded = run(&mut s, INSPECT, json!({"dimension": first["dimension"]}));
++    assert_eq!(unrounded["status"], "lost", "the repaired edge is the round's: {unrounded}");
++    assert_eq!(unrounded["record"], repaired["record"], "and the repair stays as it was put");
++    reads(&run(&mut s, INSPECT, json!({"dimension": second["dimension"]})), 10.0, "Ø10.00");
++    closed_edit(&mut s, &drawing, "edit.redo", json!({}));
++    reads(&run(&mut s, INSPECT, json!({"dimension": first["dimension"]})), 10.0, "Ø10.00");
++
++    run(&mut s, "edit.undo", json!({}));
++    lost_again(&mut s, &first, &first["record"]);
++    closed_edit(&mut s, &drawing, "edit.undo", json!({}));
++    let back = run(&mut s, INSPECT, json!({"dimension": first["dimension"]}));
++    reads(&back, 10.0, "Ø10.00");
++    assert_eq!(back["record"], first["record"], "the first record reads again");
++}
++
++/// Bore1 deleted with the drawing closed: its dimension is lost and never reads Bore2 by itself. Its
++/// leads come only from the features that named its edge, so they are the plate's and Bore2's rim
++/// isn't among them. Repaired to Bore2's rim on purpose, it reads Ø10 by the name Bore2's own dimension has, as one
++/// undo step. Bore1's delete undone, the repaired dimension stays on Bore2; the repair undone, it
++/// reads Bore1 by its first record again.
++#[test]
++fn a_deleted_bores_dimension_reads_bore2_only_when_repaired_to_it() {
++    let (mut s, id, first, second) = workshop_plate_dimensions();
++    let drawing = json!({"drawing": ids::encode(id)});
++    closed_edit(&mut s, &drawing, "timeline.delete", json!({"feature": "Bore1"}));
++    let lost = lost_again(&mut s, &first, &first["record"]);
++    let rim = json!({"edge": {"body": "Plate", "index": workshop_plate_round_index(&s, "Plate", [60.0, 50.0, 20.0], 5.0)}});
++    let leads = lost["candidates"].as_array().cloned().unwrap_or_default();
++    assert!(!leads.is_empty() && !leads.contains(&rim), "leads come from the plate, never Bore2's rim: {leads:?}");
++    let steps = s.undo.len();
++    let repaired = run(&mut s, REPAIR, json!({"dimension": first["dimension"], "slot": "edge", "pick": rim}));
++    reads(&repaired, 10.0, "Ø10.00");
++    assert_eq!(s.undo.len(), steps + 1, "one undo step");
++    assert_eq!(rim_name(&repaired["record"]), rim_name(&second["record"]), "Bore2's rim, as Bore2's dimension names it: {repaired}");
++    assert_eq!((&repaired["dimension"], &repaired["record"]["text"]), (&first["dimension"], &json!({"at": [12.0, 24.0]})));
++    reads(&run(&mut s, INSPECT, json!({"dimension": second["dimension"]})), 10.0, "Ø10.00");
++
++    closed_edit(&mut s, &drawing, "edit.undo", json!({}));
++    let kept = run(&mut s, INSPECT, json!({"dimension": first["dimension"]}));
++    reads(&kept, 10.0, "Ø10.00");
++    assert_eq!(kept["record"], repaired["record"], "a repair stays where it was put");
++    run(&mut s, "edit.undo", json!({}));
++    let back = run(&mut s, INSPECT, json!({"dimension": first["dimension"]}));
++    reads(&back, 10.0, "Ø10.00");
++    assert_eq!(back["record"], first["record"], "Bore1 by its first record again");
++}
++
++/// The plate renamed Base with the drawing closed keeps its five dimensions (gap 1 on #4892, #5308):
++/// each reads as before, and by the reference it was added with once the rename is undone. Today a
++/// reference names its body, so a rename loses all five.
++#[test]
++fn renaming_the_plate_keeps_its_five_dimensions() {
++    let (mut s, drawing, _, five) = plate_with_five();
++    closed_edit(&mut s, &drawing, "body.rename", json!({"body": "Plate", "name": "Base"}));
++    for (i, (added, value)) in five.iter().zip(PLATE).enumerate() {
++        let text = if i < 2 { format!("Ø{value:.2}") } else { format!("{value:.2}") };
++        reads(&run(&mut s, INSPECT, json!({"dimension": added["dimension"]})), value, &text);
++    }
++    closed_edit(&mut s, &drawing, "edit.undo", json!({}));
++    read_as(&mut s, &five, PLATE);
++}
+diff --git a/examples/acceptance/drawing_m2.json b/examples/acceptance/drawing_m2.json
+new file mode 100644
+index 000000000..6d613c668
+--- /dev/null
++++ b/examples/acceptance/drawing_m2.json
+@@ -0,0 +1,304 @@
++{
++ "description": "Acceptance case 84 (#4894), the drawing milestone's plate: 100 x 80 x 20 mm with two bores of 10 mm, sized from the parameters length, width, thickness, bore1_d and bore2_d; then a drawing of it with a top view at 1:2 on its A3 sheet.",
++ "commands": [
++  {
++   "command": "parameters.change",
++   "params": {
++    "expression": "100 mm",
++    "name": "length",
++    "unit": "mm"
++   }
++  },
++  {
++   "command": "parameters.change",
++   "params": {
++    "expression": "80 mm",
++    "name": "width",
++    "unit": "mm"
++   }
++  },
++  {
++   "command": "parameters.change",
++   "params": {
++    "expression": "20 mm",
++    "name": "thickness",
++    "unit": "mm"
++   }
++  },
++  {
++   "command": "parameters.change",
++   "params": {
++    "expression": "10 mm",
++    "name": "bore1_d",
++    "unit": "mm"
++   }
++  },
++  {
++   "command": "parameters.change",
++   "params": {
++    "expression": "10 mm",
++    "name": "bore2_d",
++    "unit": "mm"
++   }
++  },
++  {
++   "command": "sketch.create",
++   "params": {
++    "name": "StockSketch",
++    "plane": "XY"
++   }
++  },
++  {
++   "command": "sketch.line",
++   "params": {
++    "construction": false,
++    "ids": [
++     "l1"
++    ],
++    "points": [
++     [
++      0,
++      0
++     ],
++     [
++      100,
++      0
++     ]
++    ]
++   }
++  },
++  {
++   "command": "sketch.line",
++   "params": {
++    "construction": false,
++    "ids": [
++     "l2"
++    ],
++    "points": [
++     "l1.end",
++     [
++      100,
++      80
++     ]
++    ]
++   }
++  },
++  {
++   "command": "sketch.line",
++   "params": {
++    "construction": false,
++    "ids": [
++     "l3"
++    ],
++    "points": [
++     "l2.end",
++     [
++      0,
++      80
++     ]
++    ]
++   }
++  },
++  {
++   "command": "sketch.line",
++   "params": {
++    "construction": false,
++    "ids": [
++     "l4"
++    ],
++    "points": [
++     "l3.end",
++     "l1.start"
++    ]
++   }
++  },
++  {
++   "command": "sketch.circle.center",
++   "params": {
++    "center": [
++     20,
++     20
++    ],
++    "construction": true,
++    "id": "bore_circle_1",
++    "radius": 5
++   }
++  },
++  {
++   "command": "sketch.circle.center",
++   "params": {
++    "center": [
++     60,
++     50
++    ],
++    "construction": true,
++    "id": "bore_circle_2",
++    "radius": 5
++   }
++  },
++  {
++   "command": "sketch.constraint.coincident",
++   "params": {
++    "a": "l1.start",
++    "b": "origin"
++   }
++  },
++  {
++   "command": "sketch.constraint.horizontal_vertical",
++   "params": {
++    "line": "l1",
++    "mode": "horizontal"
++   }
++  },
++  {
++   "command": "sketch.constraint.horizontal_vertical",
++   "params": {
++    "line": "l2",
++    "mode": "vertical"
++   }
++  },
++  {
++   "command": "sketch.constraint.horizontal_vertical",
++   "params": {
++    "line": "l3",
++    "mode": "horizontal"
++   }
++  },
++  {
++   "command": "sketch.constraint.horizontal_vertical",
++   "params": {
++    "line": "l4",
++    "mode": "vertical"
++   }
++  },
++  {
++   "command": "sketch.dimension",
++   "params": {
++    "entities": [
++     "l1.start",
++     "l1.end"
++    ],
++    "orientation": "horizontal",
++    "type": "distance",
++    "value": "length"
++   }
++  },
++  {
++   "command": "sketch.dimension",
++   "params": {
++    "entities": [
++     "l2.start",
++     "l2.end"
++    ],
++    "orientation": "vertical",
++    "type": "distance",
++    "value": "width"
++   }
++  },
++  {
++   "command": "sketch.dimension",
++   "params": {
++    "entities": [
++     "bore_circle_1"
++    ],
++    "type": "diameter",
++    "value": "bore1_d"
++   }
++  },
++  {
++   "command": "sketch.dimension",
++   "params": {
++    "entities": [
++     "bore_circle_2"
++    ],
++    "type": "diameter",
++    "value": "bore2_d"
++   }
++  },
++  {
++   "command": "sketch.finish",
++   "params": {}
++  },
++  {
++   "command": "solid.extrude",
++   "params": {
++    "body_names": [
++     "Plate"
++    ],
++    "direction": "positive",
++    "distance": "thickness",
++    "name": "Stock",
++    "operation": "new",
++    "profiles": [
++     {
++      "loops": [
++       {
++        "curves": [
++         "l1",
++         "l2",
++         "l3",
++         "l4"
++        ],
++        "outer": true
++       }
++      ],
++      "sketch": "StockSketch"
++     }
++    ],
++    "sketch": "StockSketch"
++   }
++  },
++  {
++   "command": "solid.hole",
++   "params": {
++    "diameter": "bore1_d",
++    "direction": [
++     -0.0,
++     -0.0,
++     -1.0
++    ],
++    "name": "Bore1",
++    "position": [
++     20,
++     20,
++     20
++    ],
++    "type": "simple"
++   }
++  },
++  {
++   "command": "solid.hole",
++   "params": {
++    "diameter": "bore2_d",
++    "direction": [
++     -0.0,
++     -0.0,
++     -1.0
++    ],
++    "name": "Bore2",
++    "position": [
++     60,
++     50,
++     20
++    ],
++    "type": "simple"
++   }
++  },
++  {
++   "command": "drawing.create",
++   "params": {}
++  },
++  {
++   "command": "drawing.view.base",
++   "params": {
++    "sheet": "Sheet 1",
++    "view": "top",
++    "scale": "1:2",
++    "position_mm": [
++     150,
++     180
++    ]
++   }
++  }
++ ]
++}
+diff --git a/tests/KNOWN_FAILING_TESTS b/tests/KNOWN_FAILING_TESTS
+index 5f036bfd9..62b086a96 100644
+--- a/tests/KNOWN_FAILING_TESTS
++++ b/tests/KNOWN_FAILING_TESTS
+@@ -12,6 +12,8 @@ solidcraft-cli::model_cache::a_later_round_after_opening_blends_the_saved_rounds
+ solidcraft-cli::naming_corpus::corpus_designs_name_alike_every_build_and_fail_where_a_reference_is_gone oracle/83-boundary-loop-thicken does not load: step 8, thicken status 1001, as on C++
+ solidcraft-doc::eval::cost_tests::a_tap_marking_searches_only_the_bodies_near_it main's mesh-based version (#10303) not taken; the exact replacement is to come
+ solidcraft-doc::eval::cost_tests::a_tap_marking_still_searches_the_bodies_within_its_reach main's mesh-based version (#10303) not taken; the exact replacement is to come
++solidcraft-engine::cmd::drawing_dimension::tests::a_new_hole_never_takes_the_dimension_of_an_undone_one a hole made after an undo takes the undone hole's feature id, and with it the undone hole's dimension (gap 2 on #4892, #5308)
++solidcraft-engine::cmd::drawing_dimension::tests::renaming_the_plate_keeps_its_five_dimensions a dimension's reference names its body, so renaming the body loses every reference to it (gap 1 on #4892, #5308)
+ solidcraft-engine::cmd::edit::tests::inserting_variable_fillet_control_preserves_parameters_at_existing_positions solidcore refuses a variable fillet whose law has a corner (solidcore#430)
+ solidcraft-engine::cmd::file::tests::each_format_has_an_export_command_of_its_own the box's planar faces are meshed into 124 triangles, not 12 (the STL is 6284 bytes, the test counts 84 + 50 x 12), as on SMLib
+ solidcraft-engine::cmd::sketch_project::tests::intersection_curve_of_picked_faces_spans_the_whole_surface its premise fails off truck: the fit-point spline wall's 3 span faces are not one surface patch in the kernel's mesh (surface_patch gives 1 face, the test wants 3), as on SMLib
+diff --git a/tests/fixtures/w23a-drawing-updates/README.md b/tests/fixtures/w23a-drawing-updates/README.md
+new file mode 100644
+index 000000000..8c24478f0
+--- /dev/null
++++ b/tests/fixtures/w23a-drawing-updates/README.md
+@@ -0,0 +1,168 @@
++# W23a workshop plate: W13/W14 drawing update acceptance recipes
++
++**Scope:** Follow-up to the merged [workshop plate oracles](../../oracle/W23a-workshop-acceptance.md)
++from #4962; coordinated with [#4892](https://github.com/tangency-labs/solidcraft/issues/4892)
++and [CamWight's invitation](https://github.com/tangency-labs/solidcraft/issues/4892#issuecomment-6471076927).
++
++These are four written end-to-end acceptance recipes in `cases.json`, plus **fifteen runnable native Rust tests** in the existing `crates/engine/src/cmd/drawing_dimension_tests.rs` file. They are Engine-level subsets, **not** complete U2/UI tests or new W13/W14 production code. Source model oracles 84, 86 and 87 (with 85 as a width cross-check) remain the analytic reference.
++
++## Executable engine tests and evidence
++
++- **E2E-01:** Bore1 Ø10→Ø12 via `parameters.change`; Bore2 remains Ø10. Both dimensions keep their original `record.kind` reference.
++- **E2E-02:** Deleting Bore1 via `timeline.delete` makes its dimension `lost`, preserving `last_good ≈ 10 mm`, without rebinding to Bore2.
++- **E2E-03:** Two tests exercise resize and deletion through undo/redo, including the authored Drawing JSON, its reference records and custom dimension-text positions.
++- **E2E-04:** One test saves and reopens the unchanged, resized and deleted workshop plate in fresh sessions; it checks the preserved reference records, authored text positions and historical `last_good` value. This uses the `reopened` helper.
++- **R1 plate width** (`early_native_extensions` in `cases.json`): the plate's width as a dimension between its two side faces (#11871) reads 80, then 100 after `width` changes with the drawing closed, with the same reference, and 80 again after undo.
++- **Suppressed Bore1** (`early_native_extensions`): suppressed, its dimension reads `suppressed` (#11823) and keeps its reference; on again it reads Ø10 `ok`; deleted it is `lost` with `last_good` 10 and never moves to Bore2.
++- **Five dimensions** (`early_native_extensions`): Bore1 Ø, Bore2 Ø, the width, the length and Bore1's centre to Bore2's each follow only the parameter that drives them (`bore1_d` 12, `bore2_d` 8, `width` 100, `length` 120), one at a time and all four at once, and come back on undo and redo with the authored drawing unchanged.
++- **R2 centres** (`early_native_extensions`): Bore1's centre to Bore2's, each centre named by its rim (#9249), reads 50 aligned, 40 across and 30 up the top view. A new Bore1 diameter moves none of them; Bore1 suppressed, all three read `suppressed`; deleted, all three are `lost` with their last values, which survive save and reopen.
++- **The sheet** (`early_native_extensions`): through `drawing.scene`, `drawing.status` and `drawing.export`, the top view sits at 1:2 round (150, 180), 50 x 40, with the width's, the length's and the centres' arrowheads 40, 50 and 25 mm apart. Bore1 at Ø12 redraws only the view and Bore1's dimension; Bore1 deleted leaves out its two dimensions, listed `lost`; each undo draws and exports the sheet as it was; the length at 120 widens the view to 60; a reopened design draws the same sheet. The sheet draws no text yet.
++- **Filleted corners** (`early_native_extensions`): fillets that take the plate's corners leave all five dimensions reading as before (R1 faces survive a fillet).
++- **Repair** (`early_native_extensions`, W23-2 on #12170): Bore1's rim rounded 1 makes its dimension `lost` with leads; repaired to the circle where the round meets the bore, it reads Ø10 again as one undo step, keeps its id, view and text place, and holds through undo, redo, save and reopen. Bore1 deleted, its leads are the plate's only, and its dimension reads Bore2 only when repaired to Bore2's rim on purpose, and stays there when the delete is undone.
++- **Renaming the plate** (listed in `tests/KNOWN_FAILING_TESTS` until #5308): the plate renamed `Base` should keep its five dimensions. Today a reference names its body, so all five read `lost`.
++- **A new hole after an undo** (listed in `tests/KNOWN_FAILING_TESTS` until #5308): a dimension on an undone Bore3 must stay `lost` when Bore4 is made elsewhere. Today Bore4 takes Bore3's feature id and the dimension reads its Ø8 (gap 2 on #4892), so the test fails, and its line comes off when #5308 makes it pass.
++
++All fifteen reuse CamWight's `examples/acceptance/drawing_m2.json` from #9821 (stacked on #9254), via `Session::run_script`. No duplicate model script or per-case Rust test file was added.
++
++**Verified native integration CI (2 Nov 2026):** [Test #56](https://github.com/Benny1496/solidcraft/actions/runs/41430987707) ran the clean integration commit `4b0f664f7e53462aedfbee93448f3410b64804b5` on official `drawings@d5fd14135f0e220b45171010722a0064683c63f1`: **28/28** dimension (including all five W23a E2E tests), **55/55** view, **4/4** view schema, **4/4** export and **2/2** doc-view tests passed. **93 distinct targeted native Rust tests, zero failed or ignored**, plus Rust formatting and static contract validation. This is not the full engine or rendered/UI test suite.
++
++Only the Engine/dimension-inspection portions are runnable today. **All four complete rendered-paper/UI E2E scenarios, U2 automatic refresh, dimension text on paper and publication semantics remain NOT RUN.** R1 and R2 are measured at Engine level (the plate-width and centres tests), and the sheet's lines and arrowheads through `drawing.scene` and `drawing.export`, without text. `cases.json` keeps the full acceptance rows at `NOT_RUN` and documents which native subsets are implemented.
++
++Reapplied on official `drawings` with #9254 and #10713 already merged; neither one's production code is carried by this PR. CamWight's shared W23-1 plate (#9821) remains unmerged and is included **temporarily, byte-identically** so the tests run. Once #9821 merges, the matching fixture disappears from this PR's diff. No separate model implementation is claimed.
++
++## Supported UI workspace sequence (CamWight, 3 Nov 2026)
++
++The Drawing workspace **rejects model-edit commands while a drawing is open**.
++For every full UI acceptance recipe, the supported user flow is:
++
++1. Close/leave the Drawing workspace (the drawing remains in the design file).
++2. Switch to the Model workspace; perform the specified model edit, deletion, undo or redo.
++3. Return to/reopen the Drawing workspace for the **same design**.
++4. Inspect the refreshed views, the actual dimension values and their reference
++   statuses, and confirm authored text positions remain unchanged.
++5. For E2E-03, return to the Model workspace for each subsequent undo/redo
++   transition and check the drawing again after reopening it. For E2E-04,
++   check unchanged baseline saves/reopens without inventing a model edit.
++
++**Do not test editing the 3D model while the Drawing workspace is open.**
++That would require later live co-editing support and is not part of the current
++first-release user flow. Native engine session-level tests are a separate
++contract: they do not demonstrate a rendered UI refresh. The four complete UI
++scenarios remain **NOT RUN**.
++
++CamWight confirmed this workflow in [the PR #8288 review](https://github.com/tangency-labs/solidcraft/pull/8288#issuecomment-6599897742).
++
++## Intended user-facing behaviour
++
++On a 100 × 80 × 20 mm workshop plate, `Bore1` at (20,20) and `Bore2`
++at (60,50) are separate through-hole features with Ø10 each. Their centres
++are exactly 50 mm apart. A future A3 landscape, 1:2 drawing must show
++**model-space dimensions** Ø10 and 50 mm, not the projected Ø5 and 25 mm
++paper-space sizes. Paper-space label positions are *authored* and should
++survive all model refreshes. The `plate_width` 80 mm value is measured
++**between opposite planar side faces (R1)**, not between arbitrary
++sketch corners (R3). The `centres_1_2` 50 mm value is specifically the
++distance **between Bore1 and Bore2 axes / circle centres (R2)**, not
++between the W19d linear dimension command's corner picks.
++
++| Acceptance recipe | Source transition | Required Drawing assertions | Pending boundary |
++| --- | --- | --- | --- |
++| `W23A-E2E-01` | `84 → 86`, `parameters.change(bore1_d, 12 mm)` | Existing Bore1 diameter measure changes from Ø10 to Ø12, *same authored dimension identity*; Bore2 unchanged; labels retain their paper positions | Early **dimension.inspect** subset: W19d/W20a; full drawing: R1/R2/R3/R5/U2 |
++| `W23A-E2E-02` | `84 → 87`, `timeline.delete(Bore1)` | Bore1 dimension becomes **lost reference**, keeps last value Ø10 *as historical*, never silently targets Bore2; centre-to-centre dimension also becomes lost; Bore2 remains valid | Early **dimension.inspect** subset: W19d/W20a; full drawing: R1/R2/R3/R5/U2 |
++| `W23A-E2E-03` | `84 → 86/87 → 84 → 86/87`, source-design undo/redo | Correct active/lost states return, no accidental drawing undo, no changes to authored dimension IDs or placements | R1/R2/R3/R5/U2 + W19d/W20a |
++| `W23A-E2E-04` | Persist and reopen in each of `84`, `86`, `87` | Same actual drawing dimension identities, source references, last-known values, and label positions; no silent repair of lost reference | R1/R2/R3/R5/U2 + W19d/W20a + K4 storage integration |
++
++**Important distinction:** The oracle's `StockSketch` construction-circle dimensions
++are **not** technical drawing dimensions. Any names in `cases.json` such as
++`diam_bore1` are **test-local symbolic handles**, never invented production
++IDs, serialized fields or APIs. Once the real Drawing APIs exist, tests must
++capture and compare IDs returned by them rather than hard-code these labels.
++
++## Real inspection statuses, slice boundaries and label coordinates
++
++The machine-readable `drawing.dimension.inspect` contract (W19d, #8958)
++reports `status: ok | overridden | ambiguous | suppressed | lost | unmeasurable`.
++Our `cases.json` expectations now use exactly `status: "ok"` and
++`status: "lost"` instead of the former prose `resolved` and
++`lost reference`. **"Lost reference" remains the intended user-facing
++wording** for a broken reference, not an API status value.
++
++All four cases contain separately marked
++`early_dimension_inspect` subsets. Once the actual W19d/W20a interfaces
++are available together on a verified source revision, a diameter's identity
++and immediate model-based `inspect` value/status can be tested **without U2**.
++The existing `view_after_deferred_update` expectation refers **only to a
++rendered/saved view** awaiting its Update/publication, not to the dimension's
++`inspect` result. The full cases (centre-to-centre, plate width, authored
++label positions and refreshed views) still require their own R1/R2/R3/R5/U2
++slices. The five Engine-level tests passed on the clean Test #56 integration revision; all four **complete** drawing/UI acceptance scenarios remain **NOT RUN**.
++
++The `paper_xy_mm` positions in the fixture are **sheet coordinates**.
++The API's dimension-text `text: {at}` uses millimetres **relative to the
++view's centre**. Once the real view is placed, subtract the view-centre
++paper coordinate from each authored sheet coordinate to bind `text.at`;
++preserve the authored sheet placements in comparisons across edits and
++reopens. Do not pass `paper_xy_mm` directly as `text.at`.
++
++**Last known value is persisted:** #9764 is merged. An inspected dimension's `last_good` is saved through the real file format and survives a fresh session, including a `lost` reference. The E2E-04 native subset now exercises this explicitly.
++
++## Real command boundary versus pending Drawing boundary
++
++The model edit commands in `cases.json` match the existing engine's JSON
++calling convention, checked against its native tests:
++`parameters.change {"name":"bore1_d","expression":"12 mm"}`,
++`timeline.delete {"feature":"Bore1"}`, `edit.undo {}` and
++`edit.redo {}`.
++
++The *oracle recipes* (declarative model fixtures) are not automatically
++open engine sessions. Binding them into a real command replay first requires
++a validated loader/fixture setup. The `source_edit` steps below are intended
++real engine commands, **not evidence that a complete replay has run**.
++
++Drawing operations such as placing a view, authoring a diameter dimension,
++reading a reference's status, and publishing a refreshed scene are described
++as expected semantics only. **Do not turn them into fake CLI commands or
++pretend an assertion passed.** R5 defines stored drawing references; U2
++defines the update/publication boundary; W19/W20 provide the relevant
++dimension behaviours. W19d supplies `drawing.dimension.inspect` and W20a
++supplies radial diameter/radius dimensions; W20a is discussed in #8959.
++CamWight will link the relevant API slices on #4892 as they land.
++
++## Isolation and invariants
++
++1. **Start each recipe from oracle 84**, not from the previous recipe's
++   modified design. Drawings are stored in the same design file as their model.
++   Keep source model actions in the **Model workspace** and Drawing edits in
++   the **Drawing workspace**; switch workspaces rather than trying to edit
++   the model while the drawing is open.
++2. **No closest-object fallback:** after deleting `Bore1`, even a new
++   geometrically identical bore must not acquire its reference. The
++   `Bore2` feature keeps the *original* identity, name and XY location.
++3. **Out-of-date is not lost:** with deferred *view* updates, the existing
++   rendered view is `out of date` until Update; after publishing, vanished
++   references have API status `lost` (user-visible **lost reference**).
++   `drawing.dimension.inspect` reads the current model immediately, not through
++   the deferred view publication. Automatic update must not add an authored
++   undo step.
++4. Use only the supported **close drawing → edit model → reopen drawing**
++   flow for UI acceptance. After every model change, undo or redo, confirm
++   that the reopened drawing shows the correct current views, dimensions,
++   status and preserved authored placements. Live co-editing while the
++   Drawing workspace is open is **not currently supported** and is outside
++   these recipes. The separate publication-order cases under #5430 must
++   not be duplicated here.
++5. Save/reopen tests must preserve *actual captured* authored dimension IDs
++   and manually chosen label coordinates, not only numeric output.
++
++## Validation and honest status
++
++- The existing model oracle fixtures already have their own analytic
++  `expected.json` files. Run `python3 validate.py` for a
++  **static consistency check only** (case links, parameter semantics and
++  expected analytic geometry from those files).
++- `cargo xtask oracle` validates the 3D models, **not** automatic drawing
++  updates. No new heavy CI/Windows batch is requested with this draft.
++- The full four UI/U2 Drawing acceptance rows remain **NOT RUN**. Their native
++  dimension-inspection subsets are implemented and were proven on the prior PR
++  revision in Test #56 (93/93 targeted native tests passed). A full
++  3D-to-2D UI refresh still depends on U2.
+diff --git a/tests/fixtures/w23a-drawing-updates/cases.json b/tests/fixtures/w23a-drawing-updates/cases.json
+new file mode 100644
+index 000000000..bc06ecd9b
+--- /dev/null
++++ b/tests/fixtures/w23a-drawing-updates/cases.json
+@@ -0,0 +1,738 @@
++{
++  "schema": "w23a-drawing-update-acceptance/1",
++  "purpose": "Reviewable source-edit-to-Drawing acceptance contract; not an executable SolidCraft application document",
++  "coordinates": "Model: millimetres in XY; labels: paper millimetres in an A3 1:2 view.",
++  "status": "DRAFT_CONTRACT_ONLY",
++  "ui_workflow_policy": {
++    "model_commands_during_open_drawing": "rejected",
++    "drawing_and_model_same_design_file": true,
++    "required_sequence": [
++        "close_drawing_workspace",
++        "switch_to_model_workspace",
++        "apply_source_edit_or_undo_redo",
++        "reopen_drawing_workspace",
++        "verify_views_dimensions_references_and_positions"
++      ],
++    "runtime_status": "NOT_RUN",
++    "source": "https://github.com/tangency-labs/solidcraft/pull/8288#issuecomment-6599897742",
++    "live_coediting": "future_only_not_current_acceptance"
++  },
++  "source_of_truth": "tests/oracle/W23a-workshop-acceptance.md",
++  "source_data": {
++    "fixture": "84-plate-two-bores",
++    "source_session": "design",
++    "drawing_session": "drawing",
++    "session_semantics_note": "These names denote model vs drawing command intent; UI edits switch workspaces in the same design file, never concurrent model commands in an open Drawing workspace.",
++    "baseline": {
++      "plate_mm": [
++        100,
++        80,
++        20
++      ],
++      "bores": [
++        {
++          "feature": "Bore1",
++          "center_xy_mm": [
++            20,
++            20
++          ],
++          "diameter_mm": 10
++        },
++        {
++          "feature": "Bore2",
++          "center_xy_mm": [
++            60,
++            50
++          ],
++          "diameter_mm": 10
++        }
++      ],
++      "centre_distance_mm": 50,
++      "source_oracle": "tests/oracle/84-plate-two-bores",
++      "volume_mm3": 156858.4073464102
++    },
++    "drawing_future": {
++      "sheet": "ISO A3 landscape",
++      "scale": "1:2",
++      "annotation_model_units": "mm",
++      "symbolic_handles_note": "Test-local only: resolve real dimension IDs from future API",
++      "labels": [
++        {
++          "symbolic": "diam_bore1",
++          "paper_xy_mm": [
++            95,
++            55
++          ],
++          "model_value_mm": 10,
++          "reference_intent": "W20a: circular rim edge, radial diameter dimension"
++        },
++        {
++          "symbolic": "diam_bore2",
++          "paper_xy_mm": [
++            138,
++            74
++          ],
++          "model_value_mm": 10,
++          "reference_intent": "W20a: circular rim edge, radial diameter dimension"
++        },
++        {
++          "symbolic": "centres_1_2",
++          "paper_xy_mm": [
++            128,
++            95
++          ],
++          "model_value_mm": 50,
++          "reference_intent": "R2: Bore1 axis centre to Bore2 axis centre; never W19d corner picks"
++        },
++        {
++          "symbolic": "plate_width",
++          "paper_xy_mm": [
++            65,
++            115
++          ],
++          "model_value_mm": 80,
++          "reference_intent": "R1: opposing planar plate side faces; do not assume corners"
++        }
++      ],
++      "dimension_text_at_units": "view-relative paper millimetres (offset from actual view centre)",
++      "paper_to_view_text_at_rule": "After placing the real view, compute text.at = authored paper_xy_mm minus the view centre's paper_xy_mm; preserve paper coordinates across model edits and save/reopen."
++    }
++  },
++  "cases": [
++    {
++      "id": "W23A-E2E-01",
++      "title": "Bore1 Ø10 to Ø12 preserves its authored drawing dimension",
++      "starts_from": "84-plate-two-bores",
++      "oracle_after": "86-plate-first-bore-12",
++      "source_actions": [
++        {
++          "command": "parameters.change",
++          "params": {
++            "name": "bore1_d",
++            "expression": "12 mm"
++          },
++          "session": "design"
++        }
++      ],
++      "source_expected": {
++        "oracle": "tests/oracle/86-plate-first-bore-12",
++        "volume_mm3": 156167.25696262045,
++        "plate_mm": [
++          100,
++          80,
++          20
++        ],
++        "bores": [
++          {
++            "feature": "Bore1",
++            "diameter_mm": 12,
++            "center_xy_mm": [
++              20,
++              20
++            ]
++          },
++          {
++            "feature": "Bore2",
++            "diameter_mm": 10,
++            "center_xy_mm": [
++              60,
++              50
++            ]
++          }
++        ]
++      },
++      "drawing_expected": {
++        "diam_bore1": {
++          "model_value_mm": 12,
++          "same_authored_dimension_id": true,
++          "status": "ok"
++        },
++        "diam_bore2": {
++          "model_value_mm": 10,
++          "status": "ok"
++        },
++        "centres_1_2": {
++          "model_value_mm": 50,
++          "status": "ok",
++          "reference_intent": "R2_BORE_AXIS_CENTRES",
++          "must_not_bind_as": "W19d linear corners"
++        },
++        "plate_width": {
++          "model_value_mm": 80,
++          "status": "ok",
++          "reference_intent": "R1_OPPOSING_PLANAR_FACES"
++        },
++        "same_manual_label_paper_coordinates": true,
++        "view_after_deferred_update": "not_current_until_Update",
++        "dimension_inspect_after_source_edit": "immediate_model_read_without_U2"
++      },
++      "dependencies": [
++        "R1",
++        "R2",
++        "R3",
++        "R5",
++        "U2",
++        "W19d",
++        "W20a"
++      ],
++      "runtime_status": "NOT_RUN",
++      "ui_workflow": {
++        "model_command_while_drawing_open": false,
++        "required_sequence": [
++          "close_drawing_workspace",
++          "switch_to_model_workspace",
++          "apply_source_edit_or_undo_redo",
++          "reopen_drawing_workspace",
++          "verify_views_dimensions_references_and_positions"
++        ],
++        "check_after_each_undo_redo": false,
++        "note": "Reopen the same drawing after the diameter edit and verify the updated Ø12 dimension, unchanged Bore2 and authored labels.",
++        "runtime_status": "NOT_RUN"
++      },
++      "early_dimension_inspect": {
++        "runtime_status": "NOT_RUN",
++        "goal": "Bore1 Ø10 -> Ø12 keeps the same authored dimension ID and inspect reads Ø12",
++        "requires": [
++          "W19d",
++          "W20a"
++        ],
++        "does_not_require": [
++          "U2"
++        ],
++        "checks": [
++          "dimension.record.kind stays identical to the authored reference",
++          "diam_bore1.status == ok",
++          "diam_bore1.model_value_mm == 12",
++          "diam_bore2.status == ok"
++        ],
++        "excludes_until_other_slices": [
++          "R1 plate_width",
++          "R2 centres_1_2",
++          "R5/U2 view publication and deferred update",
++          "view-relative label placement",
++          "save/reopen last_good persistence"
++        ],
++        "implemented_rust_tests": [
++          "changing_a_bores_diameter_keeps_its_dimension"
++        ],
++        "last_passing_run": "https://github.com/Benny1496/solidcraft/actions/runs/41430987707",
++        "validation_note": "The full UI/paper runtime scenario is NOT RUN; the runnable Engine subset passed on the clean integration commit in Test #56."
++      }
++    },
++    {
++      "id": "W23A-E2E-02",
++      "title": "Deleting Bore1 keeps lost reference instead of silently remapping to Bore2",
++      "starts_from": "84-plate-two-bores",
++      "oracle_after": "87-plate-bore1-deleted",
++      "source_actions": [
++        {
++          "command": "timeline.delete",
++          "params": {
++            "feature": "Bore1"
++          },
++          "session": "design"
++        }
++      ],
++      "source_expected": {
++        "oracle": "tests/oracle/87-plate-bore1-deleted",
++        "volume_mm3": 158429.2036732051,
++        "plate_mm": [
++          100,
++          80,
++          20
++        ],
++        "bores": [
++          {
++            "feature": "Bore2",
++            "diameter_mm": 10,
++            "center_xy_mm": [
++              60,
++              50
++            ],
++            "same_original_feature_identity": true
++          }
++        ],
++        "bore1_feature_present": false
++      },
++      "drawing_expected": {
++        "diam_bore1": {
++          "historical_last_value_mm": 10,
++          "attached_to_any_other_bore": false,
++          "status": "lost"
++        },
++        "centres_1_2": {
++          "historical_last_value_mm": 50,
++          "attached_to_any_other_bore": false,
++          "status": "lost",
++          "reference_intent": "R2_BORE_AXIS_CENTRES",
++          "must_not_bind_as": "W19d linear corners"
++        },
++        "diam_bore2": {
++          "model_value_mm": 10,
++          "same_original_feature_identity": true,
++          "status": "ok"
++        },
++        "plate_width": {
++          "model_value_mm": 80,
++          "status": "ok",
++          "reference_intent": "R1_OPPOSING_PLANAR_FACES"
++        },
++        "same_manual_label_paper_coordinates": true,
++        "no_silent_repair": true,
++        "dimension_inspect_after_source_edit": "immediate_model_read_without_U2"
++      },
++      "dependencies": [
++        "R1",
++        "R2",
++        "R3",
++        "R5",
++        "U2",
++        "W19d",
++        "W20a"
++      ],
++      "runtime_status": "NOT_RUN",
++      "ui_workflow": {
++        "model_command_while_drawing_open": false,
++        "required_sequence": [
++          "close_drawing_workspace",
++          "switch_to_model_workspace",
++          "apply_source_edit_or_undo_redo",
++          "reopen_drawing_workspace",
++          "verify_views_dimensions_references_and_positions"
++        ],
++        "check_after_each_undo_redo": false,
++        "note": "Reopen after deleting Bore1 and verify the lost reference/last_good instead of attaching to Bore2.",
++        "runtime_status": "NOT_RUN"
++      },
++      "early_dimension_inspect": {
++        "runtime_status": "NOT_RUN",
++        "goal": "Deleting Bore1 makes the original diameter dimension lost, never retargeted to Bore2",
++        "requires": [
++          "W19d",
++          "W20a"
++        ],
++        "does_not_require": [
++          "U2"
++        ],
++        "checks": [
++          "dimension.record.kind stays identical to the authored reference",
++          "diam_bore1.status == lost",
++          "diam_bore1 never rebinds to Bore2",
++          "diam_bore2.status == ok",
++          "diam_bore1.last_good within 1e-9 mm of 10"
++        ],
++        "excludes_until_other_slices": [
++          "R1 plate_width",
++          "R2 centres_1_2",
++          "R5/U2 view publication and deferred update",
++          "view-relative label placement",
++          "save/reopen last_good persistence"
++        ],
++        "implemented_rust_tests": [
++          "deleting_a_bore_loses_its_dimension_and_never_moves_it"
++        ],
++        "last_passing_run": "https://github.com/Benny1496/solidcraft/actions/runs/41430987707",
++        "validation_note": "The full UI/paper runtime scenario is NOT RUN; the runnable Engine subset passed on the clean integration commit in Test #56."
++      }
++    },
++    {
++      "id": "W23A-E2E-03",
++      "title": "Source undo/redo restores drawing states and does not undo authored drawing changes",
++      "starts_from": "84-plate-two-bores",
++      "subcases": [
++        {
++          "source_edit": {
++            "command": "parameters.change",
++            "params": {
++              "name": "bore1_d",
++              "expression": "12 mm"
++            },
++            "session": "design"
++          },
++          "sequence": [
++            {
++              "state": "86-plate-first-bore-12",
++              "diam_bore1_mm": 12,
++              "status": "ok"
++            },
++            {
++              "command": "edit.undo",
++              "params": {},
++              "session": "design",
++              "state": "84-plate-two-bores",
++              "diam_bore1_mm": 10,
++              "status": "ok"
++            },
++            {
++              "command": "edit.redo",
++              "params": {},
++              "session": "design",
++              "state": "86-plate-first-bore-12",
++              "diam_bore1_mm": 12,
++              "status": "ok"
++            }
++          ]
++        },
++        {
++          "source_edit": {
++            "command": "timeline.delete",
++            "params": {
++              "feature": "Bore1"
++            },
++            "session": "design"
++          },
++          "sequence": [
++            {
++              "state": "87-plate-bore1-deleted",
++              "diam_bore1_last_mm": 10,
++              "status": "lost"
++            },
++            {
++              "command": "edit.undo",
++              "params": {},
++              "session": "design",
++              "state": "84-plate-two-bores",
++              "diam_bore1_mm": 10,
++              "status": "ok"
++            },
++            {
++              "command": "edit.redo",
++              "params": {},
++              "session": "design",
++              "state": "87-plate-bore1-deleted",
++              "diam_bore1_last_mm": 10,
++              "status": "lost"
++            }
++          ]
++        }
++      ],
++      "drawing_expected": {
++        "same_authored_dimension_ids": true,
++        "same_manual_label_paper_coordinates": true,
++        "drawing_undo_history_unmodified_by_source_edit": true,
++        "if_deferred": "source undo and redo each leave drawing out of date until Update; publishing refresh must not add authored undo step"
++      },
++      "dependencies": [
++        "R1",
++        "R2",
++        "R3",
++        "R5",
++        "U2",
++        "W19d",
++        "W20a"
++      ],
++      "runtime_status": "NOT_RUN",
++      "ui_workflow": {
++        "model_command_while_drawing_open": false,
++        "required_sequence": [
++          "close_drawing_workspace",
++          "switch_to_model_workspace",
++          "apply_source_edit_or_undo_redo",
++          "reopen_drawing_workspace",
++          "verify_views_dimensions_references_and_positions"
++        ],
++        "check_after_each_undo_redo": true,
++        "note": "Undo and redo occur in the Model workspace; reopen and inspect the Drawing workspace after every model transition.",
++        "runtime_status": "NOT_RUN"
++      },
++      "early_dimension_inspect": {
++        "runtime_status": "NOT_RUN",
++        "goal": "Undo and redo model resize/deletion while preserving authored drawing JSON, positioned labels and both geometric dimension references",
++        "requires": [
++          "W19d",
++          "W20a"
++        ],
++        "does_not_require": [
++          "U2"
++        ],
++        "implemented_rust_tests": [
++          "undo_and_redo_a_diameter_change_keep_its_dimension",
++          "undo_and_redo_a_deleted_bore_restore_its_dimension"
++        ],
++        "checks": [
++          "diam_bore1.status changes ok/lost as edit undo/redo requires",
++          "dimension.record.kind retains its authored target",
++          "authored drawing to_json is identical before model edit and after undo",
++          "both custom dimension text positions are kept",
++          "deleted and redo-deleted Bore1 last_good ~ 10 mm"
++        ],
++        "excludes_until_other_slices": [
++          "R1/R2 full sheet dimensions",
++          "R5/U2 automatic rendered-view update and publication"
++        ],
++        "last_passing_run": "https://github.com/Benny1496/solidcraft/actions/runs/41430987707",
++        "validation_note": "The native Engine subset passed on the clean integration commit in Test #56. The full UI test is NOT RUN."
++      }
++    },
++    {
++      "id": "W23A-E2E-04",
++      "title": "Save and reopen preserves authored dimension identities and lost status",
++      "starts_from": "84-plate-two-bores",
++      "source_checkpoints": [
++        {
++          "state": "84-plate-two-bores",
++          "expect": {
++            "diam_bore1": {
++              "model_value_mm": 10,
++              "status": "ok"
++            },
++            "centres_1_2": {
++              "model_value_mm": 50,
++              "status": "ok"
++            }
++          }
++        },
++        {
++          "state": "86-plate-first-bore-12",
++          "source_action": {
++            "command": "parameters.change",
++            "params": {
++              "name": "bore1_d",
++              "expression": "12 mm"
++            },
++            "session": "design"
++          },
++          "expect": {
++            "diam_bore1": {
++              "model_value_mm": 12,
++              "status": "ok"
++            },
++            "centres_1_2": {
++              "model_value_mm": 50,
++              "status": "ok"
++            }
++          }
++        },
++        {
++          "state": "87-plate-bore1-deleted",
++          "source_action": {
++            "command": "timeline.delete",
++            "params": {
++              "feature": "Bore1"
++            },
++            "session": "design"
++          },
++          "expect": {
++            "diam_bore1": {
++              "historical_last_value_mm": 10,
++              "status": "lost"
++            },
++            "centres_1_2": {
++              "historical_last_value_mm": 50,
++              "status": "lost"
++            }
++          },
++          "notes": "Separate fresh run from 84, not sequentially after state 86."
++        }
++      ],
++      "drawing_expected": {
++        "after_every_save_reopen": true,
++        "actual_id_equality_from_runtime_results": true,
++        "references_preserved": true,
++        "manually_placed_label_paper_coordinates_preserved": true,
++        "lost_historical_value_does_not_become_live": true,
++        "no_silent_remap": true,
++        "requires_real_drawing_container_reader_writer": true
++      },
++      "dependencies": [
++        "R1",
++        "R2",
++        "R3",
++        "R5",
++        "U2",
++        "W19d",
++        "W20a",
++        "K4"
++      ],
++      "runtime_status": "NOT_RUN",
++      "ui_workflow": {
++        "model_command_while_drawing_open": false,
++        "required_sequence": [
++          "close_drawing_workspace",
++          "switch_to_model_workspace",
++          "apply_source_edit_or_undo_redo",
++          "reopen_drawing_workspace",
++          "verify_views_dimensions_references_and_positions"
++        ],
++        "check_after_each_undo_redo": false,
++        "note": "The unchanged baseline is a pure save/reopen; for resized/deleted states close the Drawing workspace before each model edit and reopen for verification.",
++        "runtime_status": "NOT_RUN"
++      },
++      "early_dimension_inspect": {
++        "runtime_status": "NOT_RUN",
++        "goal": "Real save/reopen of unchanged, resized and deleted plate states in a fresh session",
++        "requires": [
++          "W19d",
++          "W20a",
++          "K4"
++        ],
++        "does_not_require": [
++          "U2"
++        ],
++        "implemented_rust_tests": [
++          "reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value"
++        ],
++        "checks": [
++          "dimension.record.kind identical after reopening",
++          "both authored text.at records preserved",
++          "Bore1 unchanged 10 mm, resized 12 mm, deleted lost with last_good ~ 10 mm",
++          "Bore2 stays 10 mm and independently referenced"
++        ],
++        "excludes_until_other_slices": [
++          "full paper coordinate mapping and R1/R2 dimensions",
++          "rendered U2 annotation refresh"
++        ],
++        "last_passing_run": "https://github.com/Benny1496/solidcraft/actions/runs/41430987707",
++        "validation_note": "Native Engine subset passed on the clean integration commit in Test #56. Full UI/paper E2E stays NOT RUN."
++      }
++    }
++  ],
++  "early_native_extensions": [
++    {
++      "id": "W23A-R1-WIDTH",
++      "goal": "plate_width as a dimension between the plate's two side faces (R1) follows width 80 -> 100 -> 80 with the same reference",
++      "requires": ["R1 faces dimension (#11871, on drawings through #11823)"],
++      "source_actions": [
++        {"command": "parameters.change", "params": {"name": "width", "expression": "100 mm"}, "session": "design"},
++        {"command": "edit.undo", "params": {}, "session": "design"}
++      ],
++      "checks": [
++        "dimension.record.kind stays identical to the authored faces reference",
++        "plate_width.status == ok and reads 80, then 100, then 80"
++      ],
++      "oracle_cross_check": "tests/oracle/85-plate-width-100",
++      "implemented_rust_tests": ["the_plates_width_between_its_side_faces_follows_a_width_change"],
++      "runtime_status": "NATIVE_ENGINE_TEST"
++    },
++    {
++      "id": "W23A-SUPPRESSED-BORE",
++      "goal": "Bore1 suppressed reads suppressed and keeps its reference; on again it reads 10 ok; deleted it is lost and never moves to Bore2",
++      "requires": ["suppressed and failed references (#11823)"],
++      "source_actions": [
++        {"command": "timeline.suppress", "params": {"feature": "Bore1", "suppressed": true}, "session": "design"},
++        {"command": "timeline.suppress", "params": {"feature": "Bore1", "suppressed": false}, "session": "design"},
++        {"command": "timeline.delete", "params": {"feature": "Bore1"}, "session": "design"}
++      ],
++      "checks": [
++        "dimension.record.kind stays identical to the authored reference after every edit",
++        "diam_bore1.status == suppressed, then ok (10), then lost with last_good 10",
++        "diam_bore2.status == ok (10) throughout, and diam_bore1 never rebinds to Bore2"
++      ],
++      "implemented_rust_tests": ["a_suppressed_bore_says_so_and_its_dimension_comes_back"],
++      "runtime_status": "NATIVE_ENGINE_TEST"
++    },
++    {
++      "id": "W23A-FIVE-DIMENSIONS",
++      "goal": "the plate's five dimensions (Bore1 Ø, Bore2 Ø, width, length, Bore1's centre to Bore2's) each follow only the parameter that drives them, and come back on undo",
++      "requires": ["R1 faces dimension (#11871)", "a circle's centre as a corner (#9249)"],
++      "source_actions": [
++        {"command": "parameters.change", "params": {"name": "bore1_d", "expression": "12 mm"}, "session": "design"},
++        {"command": "parameters.change", "params": {"name": "bore2_d", "expression": "8 mm"}, "session": "design"},
++        {"command": "parameters.change", "params": {"name": "width", "expression": "100 mm"}, "session": "design"},
++        {"command": "parameters.change", "params": {"name": "length", "expression": "120 mm"}, "session": "design"},
++        {"command": "edit.undo", "params": {}, "session": "design"},
++        {"command": "edit.redo", "params": {}, "session": "design"}
++      ],
++      "checks": [
++        "the plate reads Ø10, Ø10, 80, 100 and 50",
++        "each change alone moves only its own dimension (Ø12, Ø8, 100 or 120), and its undo gives the plate back with the authored drawing unchanged",
++        "all four at once read Ø12, Ø8, 100, 120 and 50; four undos give the plate back, four redos all four again",
++        "dimension.record.kind stays identical to the authored reference after every edit"
++      ],
++      "implemented_rust_tests": ["the_plates_five_dimensions_follow_each_parameter_and_its_undo"],
++      "runtime_status": "NATIVE_ENGINE_TEST"
++    },
++    {
++      "id": "W23A-R2-CENTRES",
++      "goal": "Bore1's centre to Bore2's, each centre named by its rim (R2 at engine level): 50 aligned, 40 across and 30 up the top view, through a resize, suppress, delete, undo, redo and reopen",
++      "requires": ["a circle's centre as a corner (#9249)", "suppressed and failed references (#11823)"],
++      "source_actions": [
++        {"command": "parameters.change", "params": {"name": "bore1_d", "expression": "12 mm"}, "session": "design"},
++        {"command": "edit.undo", "params": {}, "session": "design"},
++        {"command": "timeline.suppress", "params": {"feature": "Bore1", "suppressed": true}, "session": "design"},
++        {"command": "timeline.suppress", "params": {"feature": "Bore1", "suppressed": false}, "session": "design"},
++        {"command": "timeline.delete", "params": {"feature": "Bore1"}, "session": "design"},
++        {"command": "edit.undo", "params": {}, "session": "design"},
++        {"command": "edit.redo", "params": {}, "session": "design"}
++      ],
++      "checks": [
++        "centres_1_2 reads 50 aligned, 40 horizontal and 30 vertical, and a new Bore1 diameter moves none of them",
++        "Bore1 suppressed: all three read suppressed",
++        "Bore1 deleted: all three are lost with last_good 50, 40 and 30 and read no value, while Bore2 reads Ø10",
++        "undo reads them again; after redo they stay lost with their last values through save and reopen",
++        "dimension.record.kind stays identical to the authored reference after every edit"
++      ],
++      "implemented_rust_tests": ["the_bores_centres_stay_put_and_a_lost_bore_takes_its_centre_dimensions"],
++      "runtime_status": "NATIVE_ENGINE_TEST"
++    },
++    {
++      "id": "W23A-SHEET",
++      "goal": "the plate's sheet as drawing.scene, drawing.status and drawing.export draw it (lines and arrowheads; the sheet has no text yet) follows the model and comes back on undo",
++      "requires": ["dimensions on the sheet (#11867)", "drawing.scene, drawing.status and drawing.export"],
++      "source_actions": [
++        {"command": "parameters.change", "params": {"name": "bore1_d", "expression": "12 mm"}, "session": "design"},
++        {"command": "edit.undo", "params": {}, "session": "design"},
++        {"command": "timeline.delete", "params": {"feature": "Bore1"}, "session": "design"},
++        {"command": "edit.undo", "params": {}, "session": "design"},
++        {"command": "parameters.change", "params": {"name": "length", "expression": "120 mm"}, "session": "design"}
++      ],
++      "checks": [
++        "the top view at 1:2 sits round (150, 180), 50 x 40, with all five dimensions drawn; the width's arrowheads 40 apart, the length's 50 and the centres' 25",
++        "Bore1 at Ø12 redraws the view and Bore1's dimension; the others stay where they were",
++        "Bore1 deleted: its two dimensions are left out and listed lost by drawing.scene and drawing.status; the other three stay where they were and the sheet still exports",
++        "each undo draws the sheet as it was within 1e-9 mm and exports the same SVG",
++        "the length at 120 widens the view to 60 round the same place and the length's arrowheads to 60; a save and reopen draws the same sheet"
++      ],
++      "implemented_rust_tests": ["the_plates_sheet_draws_what_the_model_has_and_the_same_after_undo"],
++      "runtime_status": "NATIVE_ENGINE_TEST"
++    },
++    {
++      "id": "W23A-FILLETED-CORNERS",
++      "goal": "fillets that take the plate's corners leave its faces, bores and centres measured",
++      "requires": ["R1 faces dimension (#11871)"],
++      "source_actions": [
++        {"command": "solid.fillet", "params": {"body": "Plate", "radius": 5, "edges": [[0, 0, 10]]}, "session": "design"},
++        {"command": "edit.undo", "params": {}, "session": "design"},
++        {"command": "solid.fillet", "params": {"body": "Plate", "radius": 2, "edges": [[50, 0, 20]]}, "session": "design"},
++        {"command": "edit.undo", "params": {}, "session": "design"}
++      ],
++      "checks": [
++        "with either fillet, and after its undo, the five read Ø10, Ø10, 80, 100 and 50",
++        "dimension.record.kind stays identical to the authored reference"
++      ],
++      "implemented_rust_tests": ["fillets_on_the_plates_corners_leave_its_five_dimensions_read"],
++      "runtime_status": "NATIVE_ENGINE_TEST"
++    },
++    {
++      "id": "W23A-REPAIR",
++      "goal": "a lost Bore1 dimension reads again only through the user's own repair (W23-2, #12170): after Bore1's rim is rounded, and after Bore1 is deleted",
++      "requires": ["lost references name leads and take a repair (#12170)"],
++      "source_actions": [
++        {"command": "solid.fillet", "params": {"body": "Plate", "radius": 1, "edges": [[25, 20, 20]]}, "session": "design"},
++        {"command": "edit.undo", "params": {}, "session": "design"},
++        {"command": "edit.redo", "params": {}, "session": "design"},
++        {"command": "edit.undo", "params": {}, "session": "design"},
++        {"command": "timeline.delete", "params": {"feature": "Bore1"}, "session": "design"},
++        {"command": "edit.undo", "params": {}, "session": "design"}
++      ],
++      "checks": [
++        "Bore1's rim rounded: diam_bore1 is lost with last_good 10 and leads that include the bore's circle where the round meets it; diam_bore2 reads 10",
++        "drawing.dimension.repair onto that circle reads 10 as one drawing undo step, with the same id, view and text place, and only the edge's name changed",
++        "the repair undone is lost with the same leads, redone reads 10, and reads 10 after save and reopen",
++        "the round undone, the repaired dimension is lost and keeps its repair; redone it reads 10; repair and round undone, it reads 10 by its first record",
++        "Bore1 deleted: diam_bore1 is lost and never reads Bore2 by itself, and its leads are the plate's, never Bore2's rim; repaired onto Bore2's rim it reads 10 by the name Bore2's own dimension has",
++        "Bore1's delete undone, the repair stays on Bore2; the repair undone, diam_bore1 reads Bore1 by its first record"
++      ],
++      "implemented_rust_tests": ["a_rounded_bore_rim_is_lost_and_a_repair_reads_it_again", "a_deleted_bores_dimension_reads_bore2_only_when_repaired_to_it"],
++      "runtime_status": "NATIVE_ENGINE_TEST"
++    }
++  ],
++  "not_tested": [
++    "R5 drawing records",
++    "U2 publishing and updates",
++    "W19/W20 drawing dimensions",
++    "full end-to-end 3D-to-2D drawing acceptance"
++  ],
++  "future_binding_rule": "Use actual owner-approved public command/API names when available. Never invent fake Drawing commands or synthetic permanent IDs.",
++  "no_runtime_pass_claimed": true
++}
+diff --git a/tests/fixtures/w23a-drawing-updates/validate.py b/tests/fixtures/w23a-drawing-updates/validate.py
+new file mode 100644
+index 000000000..1ed80880b
+--- /dev/null
++++ b/tests/fixtures/w23a-drawing-updates/validate.py
+@@ -0,0 +1,195 @@
++#!/usr/bin/env python3
++"""Check the static W23a drawing-update contract against real oracle files.
++
++This is deliberately NOT a SolidCraft W13/W14 integration test. It must
++never report drawing updates as passed: no application command is run here.
++"""
++import json
++import math
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[3]
++HERE = Path(__file__).resolve().parent
++
++
++def read(path):
++    return json.loads((ROOT / path).read_text(encoding="utf-8"))
++
++
++def require(ok, message):
++    if not ok:
++        raise ValueError(message)
++
++
++def case(name):
++    return "tests/oracle/" + name
++
++
++def main():
++    data = json.loads((HERE / "cases.json").read_text(encoding="utf-8"))
++    require(data["schema"] == "w23a-drawing-update-acceptance/1", "unexpected schema")
++    require(data["no_runtime_pass_claimed"] is True, "no runtime PASS allowed")
++    items = data["cases"]
++    require(len(items) == 4, "exactly CamWight's four agreed E2E scenarios")
++    require([c["id"] for c in items] == [f"W23A-E2E-{i:02}" for i in range(1, 5)], "case identities changed")
++    require(all(c["runtime_status"] == "NOT_RUN" for c in items), "E2E cases are not runnable yet")
++
++    # CamWight, 3 Nov 2026: the Drawing workspace refuses model edits.
++    # This validates the recipe only; it does not execute UI acceptance.
++    required_ui_sequence = [
++        "close_drawing_workspace",
++        "switch_to_model_workspace",
++        "apply_source_edit_or_undo_redo",
++        "reopen_drawing_workspace",
++        "verify_views_dimensions_references_and_positions",
++    ]
++    policy = data["ui_workflow_policy"]
++    require(policy["model_commands_during_open_drawing"] == "rejected"
++            and policy["drawing_and_model_same_design_file"] is True
++            and policy["required_sequence"] == required_ui_sequence
++            and policy["runtime_status"] == "NOT_RUN"
++            and policy["live_coediting"] == "future_only_not_current_acceptance",
++            "UI test contract must close Drawing before model edits")
++    for item in items:
++        ui = item["ui_workflow"]
++        require(ui["required_sequence"] == required_ui_sequence
++                and ui["model_command_while_drawing_open"] is False
++                and ui["runtime_status"] == "NOT_RUN",
++                "unsupported model edit in an open drawing")
++    require(items[2]["ui_workflow"]["check_after_each_undo_redo"] is True,
++            "E2E-03 must reopen and verify Drawing after undo/redo")
++
++    source = data["source_data"]
++    baseline = source["baseline"]
++    require(baseline["source_oracle"] == case("84-plate-two-bores"), "baseline links wrong oracle")
++    require(baseline["plate_mm"] == [100, 80, 20], "wrong plate size")
++    require({b["feature"] for b in baseline["bores"]} == {"Bore1", "Bore2"}, "not two independent bores")
++    features = read(case("84-plate-two-bores") + "/recipe.json")["features"]
++    model_holes = {f["name"]: f for f in features if f["op"] == "hole"}
++    require(set(model_holes) == {"Bore1", "Bore2"}, "baseline model feature identity")
++    for bore in baseline["bores"]:
++        hole = model_holes[bore["feature"]]
++        require(hole["position"][:2] == bore["center_xy_mm"], "bore centre mismatch")
++        require(hole["diameter"] == bore["feature"].lower() + "_d", "bore driver mismatch")
++    a, b = baseline["bores"]
++    require(math.hypot(a["center_xy_mm"][0] - b["center_xy_mm"][0],
++                       a["center_xy_mm"][1] - b["center_xy_mm"][1]) == 50, "centre separation must be 50 mm")
++    require(source["drawing_future"]["scale"] == "1:2", "wrong drawing scale")
++    labels = source["drawing_future"]["labels"]
++    require(len(labels) == len({x["symbolic"] for x in labels}) == 4, "labels must have unique symbolic handles")
++    require(all(0 <= x["paper_xy_mm"][0] <= 420 and 0 <= x["paper_xy_mm"][1] <= 297 for x in labels), "labels outside A3")
++
++    for state in ("84-plate-two-bores", "85-plate-width-100",
++                  "86-plate-first-bore-12", "87-plate-bore1-deleted"):
++        recipe = read(case(state) + "/recipe.json")
++        expected = read(case(state) + "/expected.json")
++        require(recipe["id"] == state and expected["source"] == "analytic", "wrong oracle metadata")
++        require(expected["body_count"] == 1 and expected["volume_mm3"] > 0, "oracle reference missing")
++    require(abs(read(case("84-plate-two-bores") + "/expected.json")["volume_mm3"]
++                - baseline["volume_mm3"]) < 1e-9, "baseline volume mismatch")
++    for item in items[:2]:
++        expect = read(item["source_expected"]["oracle"] + "/expected.json")
++        require(abs(item["source_expected"]["volume_mm3"] - expect["volume_mm3"]) < 1e-9,
++                item["id"] + " volume mismatch")
++        require(item["starts_from"] == "84-plate-two-bores", "scenarios must start independently")
++    require(items[0]["source_actions"] == [{
++        "command": "parameters.change",
++        "params": {"name": "bore1_d", "expression": "12 mm"},
++        "session": "design",
++    }], "Ø12 edit must be an actual design command")
++    require(items[1]["source_actions"] == [{
++        "command": "timeline.delete",
++        "params": {"feature": "Bore1"},
++        "session": "design",
++    }], "delete must name Bore1")
++    deleted = read(case("87-plate-bore1-deleted") + "/recipe.json")
++    kept = [f["name"] for f in deleted["features"] if f["op"] == "hole"]
++    require(kept == ["Bore2"], "original Bore2 must retain identity after deletion")
++    # Inspect must use W19d's real machine-readable statuses, not UI prose.
++    require(all("R1" in item["dependencies"] for item in items), "R1 flat-face width dependency missing")
++    require(source["drawing_future"]["labels"][2]["reference_intent"].startswith("R2:"),
++            "centre-to-centre dimension must use R2 hole axes")
++    require(source["drawing_future"]["labels"][3]["reference_intent"].startswith("R1:"),
++            "plate-width dimension must use R1 opposing faces")
++    require("view centre" in source["drawing_future"]["paper_to_view_text_at_rule"],
++            "dimension text.at needs actual view-relative coordinates")
++    for item in items:
++        require("W19d" in item["dependencies"] and "W20a" in item["dependencies"],
++                "precise dimension slices missing")
++    for item in items[:2]:
++        early = item["early_dimension_inspect"]
++        require(early["runtime_status"] == "NOT_RUN" and early["requires"] == ["W19d", "W20a"]
++                and "U2" in early["does_not_require"], "early dimension inspect subset must not claim runtime success")
++        require(item["drawing_expected"]["dimension_inspect_after_source_edit"] == "immediate_model_read_without_U2",
++                "dimension inspect reads the current model, not deferred view publication")
++        for symbolic in ("diam_bore1", "diam_bore2", "centres_1_2", "plate_width"):
++            require(item["drawing_expected"][symbolic]["status"] in ("ok", "lost"),
++                    "expected dimension status must match drawing.dimension.inspect")
++    require(items[0]["drawing_expected"]["view_after_deferred_update"] == "not_current_until_Update",
++            "deferred update only applies to views")
++
++    lost = items[1]["drawing_expected"]
++    for name, last in (("diam_bore1", 10), ("centres_1_2", 50)):
++        require(lost[name]["status"] == "lost", "lost status cannot remap to Bore2")
++        require(lost[name]["historical_last_value_mm"] == last, "last value must be historical")
++        require(lost[name]["attached_to_any_other_bore"] is False, "silent reassignment forbidden")
++    require(len(items[2]["subcases"]) == 2, "undo/redo must cover edit and deletion")
++    require(all(c.get("sequence", [{}])[-1].get("command") == "edit.redo"
++                for c in items[2]["subcases"]), "each edit must be redone")
++    for sub in items[2]["subcases"]:
++        require(all(step["status"] in ("ok", "lost") for step in sub["sequence"]),
++                "undo/redo must use W19d statuses")
++    for state in items[3]["source_checkpoints"]:
++        require(all(value["status"] in ("ok", "lost") for value in state["expect"].values()),
++                "save/reopen checkpoints must use W19d statuses")
++    require(items[3]["source_checkpoints"][2]["expect"]["diam_bore1"]["historical_last_value_mm"] == 10,
++            "keep disputed E2E-04 lost-value requirement for CamWight's decision")
++    require(items[3]["drawing_expected"]["lost_historical_value_does_not_become_live"] is True,
++            "preserve historical value after reopen as pending design decision")
++    require(items[3]["drawing_expected"]["after_every_save_reopen"] is True,
++            "save/reopen checks are required")
++    # The native extensions on top of the four recipes: each names its edits as real design
++    # commands, uses W19d's status words, and its Rust test is in the dimension test file.
++    tests = (ROOT / "crates/engine/src/cmd/drawing_dimension_tests.rs").read_text(encoding="utf-8")
++    extensions = data["early_native_extensions"]
++    require([e["id"] for e in extensions] == ["W23A-R1-WIDTH", "W23A-SUPPRESSED-BORE", "W23A-FIVE-DIMENSIONS", "W23A-R2-CENTRES",
++                                              "W23A-SHEET", "W23A-FILLETED-CORNERS", "W23A-REPAIR"], "native extension identities changed")
++    for e in extensions:
++        require(e["runtime_status"] == "NATIVE_ENGINE_TEST", e["id"] + " is an engine test, not a drawing or UI run")
++        require(all(a["session"] == "design" for a in e["source_actions"]), e["id"] + ": model edits are design commands")
++        for name in e["implemented_rust_tests"]:
++            require("fn " + name + "()" in tests, e["id"] + ": no test " + name)
++    require(extensions[0]["source_actions"][0]["params"] == {"name": "width", "expression": "100 mm"}, "width edit must change `width`")
++    require(read(extensions[0]["oracle_cross_check"] + "/expected.json")["source"] == "analytic", "width cross-check oracle")
++    require([a["command"] for a in extensions[1]["source_actions"]] == ["timeline.suppress", "timeline.suppress", "timeline.delete"],
++            "suppress, unsuppress, then delete Bore1")
++    require(all(a["params"]["feature"] == "Bore1" for a in extensions[1]["source_actions"]), "the suppressed bore is Bore1")
++    # The four plate cases: each of the plate's parameters with the value its dimension must read,
++    # Bore1 for every feature edit, and only edits the plate's script can make.
++    parameters = {"bore1_d": "12 mm", "bore2_d": "8 mm", "width": "100 mm", "length": "120 mm"}
++    for e in extensions[2:]:
++        for a in e["source_actions"]:
++            if a["command"] == "parameters.change":
++                require(parameters.get(a["params"]["name"]) == a["params"]["expression"], e["id"] + ": unexpected parameter edit")
++            elif a["command"] in ("timeline.suppress", "timeline.delete"):
++                require(a["params"]["feature"] == "Bore1", e["id"] + ": the edited feature is Bore1")
++            elif a["command"] == "solid.fillet":
++                require(a["params"]["body"] == "Plate", e["id"] + ": the fillet is on the plate")
++            else:
++                require(a["command"] in ("edit.undo", "edit.redo"), e["id"] + ": unexpected command " + a["command"])
++    five = [a["params"]["name"] for a in extensions[2]["source_actions"] if a["command"] == "parameters.change"]
++    require(five == list(parameters), "every parameter of the plate is changed once")
++    require(any("50" in c and "40" in c and "30" in c for c in extensions[3]["checks"]), "centre to centre: 50, 40 and 30")
++    # The repair: the user's own pick after a round and after a delete, never a move by itself.
++    repair = extensions[6]
++    require([a["command"] for a in repair["source_actions"]] == ["solid.fillet", "edit.undo", "edit.redo", "edit.undo", "timeline.delete", "edit.undo"],
++            "round Bore1's rim, undo and redo it, undo it, then delete Bore1 and undo")
++    require(repair["source_actions"][0]["params"]["edges"] == [[25, 20, 20]], "the round is on Bore1's rim")
++    require(any("drawing.dimension.repair" in c and "one drawing undo step" in c for c in repair["checks"]), "a repair is one undo step")
++    require(any("never reads Bore2 by itself" in c for c in repair["checks"]), "a lost dimension never moves to Bore2 by itself")
++    print("STATIC CONTRACT PASS: four W23a recipes match source oracle metadata.")
++    print("DRAWING E2E AND EARLY W19d/W20a DIMENSION INSPECTION: NOT RUN (static only).")
++
++
++if __name__ == "__main__":
++    main()
