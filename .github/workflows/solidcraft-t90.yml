@@ -65,10 +65,19 @@ jobs:
           }
           if ! git merge --no-ff --no-edit -m "T90 temporary integration PR11881" FETCH_HEAD > ../t90-report/merge.log 2>&1; then
             git status --short > ../t90-report/merge-conflicts.txt
-            echo "FINAL=MERGE_CONFLICT_REQUIRES_REVIEW" >> ../t90-report/summary.txt
-            cat ../t90-report/merge.log
-            cat ../t90-report/merge-conflicts.txt
-            exit 1
+            # Only one verified append/append conflict is eligible for guarded resolution.
+            python3 ../overlay/tests/fixtures/t90/resolve_append_only_view_tests.py > ../t90-report/merge-resolution.log 2>&1 || {
+              echo "FINAL=MERGE_CONFLICT_REQUIRES_REVIEW" >> ../t90-report/summary.txt
+              cat ../t90-report/merge.log
+              cat ../t90-report/merge-conflicts.txt
+              cat ../t90-report/merge-resolution.log
+              exit 1
+            }
+            git commit --no-edit -m "T90 temporary W23 merge with verified append-only test resolution" >> ../t90-report/merge.log 2>&1 || {
+              echo "FINAL=MERGE_COMMIT_FAILED" >> ../t90-report/summary.txt
+              exit 1
+            }
+            echo "MERGE_APPEND_ONLY_RESOLUTION=PASS" >> ../t90-report/summary.txt
           fi
           grep -F "fn assembly_sheet()" crates/engine/src/cmd/drawing_balloon_tests.rs
           grep -F "fn a_balloon_is_refused_on_a_part_its_view_leaves_out()" crates/engine/src/cmd/drawing_balloon_tests.rs
