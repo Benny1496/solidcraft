@@ -1,4 +1,4 @@
-name: "SolidCraft Test 87: theironchef review fixes - before vs after (fork only)"
+name: "SolidCraft Test 87b: reviewer import corrections - format fix validation (fork only)"
 on:
   push:
     branches:
@@ -22,9 +22,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - pr: 12394
-            head: c406d80b04735f3147ce4c597cc61f5ee87c449c
-            crate: solidcraft-engine
           - pr: 9704
             head: 9b86def875d6993bfdc56dc18bf56f74ae8c9325
             crate: solidcraft-geom
