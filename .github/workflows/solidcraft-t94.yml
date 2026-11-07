@@ -1,4 +1,5 @@
 name: "SolidCraft Test 94 - native GUI usability and invalid dimension warning"
+# Rerun after test-fixture correction: Session::drawing returns Result (use is_ok).
 on:
   push:
     branches:
