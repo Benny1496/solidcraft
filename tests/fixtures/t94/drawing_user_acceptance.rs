@@ -47,7 +47,7 @@ mod t94_drawing_user_acceptance {
         let mut h = Harness::new();
         h.app.run("solid.box", json!({"length":100,"width":80,"height":20,"body_name":"Plate"})).unwrap();
         h.app.run("drawing.create", json!({})).unwrap();
-        assert!(h.app.session.drawing("test").is_some(), "real engine drawing created");
+        assert!(h.app.session.drawing("test").is_ok(), "real engine drawing created");
         let before = h.app.session.doc.to_json();
         let shown = drawing_workspace(&mut h);
         record("01-drawing-with-existing-document", &shown);
