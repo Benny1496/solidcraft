@@ -1,0 +1,136 @@
+name: "SolidCraft Test 94 - native GUI usability and invalid dimension warning"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t94
+    paths:
+      - .github/workflows/solidcraft-t94.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-t94-drawing-gui-acceptance
+  cancel-in-progress: false
+
+jobs:
+  native-egui-usability:
+    name: "T94 real egui frames, user controls and lost-dimension visibility"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: "ce252381bb91f87baa3d59126c618a2389c222ce"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Restrict to own fork and isolated test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t94"
+
+      - name: Checkout test fixture branch
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout exact upstream source read-only
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: ce252381bb91f87baa3d59126c618a2389c222ce
+          path: src
+          persist-credentials: false
+
+      - name: Insert UI acceptance cases ONLY in disposable GitHub runner
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../t94-gui-report/ui-evidence
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          printf "TEST=94\nUPSTREAM_SHA=%s\nTRACK=GUI_DRAWING_ACCEPTANCE_CURRENT_GAPS\n" "$SOURCE_SHA" > ../t94-gui-report/summary.txt
+          python3 ../overlay/tests/fixtures/t94/inject_ui_tests.py | tee ../t94-gui-report/injection.log
+          git diff --check
+          test "$(git diff --name-only)" = "crates/ui-egui/src/drawing_workspace.rs"
+          echo "UI_TEST_INJECTION=PASS" >> ../t94-gui-report/summary.txt
+
+      - name: Install Rust toolchain and lint components
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Reuse native egui compilation cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t94-real-egui-frames
+          cache-on-failure: true
+
+      - name: Format injected UI tests, check and lint
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t94-gui-report/rustfmt-apply.log 2>&1
+          cargo fmt --all -- --check > ../t94-gui-report/rustfmt-check.log 2>&1 || { tail -85 ../t94-gui-report/rustfmt-check.log; exit 1; }
+          git diff --check
+          test "$(git diff --name-only)" = "crates/ui-egui/src/drawing_workspace.rs"
+          git diff > ../t94-gui-report/injected-gui-tests.patch
+          timeout 40m cargo clippy -p solidcraft-ui-egui --all-targets --profile ci --locked -- -D warnings > ../t94-gui-report/clippy.log 2>&1 || { tail -135 ../t94-gui-report/clippy.log; exit 1; }
+          echo "FMT_CLIPPY=PASS" >> ../t94-gui-report/summary.txt
+
+      - name: Compile real egui UI acceptance test binary
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 60m cargo test -p solidcraft-ui-egui --profile ci --locked --no-run --message-format=json > ../t94-gui-report/build-artifacts.jsonl 2> ../t94-gui-report/compile.log || { tail -135 ../t94-gui-report/compile.log; exit 1; }
+          echo "NATIVE_UI_TEST_COMPILED=PASS" >> ../t94-gui-report/summary.txt
+
+      - name: Drive actual headless egui frames and classify GUI gaps honestly
+        working-directory: src
+        shell: bash
+        env:
+          SOLIDCRAFT_T94_UI_EVIDENCE_DIR: ${{ github.workspace }}/t94-gui-report/ui-evidence
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          bins=../t94-gui-report/build-artifacts.jsonl
+          errors=0
+          for name in \
+            t94_real_gui_shows_placeholder_despite_an_existing_engine_drawing_document \
+            t94_real_user_dimension_tool_opens_only_a_disabled_placeholder_panel \
+            t94_a_real_lost_engine_dimension_is_not_shown_as_a_user_warning_on_the_drawing_page \
+            workspace_and_options_leave_source_and_camera_unchanged \
+            sheet_docking_and_settings_only_change_ui_preferences
+          do
+            if python3 "$runner" "$bins" solidcraft_ui_egui "$name" "../t94-gui-report/$name.log" pass 1 > "../t94-gui-report/$name.outcome.txt" 2>&1; then
+              echo "T94_PASS=$name" | tee -a ../t94-gui-report/summary.txt
+            else
+              echo "T94_FAIL=$name" | tee -a ../t94-gui-report/summary.txt
+              tail -85 "../t94-gui-report/$name.outcome.txt"
+              errors=$((errors+1))
+            fi
+          done
+          if [ "$errors" -ne 0 ]; then
+            echo "FINAL=T94_GUI_DIAGNOSTIC_INCOMPLETE_CHECK_CASE_LOGS" | tee -a ../t94-gui-report/summary.txt
+            exit 1
+          fi
+          for name in 01-drawing-with-existing-document 02-dimension-option-panel 03-existing-lost-dimension-on-drawing-page; do
+            test -s "../t94-gui-report/ui-evidence/$name.json"
+          done
+          echo "FINAL=T94_NATIVE_GUI_DIAGNOSTIC_PASS_GUI_FEATURES_NOT_IMPLEMENTED" | tee -a ../t94-gui-report/summary.txt
+          echo "IMPORTANT: A green diagnostic confirms UNIMPLEMENTED GUI and missing user-visible lost-dimension warning; it is NOT a successful GUI feature acceptance." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload native UI text evidence, original test logs and diff (even if red)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t94-native-gui-usability-diagnostic
+          path: t94-gui-report/
+          retention-days: 14
+          if-no-files-found: warn
