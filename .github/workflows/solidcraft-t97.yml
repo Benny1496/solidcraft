@@ -1,0 +1,135 @@
+name: "SolidCraft Test 97 - Dimension warning repair workflow"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t97
+    paths:
+      - .github/workflows/solidcraft-t97.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-t97-status-repair
+  cancel-in-progress: false
+
+jobs:
+  repair-flow:
+    name: "T97 / 4 new warning-repair integrations plus 4 upstream controls"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: "c8cbe43dd9ded5b6c0f5fbd0db750bb673bd0fa7"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Guard fork and independent test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t97"
+
+      - name: Checkout isolated test overlay without persistent credentials
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout pinned upstream read-only
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: c8cbe43dd9ded5b6c0f5fbd0db750bb673bd0fa7
+          path: src
+          persist-credentials: false
+
+      - name: Inject tests only in temporary upstream runner checkout
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../t97-report
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 ../overlay/tests/fixtures/t97/inject_tests.py | tee ../t97-report/injection.log
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 1
+          test "$(git diff --name-only)" = "crates/engine/src/cmd/drawing_dimension_tests.rs"
+          printf "TEST=97\nUPSTREAM_SHA=%s\nTRACK=WARNING_REPAIR_ENGINE_TO_UI_CONTRACT\nGUI_IMPLEMENTED=NO\n" "$SOURCE_SHA" > ../t97-report/summary.txt
+
+      - name: Set Rust compiler and linters
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache independent T97 build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t97-status-repair
+          cache-on-failure: true
+
+      - name: Format and lint isolated engine tests
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t97-report/fmt-apply.log 2>&1
+          cargo fmt --all -- --check > ../t97-report/fmt-check.log 2>&1 || { tail -100 ../t97-report/fmt-check.log; exit 1; }
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 1
+          test "$(git diff --name-only)" = "crates/engine/src/cmd/drawing_dimension_tests.rs"
+          git diff > ../t97-report/test-only.patch
+          timeout 32m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t97-report/clippy.log 2>&1 || { tail -130 ../t97-report/clippy.log; exit 1; }
+          echo "FMT_CLIPPY=PASS" >> ../t97-report/summary.txt
+
+      - name: Compile engine test binary once
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 61m cargo test -p solidcraft-engine --profile ci --locked --no-run --message-format=json > ../t97-report/build-artifacts.jsonl 2> ../t97-report/compile.log || { tail -130 ../t97-report/compile.log; exit 1; }
+          echo "ENGINE_COMPILED=PASS" >> ../t97-report/summary.txt
+
+      - name: Run eight independent repair-flow checks and capture each result
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          binaries=../t97-report/build-artifacts.jsonl
+          failures=0
+          for item in \
+            t97_lost_warning_candidate_repair_undo_redo_is_consistent \
+            t97_ambiguous_warning_waits_for_explicit_candidate_choice \
+            t97_invalid_repair_preserves_lost_warning_and_document \
+            t97_repair_one_dimension_does_not_touch_another \
+            fillet_then_repair_reads_again_with_the_same_id_and_place \
+            a_repair_is_one_undo_step_and_undone_is_lost_again \
+            a_bad_repair_pick_changes_nothing \
+            an_ambiguous_length_is_repaired_to_one_piece
+          do
+            if python3 "$runner" "$binaries" solidcraft_engine "$item" "../t97-report/$item.log" pass 1 > "../t97-report/$item.outcome.txt" 2>&1; then
+              echo "T97_PASS=$item" | tee -a ../t97-report/summary.txt
+            else
+              echo "T97_FAIL=$item" | tee -a ../t97-report/summary.txt
+              tail -100 "../t97-report/$item.outcome.txt"
+              failures=$((failures+1))
+            fi
+          done
+          if [ "$failures" -gt 0 ]; then
+            printf "FINAL=T97_REPAIR_FLOW_NEEDS_REVIEW\nFAILURES=%s\n" "$failures" | tee -a ../t97-report/summary.txt
+            exit 1
+          fi
+          echo "FINAL=T97_ALL_8_REPAIR_FLOW_CHECKS_PASS_NOT_GUI_E2E" | tee -a ../t97-report/summary.txt
+          echo "T97 is an engine-to-UI repair contract test, not a visual GUI end-to-end test." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve original logs and patch regardless of success
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t97-warning-repair-contract
+          path: t97-report/
+          retention-days: 14
+          if-no-files-found: warn
