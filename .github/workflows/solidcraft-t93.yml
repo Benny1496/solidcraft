@@ -1,0 +1,237 @@
+name: "SolidCraft Test 93 - open drawing, hole move/delete, save-reopen"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t93
+    paths:
+      - .github/workflows/solidcraft-t93.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-t93-four-acceptance-cases
+  cancel-in-progress: false
+
+jobs:
+  open-sheet:
+    name: "T93 / 1 - open-sheet update and model-edit guard"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: "ce252381bb91f87baa3d59126c618a2389c222ce"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Verify isolated fork branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t93"
+
+      - name: Checkout independent test harness
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout pinned official drawings read-only
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: ce252381bb91f87baa3d59126c618a2389c222ce
+          path: src
+          persist-credentials: false
+
+      - name: Add four tests ONLY in runner checkout
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t93-open-report
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 ../overlay/tests/fixtures/t93/inject_tests.py | tee ../t93-open-report/injection.log
+          git diff --check
+          printf "TEST=93\nTRACK=1_OPEN_DRAWING\nOFFICIAL_SHA=%s\n" "$SOURCE_SHA" > ../t93-open-report/summary.txt
+
+      - name: Set Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache compilation
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t93-open-sheet
+          cache-on-failure: true
+
+      - name: Format and lint instrumented engine tests
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t93-open-report/fmt-apply.log 2>&1
+          cargo fmt --all -- --check > ../t93-open-report/fmt-check.log 2>&1 || { tail -90 ../t93-open-report/fmt-check.log; exit 1; }
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 2
+          git diff > ../t93-open-report/isolated-test.patch
+          timeout 34m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t93-open-report/clippy.log 2>&1 || { tail -110 ../t93-open-report/clippy.log; exit 1; }
+          echo "FMT_CLIPPY=PASS" >> ../t93-open-report/summary.txt
+
+      - name: Compile engine test binary exactly once
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 66m cargo test -p solidcraft-engine --profile ci --locked --no-run --message-format=json > ../t93-open-report/build-artifacts.jsonl 2> ../t93-open-report/compile.log || { tail -100 ../t93-open-report/compile.log; exit 1; }
+          echo "ENGINE_COMPILED=PASS" >> ../t93-open-report/summary.txt
+
+      - name: Execute open-sheet behavior and independent controls
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          bin=../t93-open-report/build-artifacts.jsonl
+          failures=0
+          for item in \
+            t93_open_sheet_guards_model_edits_and_restores_live_dimension \
+            model_and_drawing_commands_each_run_on_their_own_part \
+            a_view_drawn_again_reads_its_dimensions_text_without_waiting
+          do
+            if python3 "$runner" "$bin" solidcraft_engine "$item" "../t93-open-report/$item.log" pass 1 > "../t93-open-report/$item.outcome.txt" 2>&1; then
+              echo "T93_PASS=$item" | tee -a ../t93-open-report/summary.txt
+            else
+              echo "T93_FAIL=$item" | tee -a ../t93-open-report/summary.txt
+              tail -80 "../t93-open-report/$item.outcome.txt"
+              failures=$((failures+1))
+            fi
+          done
+          if [ "$failures" -gt 0 ]; then
+            echo "FINAL=T93_OPEN_SHEET_NEEDS_REVIEW" | tee -a ../t93-open-report/summary.txt
+            exit 1
+          fi
+          echo "FINAL=T93_CASE_1_AND_TWO_CONTROLS_PASS" | tee -a ../t93-open-report/summary.txt
+
+      - name: Preserve original logs whether successful or not
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t93-case1-open-sheet
+          path: t93-open-report/
+          retention-days: 14
+          if-no-files-found: warn
+
+  hole-dimensions:
+    name: "T93 / 2-4 - moved/deleted hole and persisted dimension values"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: "ce252381bb91f87baa3d59126c618a2389c222ce"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Verify isolated fork branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t93"
+
+      - name: Checkout independent test harness
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout same pinned official drawings source read-only
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: ce252381bb91f87baa3d59126c618a2389c222ce
+          path: src
+          persist-credentials: false
+
+      - name: Add four tests ONLY in runner checkout
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t93-hole-report
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 ../overlay/tests/fixtures/t93/inject_tests.py | tee ../t93-hole-report/injection.log
+          git diff --check
+          printf "TEST=93\nTRACK=2_HOLE_MOVE_3_DELETE_4_SAVE_REOPEN\nOFFICIAL_SHA=%s\n" "$SOURCE_SHA" > ../t93-hole-report/summary.txt
+
+      - name: Set Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache compilation
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t93-hole-dimensions
+          cache-on-failure: true
+
+      - name: Format and lint instrumented engine tests
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t93-hole-report/fmt-apply.log 2>&1
+          cargo fmt --all -- --check > ../t93-hole-report/fmt-check.log 2>&1 || { tail -90 ../t93-hole-report/fmt-check.log; exit 1; }
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 2
+          git diff > ../t93-hole-report/isolated-test.patch
+          timeout 34m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t93-hole-report/clippy.log 2>&1 || { tail -110 ../t93-hole-report/clippy.log; exit 1; }
+          echo "FMT_CLIPPY=PASS" >> ../t93-hole-report/summary.txt
+
+      - name: Compile engine test binary exactly once
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 66m cargo test -p solidcraft-engine --profile ci --locked --no-run --message-format=json > ../t93-hole-report/build-artifacts.jsonl 2> ../t93-hole-report/compile.log || { tail -100 ../t93-hole-report/compile.log; exit 1; }
+          echo "ENGINE_COMPILED=PASS" >> ../t93-hole-report/summary.txt
+
+      - name: Run cases 2, 3, 4 independently; preserve failure evidence
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          bin=../t93-hole-report/build-artifacts.jsonl
+          failures=0
+          for item in \
+            t93_moving_hole_updates_real_linear_dimension_value \
+            t93_deleting_hole_marks_attached_dimension_lost_not_current \
+            t93_hole_measure_and_lost_warning_survive_file_save_and_reopen \
+            a_linear_dimension_measures_from_a_holes_centre \
+            a_lost_dimension_keeps_its_last_good_value_after_reopening
+          do
+            if python3 "$runner" "$bin" solidcraft_engine "$item" "../t93-hole-report/$item.log" pass 1 > "../t93-hole-report/$item.outcome.txt" 2>&1; then
+              echo "T93_PASS=$item" | tee -a ../t93-hole-report/summary.txt
+            else
+              echo "T93_FAIL=$item" | tee -a ../t93-hole-report/summary.txt
+              tail -90 "../t93-hole-report/$item.outcome.txt"
+              failures=$((failures+1))
+            fi
+          done
+          if [ "$failures" -gt 0 ]; then
+            echo "FINAL=T93_HOLE_MEASURE_CASES_NEED_REVIEW" | tee -a ../t93-hole-report/summary.txt
+            exit 1
+          fi
+          echo "FINAL=T93_HOLE_MOVE_DELETE_PERSIST_AND_CONTROLS_PASS" | tee -a ../t93-hole-report/summary.txt
+
+      - name: Preserve original logs whether successful or not
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t93-cases2to4-holes
+          path: t93-hole-report/
+          retention-days: 14
+          if-no-files-found: warn
