@@ -1,0 +1,223 @@
+name: "SolidCraft Test 92 - parallel export fix and 3D-to-2D policy"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t92
+    paths:
+      - .github/workflows/solidcraft-t92.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-t92-two-tracks
+  cancel-in-progress: false
+
+jobs:
+  part-a-background-export:
+    name: "T92 A - independently verify merged held-drawing export fix"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: "cee33def2852bd1d714a4d9a9ae8ae8f4a68307a"
+      FIX_MERGE_SHA: "f1153f462dc24561ba0eaf850f07a8c89a1bcaee"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Assert own fork and test-only branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t92"
+
+      - name: Checkout isolated harness
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout pinned official drawings including PR10431
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: cee33def2852bd1d714a4d9a9ae8ae8f4a68307a
+          fetch-depth: 0
+          path: src
+          persist-credentials: false
+
+      - name: Confirm exact source and merged fix ancestry
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../t92-a-report
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$FIX_MERGE_SHA" HEAD
+          grep -F "fn a_held_deferred_drawing_exports_the_same_from_a_scratch_copy()" crates/engine/src/drawing_scene_tests.rs
+          grep -F "scratch_as_shown" crates/engine/src/drawing_scene.rs
+          printf "TEST=92\nTRACK=A_BACKGROUND_EXPORT\nDRAWINGS_SHA=%s\nPR10431_MERGE=%s\nFIX_INCLUDED=YES\n" "$SOURCE_SHA" "$FIX_MERGE_SHA" > ../t92-a-report/summary.txt
+          git log -3 --oneline > ../t92-a-report/source-log.txt
+
+      - name: Install Rust with clippy and rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Reuse independent engine compilation cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t92-a-export
+          cache-on-failure: true
+
+      - name: Check formatting and engine Clippy
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../t92-a-report/format.log 2>&1 || { tail -60 ../t92-a-report/format.log; exit 1; }
+          timeout 35m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t92-a-report/clippy.log 2>&1 || { tail -100 ../t92-a-report/clippy.log; exit 1; }
+          echo "FMT_CLIPPY=PASS" >> ../t92-a-report/summary.txt
+
+      - name: Compile native engine tests once
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 67m cargo test -p solidcraft-engine --profile ci --locked --no-run --message-format=json > ../t92-a-report/build-artifacts.jsonl 2> ../t92-a-report/compile.log || { tail -120 ../t92-a-report/compile.log; exit 1; }
+          echo "ENGINE_COMPILED=PASS" >> ../t92-a-report/summary.txt
+
+      - name: Verify former 89b bug case now passes plus adjacent export controls
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          artifact=../t92-a-report/build-artifacts.jsonl
+          python3 "$runner" "$artifact" solidcraft_engine a_held_deferred_drawing_exports_the_same_from_a_scratch_copy ../t92-a-report/held-export-fix.log pass 1 | tee ../t92-a-report/held-outcome.txt
+          python3 "$runner" "$artifact" solidcraft_engine a_deferred_drawing_keeps_its_lines_until_it_is_updated ../t92-a-report/deferred-update-control.log pass 1 | tee ../t92-a-report/deferred-outcome.txt
+          python3 "$runner" "$artifact" solidcraft_engine a_sheet_exports_on_its_paper ../t92-a-report/paper-export-control.log pass 1 | tee ../t92-a-report/paper-outcome.txt
+          python3 "$runner" "$artifact" solidcraft_engine a_cancelled_png_export_writes_no_file ../t92-a-report/export-cancel-control.log pass 1 | tee ../t92-a-report/cancel-outcome.txt
+          echo "FINAL=T92_A_MERGED_EXPORT_FIX_FOUR_ENGINE_CONTROLS_PASS" | tee -a ../t92-a-report/summary.txt
+          echo "Previous negative evidence: https://github.com/Benny1496/solidcraft/actions/runs/42278762187 (Test 89b, older code)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Now verified on pinned official drawings including PR10431, no product changes." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep original source and test logs even when a stage fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t92-a-background-export
+          path: t92-a-report/
+          retention-days: 14
+          if-no-files-found: warn
+
+  part-b-automatic-dimensions:
+    name: "T92 B - automatic vs deferred 3D to 2D and dimension references"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: "cee33def2852bd1d714a4d9a9ae8ae8f4a68307a"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Assert own fork and test-only branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t92"
+
+      - name: Checkout independent test harness
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout same pinned official drawings source read-only
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: cee33def2852bd1d714a4d9a9ae8ae8f4a68307a
+          path: src
+          persist-credentials: false
+
+      - name: Inject native automatic/deferred dimension policy regression only in CI
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t92-b-report/visual
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          printf "TEST=92\nTRACK=B_AUTO_VS_DEFERRED_3D_TO_2D\nDRAWINGS_SHA=%s\n" "$SOURCE_SHA" > ../t92-b-report/summary.txt
+          python3 ../overlay/tests/fixtures/t92/inject_policy.py | tee ../t92-b-report/injection.log
+          git diff --check
+          test "$(git diff --name-only)" = "crates/engine/src/drawing_scene_tests.rs"
+          echo "INJECTION=PASS" >> ../t92-b-report/summary.txt
+
+      - name: Install Rust with clippy and rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache engine and egui tests separately from A
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t92-b-auto-dimensions
+          cache-on-failure: true
+
+      - name: Format and check isolated regression test
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t92-b-report/format-apply.log 2>&1
+          cargo fmt --all -- --check > ../t92-b-report/format.log 2>&1 || { tail -90 ../t92-b-report/format.log; exit 1; }
+          git diff --check
+          test "$(git diff --name-only)" = "crates/engine/src/drawing_scene_tests.rs"
+          git diff > ../t92-b-report/test-only.patch
+          timeout 35m cargo clippy -p solidcraft-engine -p solidcraft-ui-egui --all-targets --profile ci --locked -- -D warnings > ../t92-b-report/clippy.log 2>&1 || { tail -120 ../t92-b-report/clippy.log; exit 1; }
+          echo "FMT_CLIPPY=PASS" >> ../t92-b-report/summary.txt
+
+      - name: Compile engine and egui Rust test executables only once
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 67m cargo test -p solidcraft-engine -p solidcraft-ui-egui --profile ci --locked --no-run --message-format=json > ../t92-b-report/build-artifacts.jsonl 2> ../t92-b-report/compile.log || { tail -120 ../t92-b-report/compile.log; exit 1; }
+          echo "TEST_BINARIES_COMPILED=PASS" >> ../t92-b-report/summary.txt
+
+      - name: Verify true automatic vs held drawing, dimension status and UI controls
+        working-directory: src
+        shell: bash
+        env:
+          SOLIDCRAFT_T92_EVIDENCE_DIR: ${{ github.workspace }}/t92-b-report/visual
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          artifact=../t92-b-report/build-artifacts.jsonl
+          python3 "$runner" "$artifact" solidcraft_engine t92_automatic_vs_deferred_3d_to_2d_dimension_updates ../t92-b-report/auto-vs-deferred.log pass 1 | tee ../t92-b-report/policy-outcome.txt
+          python3 "$runner" "$artifact" solidcraft_engine a_deferred_drawing_closed_during_a_change_keeps_its_dimensions_until_it_is_updated ../t92-b-report/dimension-deferred-control.log pass 1 | tee ../t92-b-report/deferred-outcome.txt
+          python3 "$runner" "$artifact" solidcraft_engine a_lost_dimension_leaves_the_sheet_drawn_and_is_listed ../t92-b-report/lost-dimension-control.log pass 1 | tee ../t92-b-report/lost-outcome.txt
+          python3 "$runner" "$artifact" solidcraft_engine a_dimension_says_its_feature_failed_or_is_suppressed ../t92-b-report/failed-feature-control.log pass 1 | tee ../t92-b-report/failed-outcome.txt
+          python3 "$runner" "$artifact" solidcraft_engine after_a_model_change_the_last_scene_shows_until_its_views_are_drawn_again ../t92-b-report/model-change-control.log pass 1 | tee ../t92-b-report/scene-outcome.txt
+          python3 "$runner" "$artifact" solidcraft_ui_egui ticks_draw_the_sheet_beside_the_window ../t92-b-report/egui-view-control.log pass 1 | tee ../t92-b-report/egui-outcome.txt
+          for file in automatic-before.svg automatic-after.svg deferred-before.svg deferred-held-before-manual-update.svg deferred-after.svg; do
+            test -s "../t92-b-report/visual/$file"
+          done
+          cmp -s ../t92-b-report/visual/automatic-before.svg ../t92-b-report/visual/automatic-after.svg && { echo "Auto SVG did not update"; exit 1; }
+          cmp -s ../t92-b-report/visual/deferred-before.svg ../t92-b-report/visual/deferred-held-before-manual-update.svg || { echo "Held SVG unexpectedly updated"; exit 1; }
+          cmp -s ../t92-b-report/visual/deferred-before.svg ../t92-b-report/visual/deferred-after.svg && { echo "Deferred drawing did not update on demand"; exit 1; }
+          sha256sum ../t92-b-report/visual/*.svg > ../t92-b-report/visual-sha256.txt
+          echo "FINAL=T92_B_AUTOMATIC_DEFERRED_DIMENSIONS_AND_EGUI_PASS" | tee -a ../t92-b-report/summary.txt
+          echo "These are native rendered sheet SVGs, NOT an interactive browser UI E2E." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve SVG snapshots and original logs even if a check fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t92-b-auto-deferred-dimensions
+          path: t92-b-report/
+          retention-days: 14
+          if-no-files-found: warn
