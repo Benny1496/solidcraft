@@ -1,0 +1,96 @@
+name: "SolidCraft Test 91b - corrected evidence re-audit only"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t91b
+    paths:
+      - .github/workflows/solidcraft-t91b-re-audit.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: solidcraft-test91b-audit-corrected
+  cancel-in-progress: false
+
+jobs:
+  original-engine-re-audit:
+    name: "T91b re-audit original 3772 test outcomes, no rerun"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ORIGINAL_SHA256: "d88256f4230f460ef0379cf31fdb1ae60f625475e33916383e54d4d5df31f5d8"
+      PINNED_HEAD: "e571b8998e6217787a92a25ceb565ece736ebf2d"
+    steps:
+      - name: Guard isolated fork and branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t91b"
+
+      - name: Checkout isolated audit script
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout exact PR11881 commit to read authoritative baseline
+        uses: actions/checkout@v4
+        with:
+          repository: Benny1496/solidcraft
+          ref: e571b8998e6217787a92a25ceb565ece736ebf2d
+          path: src
+          persist-credentials: false
+
+      - name: Fetch ORIGINAL T91 engine artifact ZIP and verify its GitHub SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p t91b-audit-report/original
+          test "$(git -C src rev-parse HEAD)" = "$PINNED_HEAD"
+          archive=t91b-audit-report/original-engine.zip
+          curl --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Benny1496/solidcraft/actions/artifacts/13549116265/zip" \
+            -o "$archive"
+          actual="$(sha256sum "$archive" | cut -d' ' -f1)"
+          test "$actual" = "$ORIGINAL_SHA256" || {
+            echo "::error::Original T91 ZIP SHA mismatch - refusing unverified evidence"
+            exit 1
+          }
+          test "$(stat -c %s "$archive")" = 166666
+          unzip -q "$archive" -d t91b-audit-report/original
+          for f in engine-all-tests.log engine-tests-list.txt engine-evaluation.json; do
+            test -s "t91b-audit-report/original/$f"
+          done
+          printf "ORIGINAL_RUN=42304157430\nORIGINAL_ARTIFACT_ID=13549116265\nORIGINAL_ZIP_SHA256=%s\nORIGINAL_ZIP_VERIFIED=PASS\n" "$actual" | tee t91b-audit-report/summary.txt
+          sha256sum t91b-audit-report/original/engine-{all-tests.log,tests-list.txt,evaluation.json} > t91b-audit-report/extracted-evidence-sha256.txt
+
+      - name: Re-audit all original Rust test outcomes with reason-aware ignored parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 overlay/tests/fixtures/t91b/audit_original_t91.py \
+            t91b-audit-report/original src t91b-audit-report \
+            | tee t91b-audit-report/audit.log
+          grep -F 'FINAL=T91B_ENGINE_REAUDIT_BASELINE_VERIFIED_0_NEW_REGRESSIONS' t91b-audit-report/audit.log
+          echo 'FINAL=T91B_ORIGINAL_ENGINE_REAUDIT_PASS' | tee -a t91b-audit-report/summary.txt
+          echo 'Re-audit of unchanged original Test #91 logs; 3772 unit tests were NOT re-executed.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload audit with original evidence logs, even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t91b-engine-re-audit
+          path: |
+            t91b-audit-report/summary.txt
+            t91b-audit-report/audit.log
+            t91b-audit-report/t91b-engine-audit.json
+            t91b-audit-report/t91b-ignored-tests.txt
+            t91b-audit-report/extracted-evidence-sha256.txt
+          retention-days: 14
+          if-no-files-found: warn
