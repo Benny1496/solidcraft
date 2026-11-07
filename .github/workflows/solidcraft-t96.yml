@@ -1,0 +1,134 @@
+name: "SolidCraft Test 96 - Drawing warning status contract"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t96
+    paths:
+      - .github/workflows/solidcraft-t96.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-t96-warning-contract
+  cancel-in-progress: false
+
+jobs:
+  warning-contract:
+    name: "T96 / 4 engine-to-UI warning states + 3 upstream controls"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: "c8cbe43dd9ded5b6c0f5fbd0db750bb673bd0fa7"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Verify isolated fork branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t96"
+
+      - name: Checkout own test-fixture overlay
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout pinned official drawings without write credentials
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: c8cbe43dd9ded5b6c0f5fbd0db750bb673bd0fa7
+          path: src
+          persist-credentials: false
+
+      - name: Verify upstream commit and inject T96 tests only in runner
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t96-report
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 ../overlay/tests/fixtures/t96/inject_tests.py | tee ../t96-report/injection.log
+          test "$(git diff --name-only | wc -l)" -eq 1
+          test "$(git diff --name-only)" = "crates/engine/src/drawing_scene_tests.rs"
+          git diff --check
+          printf "TEST=96\nUPSTREAM_SHA=%s\nTRACK=ENGINE_TO_GUI_WARNING_CONTRACT\nGUI_IMPLEMENTED=NO\n" "$SOURCE_SHA" > ../t96-report/summary.txt
+
+      - name: Rust toolchain, format and lint
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache independent engine build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t96-warning-contract
+          cache-on-failure: true
+
+      - name: Format, check isolated diff and run Clippy
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t96-report/fmt-apply.log 2>&1
+          cargo fmt --all -- --check > ../t96-report/fmt-check.log 2>&1 || { tail -100 ../t96-report/fmt-check.log; exit 1; }
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 1
+          test "$(git diff --name-only)" = "crates/engine/src/drawing_scene_tests.rs"
+          git diff > ../t96-report/ci-only-warning-tests.patch
+          timeout 32m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t96-report/clippy.log 2>&1 || { tail -120 ../t96-report/clippy.log; exit 1; }
+          echo "FMT_CLIPPY=PASS" >> ../t96-report/summary.txt
+
+      - name: Compile engine test binary exactly once
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 60m cargo test -p solidcraft-engine --profile ci --locked --no-run --message-format=json > ../t96-report/build-artifacts.jsonl 2> ../t96-report/compile.log || { tail -130 ../t96-report/compile.log; exit 1; }
+          echo "ENGINE_COMPILED=PASS" >> ../t96-report/summary.txt
+
+      - name: Run four new warning-contract tests and three independent controls
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          binaries=../t96-report/build-artifacts.jsonl
+          failures=0
+          for item in \
+            t96_clean_dimension_has_no_false_warning \
+            t96_deferred_dimension_only_waits_while_views_current \
+            t96_deferred_model_change_marks_dimension_stale_not_lost \
+            t96_deleted_feature_lost_has_reason_and_no_current_value \
+            status_says_where_each_dimension_stands \
+            status_lists_a_held_views_dimensions_with_it \
+            status_lists_dimensions_out_of_date_whose_views_are_current
+          do
+            if python3 "$runner" "$binaries" solidcraft_engine "$item" "../t96-report/$item.log" pass 1 > "../t96-report/$item.outcome.txt" 2>&1; then
+              echo "T96_PASS=$item" | tee -a ../t96-report/summary.txt
+            else
+              echo "T96_FAIL=$item" | tee -a ../t96-report/summary.txt
+              tail -90 "../t96-report/$item.outcome.txt"
+              failures=$((failures+1))
+            fi
+          done
+          if [ "$failures" -ne 0 ]; then
+            printf "FINAL=T96_WARNING_CONTRACT_FAILED\nFAILURE_COUNT=%s\n" "$failures" | tee -a ../t96-report/summary.txt
+            exit 1
+          fi
+          echo "FINAL=T96_ALL_7_ENGINE_WARNING_CONTRACT_CHECKS_PASS_NOT_GUI_E2E" | tee -a ../t96-report/summary.txt
+          echo "T96 tests the Engine-to-GUI contract only, not visible UI warnings." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save original logs, source patch and results even if a prior step fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t96-warning-state-contract
+          path: t96-report/
+          retention-days: 14
+          if-no-files-found: warn
