@@ -1,0 +1,142 @@
+name: "SolidCraft Test 95 - sphere cone cylinder dimensions and prior hole regressions"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t95
+    paths:
+      - .github/workflows/solidcraft-t95.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-t95-measurements-7d4befc1
+  cancel-in-progress: false
+
+jobs:
+  dimensions-regression:
+    name: "T95 new sphere/cone/cylinder drawing measures plus T93 legacy hole cases"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: "7d4befc1b974078f5f08cb87ccfdb7261445a10d"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Verify own fork and isolated test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t95"
+
+      - name: Checkout isolated test harness
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout exact new upstream drawings commit read-only
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 7d4befc1b974078f5f08cb87ccfdb7261445a10d
+          path: src
+          persist-credentials: false
+
+      - name: Verify pinned source and add previously proven T93 checks only to runner
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t95-report
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          grep -F "fn a_spheres_size_is_its_diameter_when_whole_and_its_radius_when_part()" crates/engine/src/cmd/drawing_dimension_tests.rs
+          grep -F "fn a_cones_angle_is_read_between_its_silhouettes()" crates/engine/src/cmd/drawing_dimension_tests.rs
+          grep -F "fn a_cylinders_diameter_is_read_between_its_silhouettes()" crates/engine/src/cmd/drawing_dimension_tests.rs
+          python3 ../overlay/tests/fixtures/t93/inject_tests.py | tee ../t95-report/injection.log
+          git diff --check
+          printf "TEST=95\nUPSTREAM_SHA=%s\nFOCUS=SPHERE_CONE_CYLINDER_AND_T93_HOLE_REGRESSIONS\n" "$SOURCE_SHA" > ../t95-report/summary.txt
+
+      - name: Rust toolchain, rustfmt and Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache independently from prior CI test
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t95-new-dimension-kinds
+          cache-on-failure: true
+
+      - name: Format test-only changes, clippy and check diff
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t95-report/fmt-apply.log 2>&1
+          cargo fmt --all -- --check > ../t95-report/fmt-check.log 2>&1 || { tail -80 ../t95-report/fmt-check.log; exit 1; }
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 2
+          git diff > ../t95-report/ci-only-test.patch
+          timeout 32m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t95-report/clippy.log 2>&1 || { tail -110 ../t95-report/clippy.log; exit 1; }
+          echo "FMT_CLIPPY=PASS" >> ../t95-report/summary.txt
+
+      - name: Compile new official engine exactly once with T93 fixtures
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 65m cargo test -p solidcraft-engine --profile ci --locked --no-run --message-format=json > ../t95-report/build-artifacts.jsonl 2> ../t95-report/compile.log || { tail -125 ../t95-report/compile.log; exit 1; }
+          echo "TEST_BINARY_COMPILED=PASS" >> ../t95-report/summary.txt
+
+      - name: Run six new shape tests plus six proven numeric and lost-reference controls
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          binaries=../t95-report/build-artifacts.jsonl
+          failures=0
+          # 6 NEW: geometry/mapping to paper on current official drawings.
+          # 3 LEGACY: prior verified hole move/delete/persistence from T93.
+          # 3 CONTROLS: old dimension number and hidden-reference invariants.
+          for item in \
+            a_cylinders_diameter_is_read_between_its_silhouettes \
+            a_spheres_size_is_its_diameter_when_whole_and_its_radius_when_part \
+            a_cones_angle_is_read_between_its_silhouettes \
+            a_spheres_size_is_drawn_as_its_label_says \
+            a_cones_angle_is_drawn_between_its_silhouettes \
+            a_cylinder_is_dimensioned_across_its_silhouettes \
+            t93_moving_hole_updates_real_linear_dimension_value \
+            t93_deleting_hole_marks_attached_dimension_lost_not_current \
+            t93_hole_measure_and_lost_warning_survive_file_save_and_reopen \
+            a_linear_dimension_measures_from_a_holes_centre \
+            a_lost_dimension_keeps_its_last_good_value_after_reopening \
+            a_dimension_is_refused_on_a_part_its_view_leaves_out
+          do
+            if python3 "$runner" "$binaries" solidcraft_engine "$item" "../t95-report/$item.log" pass 1 > "../t95-report/$item.outcome.txt" 2>&1; then
+              printf "T95_PASS=%s\n" "$item" | tee -a ../t95-report/summary.txt
+            else
+              printf "T95_FAIL=%s\n" "$item" | tee -a ../t95-report/summary.txt
+              tail -85 "../t95-report/$item.outcome.txt"
+              failures=$((failures+1))
+            fi
+          done
+          if [ "$failures" -ne 0 ]; then
+            printf "FINAL=T95_SHAPE_DIMENSIONS_OR_PREVIOUS_HOLE_REGRESSION_FAILED\nFAILURE_COUNT=%s\n" "$failures" | tee -a ../t95-report/summary.txt
+            exit 1
+          fi
+          echo "FINAL=T95_ALL_12_NEW_AND_LEGACY_DIMENSION_TESTS_PASS" | tee -a ../t95-report/summary.txt
+          echo "T95 validates native engine drawing dimensions at new upstream commit, NOT an implemented GUI or browser E2E." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve original test reports on success or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t95-shape-and-old-hole-dimension-regressions
+          path: t95-report/
+          retention-days: 14
+          if-no-files-found: warn
