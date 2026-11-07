@@ -51,11 +51,20 @@ assert len(listed) == int(running.group(1)), "Test list and Rust start count div
 assert sum(totals.values()) == len(listed), f"Rust's own totals inconsistent: {totals} vs {len(listed)}"
 matches = {}
 duplicates = []
+normalized_should_panic = []
 for line in log.splitlines():
     parsed = parse(line)
     if parsed is None:
         continue
     name, status = parsed
+    # libtest prints a display suffix " - should panic" for #[should_panic] cases;
+    # its --list entry omits the suffix. Only normalize when the unsuffixed
+    # exact name is in the original enumerated list, never remove arbitrary text.
+    if name not in listed and name.endswith(" - should panic"):
+        stripped = name.removesuffix(" - should panic")
+        if stripped in listed:
+            normalized_should_panic.append({"printed": name, "enumerated": stripped})
+            name = stripped
     if name in matches:
         duplicates.append(name)
     matches[name] = status
@@ -87,6 +96,7 @@ report = {
     "unaccounted_for": missing,
     "outcomes_without_enumeration": unlisted,
     "duplicated_outcome_names": duplicates,
+    "normalized_should_panic_display_suffixes": normalized_should_panic,
     "prior_evaluator_missing": old_evaluation.get("missing", []),
 }
 (output / "t91b-engine-audit.json").write_text(json.dumps(report,indent=2,ensure_ascii=False)+"\n",encoding="utf-8")
