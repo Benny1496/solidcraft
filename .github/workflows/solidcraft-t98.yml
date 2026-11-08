@@ -1,0 +1,135 @@
+name: "SolidCraft Test 98 - Native Drawing sheet UI and dimension-warning gap"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t98
+    paths:
+      - .github/workflows/solidcraft-t98.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-t98-native-drawing-ui
+  cancel-in-progress: false
+
+jobs:
+  native-sheet-ui:
+    name: "T98 / native egui after 3D edits + D07/D26 gap diagnostics"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: "84ef88b10e394c9ea9f90459c242e2033c6f7133"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Require isolated fork test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t98"
+
+      - name: Read-only checkout of test overlay
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Read-only checkout of Loohi PR 13211 head
+        uses: actions/checkout@v4
+        with:
+          repository: Loohi/solidcraft
+          ref: 84ef88b10e394c9ea9f90459c242e2033c6f7133
+          path: src
+          persist-credentials: false
+
+      - name: Inject only T98 tests in temporary runner and record actual target
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../t98-report
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 ../overlay/tests/fixtures/t98/inject_tests.py | tee ../t98-report/injection.log
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 1
+          test "$(git diff --name-only)" = "crates/ui-egui/src/drawing_sheet_page_tests.rs"
+          printf "TEST=98\nSOURCE_REPO=Loohi/solidcraft\nPR=13211\nPR_HEAD_SHA=%s\nTEST_CLASS=NATIVE_EGUI_1_POSITIVE_AND_2_GAPS\nD07_D26_STATUS_CARD=NOT_YET_IMPLEMENTED\n" "$SOURCE_SHA" > ../t98-report/summary.txt
+
+      - name: Rust stable formatter and Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache T98 independent native UI build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t98-loohi-native-sheet
+          cache-on-failure: true
+
+      - name: Check Rust format and Clippy on real GUI and engine
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t98-report/fmt-apply.log 2>&1
+          cargo fmt --all -- --check > ../t98-report/fmt-check.log 2>&1 || { tail -100 ../t98-report/fmt-check.log; exit 1; }
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 1
+          test "$(git diff --name-only)" = "crates/ui-egui/src/drawing_sheet_page_tests.rs"
+          git diff > ../t98-report/runner-only-t98.patch
+          timeout 35m cargo clippy -p solidcraft-engine -p solidcraft-ui-egui --all-targets --profile ci --locked -- -D warnings > ../t98-report/clippy.log 2>&1 || { tail -120 ../t98-report/clippy.log; exit 1; }
+          echo "RUSTFMT_CLIPPY=PASS" >> ../t98-report/summary.txt
+
+      - name: Compile native ui-egui lib tests once
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 65m cargo test -p solidcraft-ui-egui --lib --profile ci --locked --no-run --message-format=json > ../t98-report/build-artifacts.jsonl 2> ../t98-report/compile.log || { tail -160 ../t98-report/compile.log; exit 1; }
+          echo "NATIVE_EGUI_TEST_BINARY_COMPILED=PASS" >> ../t98-report/summary.txt
+
+      - name: Execute three new native UI cases plus four existing controls
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          binaries=../t98-report/build-artifacts.jsonl
+          failures=0
+          for item in \
+            t98_native_sheet_after_3d_model_edit_keeps_updated_dimension \
+            t98_diagnostic_deferred_dimension_only_missing_from_sheet_page \
+            t98_diagnostic_lost_dimension_has_no_visible_repair_card_yet \
+            the_plate_sheet_draws_its_lines_and_text \
+            a_views_state_is_in_words \
+            fit_sheet_shows_the_whole_sheet_and_zoom_stays_in_range \
+            no_drawing_open_shows_the_note
+          do
+            if python3 "$runner" "$binaries" solidcraft_ui_egui "$item" "../t98-report/$item.log" pass 1 > "../t98-report/$item.outcome.txt" 2>&1; then
+              echo "T98_TEST_PASS=$item" | tee -a ../t98-report/summary.txt
+            else
+              echo "T98_TEST_FAIL=$item" | tee -a ../t98-report/summary.txt
+              tail -100 "../t98-report/$item.outcome.txt"
+              failures=$((failures + 1))
+            fi
+          done
+          printf "T98_POSITIVE_EGUI_CASES=1\nT98_EXPECTED_GAP_DIAGNOSTICS=2\nT98_EXISTING_CONTROLS=4\n" | tee -a ../t98-report/summary.txt
+          if [ "$failures" -ne 0 ]; then
+            printf "FINAL=T98_REQUIRES_REVIEW\nFAILURES=%s\n" "$failures" | tee -a ../t98-report/summary.txt
+            exit 1
+          fi
+          echo "FINAL=T98_7_TESTS_PASS_WITH_2_KNOWN_UNIMPLEMENTED_DIMENSION_WARNING_GAPS" | tee -a ../t98-report/summary.txt
+          echo "One positive native egui 3D-to-sheet integration, two diagnostic gaps, four upstream controls. NOT a passing D07/D26 status card." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep original logs and runner patch on any outcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t98-native-sheet-and-warning-gaps
+          path: t98-report/
+          retention-days: 14
+          if-no-files-found: warn
