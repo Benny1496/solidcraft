@@ -1,0 +1,145 @@
+name: "SolidCraft Test 104 - native multi-dimension and safe repair regressions"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t104
+    paths:
+      - .github/workflows/solidcraft-t104.yml
+      - tests/fixtures/t104/**
+permissions:
+  contents: read
+concurrency:
+  group: solidcraft-t104-native-repair-safety
+  cancel-in-progress: false
+jobs:
+  multidimension-egui:
+    name: "T104 / six new native cases, T103 controls and Drawing suites"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: "84ef88b10e394c9ea9f90459c242e2033c6f7133"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Verify isolated fork and test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t104"
+      - name: Checkout fork fixtures without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout exact Loohi sheet PR revision read-only
+        uses: actions/checkout@v4
+        with:
+          repository: Loohi/solidcraft
+          ref: 84ef88b10e394c9ea9f90459c242e2033c6f7133
+          path: src
+          persist-credentials: false
+      - name: Inject proven T103 test-only panel and six additional T104 tests
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t104-report
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 ../overlay/tests/fixtures/t103/inject_tests.py | tee ../t104-report/inject.log
+          test "$(grep -c '^#\[test\]' ../overlay/tests/fixtures/t104/advanced_native_tests.rs)" -eq 6
+          cat ../overlay/tests/fixtures/t104/advanced_native_tests.rs >> crates/ui-egui/src/drawing_sheet_page_tests.rs
+          git diff --check
+          test "$(git diff --name-only | sort)" = "$(printf 'crates/ui-egui/src/drawing_sheet_page.rs\ncrates/ui-egui/src/drawing_sheet_page_tests.rs')"
+          test -f crates/ui-egui/src/t103_warning_poc.rs
+          printf 'TEST=104\nBASE=Loohi PR #13211\nHEAD_SHA=%s\nNEW_NATIVE_CASES=6\nSCOPE=RUNNER_ONLY_CFG_TEST\nPRODUCTION_UI_CHANGED=NO\n' "$SOURCE_SHA" > ../t104-report/summary.txt
+      - name: Install Rust stable, rustfmt and Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache build products
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t104-native-egui-multidimension
+          cache-on-failure: true
+      - name: Format and strictly lint native GUI and Engine
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t104-report/fmt.log 2>&1
+          cargo fmt --all -- --check > ../t104-report/fmt-check.log 2>&1 || { tail -100 ../t104-report/fmt-check.log; exit 1; }
+          git diff --check
+          test "$(git diff --name-only | sort)" = "$(printf 'crates/ui-egui/src/drawing_sheet_page.rs\ncrates/ui-egui/src/drawing_sheet_page_tests.rs')"
+          git diff > ../t104-report/runner-only-test-patch.diff
+          cp crates/ui-egui/src/t103_warning_poc.rs ../t104-report/runner-only-warning-poc.rs
+          timeout 42m cargo clippy -p solidcraft-engine -p solidcraft-ui-egui --all-targets --profile ci --locked -- -D warnings > ../t104-report/clippy.log 2>&1 || { tail -150 ../t104-report/clippy.log; exit 1; }
+          echo "RUSTFMT_CLIPPY=PASS" >> ../t104-report/summary.txt
+      - name: Compile native GUI and Engine library test binaries once
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 65m cargo test -p solidcraft-ui-egui -p solidcraft-engine --lib --profile ci --locked --no-run --message-format=json > ../t104-report/build-artifacts.jsonl 2> ../t104-report/compile.log || { tail -150 ../t104-report/compile.log; exit 1; }
+          echo "COMPILE=PASS" >> ../t104-report/summary.txt
+      - name: Run six new native GUI checks, T103 checks, and both full Drawing suites
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          binaries=../t104-report/build-artifacts.jsonl
+          failures=0
+          for item in \
+            t104_two_stale_dimensions_can_be_updated_with_one_explicit_click \
+            t104_lost_and_stale_never_silently_repair_a_lost_reference \
+            t104_clicked_repair_is_kept_when_drawing_closes_and_reopens_in_session \
+            t104_candidate_click_passes_the_exact_inspect_candidate \
+            t104_three_consecutive_repair_undo_redo_cycles_have_no_ghost_warning \
+            t104_status_matrix_preserves_id_reason_and_never_invents_current_value \
+            t103_native_update_button_clears_deferred_dimension_only_after_click \
+            t103_native_lost_edge_repair_candidate_click_undo_redo \
+            t103_native_no_repair_candidates_does_not_offer_false_action \
+            t103_native_selected_repair_does_not_touch_other_dimension \
+            t103_native_all_current_has_no_update_or_repair_buttons \
+            t103_warning_message_prioritises_lost_ambiguous_and_stale \
+            t103_warning_message_ignores_healthy_dimensions \
+            the_plate_sheet_draws_its_lines_and_text \
+            a_views_state_is_in_words \
+            fit_sheet_shows_the_whole_sheet_and_zoom_stays_in_range \
+            no_drawing_open_shows_the_note
+          do
+            if python3 "$runner" "$binaries" solidcraft_ui_egui "$item" "../t104-report/$item.log" pass 1 > "../t104-report/$item.outcome.txt" 2>&1; then
+              echo "PASS=$item" | tee -a ../t104-report/summary.txt
+            else
+              echo "FAIL=$item" | tee -a ../t104-report/summary.txt
+              tail -110 "../t104-report/$item.outcome.txt" || true
+              failures=$((failures+1))
+            fi
+          done
+          for spec in "solidcraft_ui_egui drawing 52" "solidcraft_engine drawing 350"; do
+            read -r crate needle minimum <<< "$spec"
+            if python3 "$runner" "$binaries" "$crate" "$needle" "../t104-report/suite-$crate.log" pass "$minimum" > "../t104-report/suite-$crate.outcome.txt" 2>&1; then
+              echo "SUITE_PASS=$crate" | tee -a ../t104-report/summary.txt
+            else
+              echo "SUITE_FAIL=$crate" | tee -a ../t104-report/summary.txt
+              tail -110 "../t104-report/suite-$crate.outcome.txt" || true
+              failures=$((failures+1))
+            fi
+          done
+          if [ "$failures" -ne 0 ]; then
+            echo "RESULT=T104_REQUIRES_INVESTIGATION; FAILURES=$failures" | tee -a ../t104-report/summary.txt
+            exit 1
+          fi
+          echo "RESULT=T104_SIX_NEW_PLUS_SEVEN_T103_FOUR_CONTROLS_AND_BOTH_DRAWING_SUITES_PASS" | tee -a ../t104-report/summary.txt
+          echo "Six T104 checks, seven T103 checks and four sheet controls plus complete native Drawing regressions. CI-only proof of concept; product UI unchanged." >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve original reports and runner-only code on every result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t104-native-multidimension-safety
+          path: t104-report/
+          retention-days: 14
+          if-no-files-found: warn
