@@ -5,6 +5,7 @@ on:
       - tests/solidcraft-t99
     paths:
       - .github/workflows/solidcraft-t99.yml
+      - tests/fixtures/t99/**
 
 permissions:
   contents: read
