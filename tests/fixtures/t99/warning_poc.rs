@@ -21,7 +21,7 @@ pub(super) fn disable() {
     EXPANDED.with(|a| a.set(false));
 }
 
-fn message(row: &Value) -> Option<Value> {
+pub(super) fn message(row: &Value) -> Option<Value> {
     let state = row["status"].as_str().unwrap_or("unknown");
     let outdated = row["out_of_date"] == true;
     let kind = match state {
@@ -31,7 +31,7 @@ fn message(row: &Value) -> Option<Value> {
         _ => return None,
     };
     let icon = match kind { "Lost" => "✕", "Ambiguous" => "⚠", _ => "⟳" };
-    let why = row["why"].as_str().filter(|s| !s.is_empty()).unwrap_or_else(|| if outdated { "Drawing is not up to date" } else { "Reference needs attention" });
+    let why = row["why"].as_str().filter(|s| !s.is_empty()).unwrap_or(if outdated { "Drawing is not up to date" } else { "Reference needs attention" });
     Some(json!({"dimension":row["dimension"],"kind":kind,"symbol":icon,"why":why}))
 }
 
@@ -41,7 +41,7 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) -> Value {
     if !ENABLED.with(Cell::get) { return Value::Null; }
     let status = match app.run("drawing.status", json!({})) {
         Ok(value) => value,
-        Err(e) => return json!({"error":e,"poc":true}),
+        Err(e) => return json!({"error":e.to_string(),"poc":true}),
     };
     let findings: Vec<Value> = status["dimensions"].as_array().map_or_else(Vec::new, |rows| rows.iter().filter_map(message).collect());
     let count = findings.len();
