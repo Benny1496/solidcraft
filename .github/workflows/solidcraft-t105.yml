@@ -1,0 +1,235 @@
+name: "SolidCraft Test 105 - Long Drawing disk integration and dual-profile regression"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t105
+    paths:
+      - .github/workflows/solidcraft-t105.yml
+      - tests/fixtures/t105/**
+permissions:
+  contents: read
+concurrency:
+  group: solidcraft-t105-long-disk-and-dual-profile
+  cancel-in-progress: false
+jobs:
+  long-integration:
+    name: "T105 / real disk reload, multi-sheet, complete engine baseline, CI + dev GUI"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 125
+    env:
+      SOURCE_SHA: "84ef88b10e394c9ea9f90459c242e2033c6f7133"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+      RUST_BACKTRACE: "1"
+    steps:
+      - name: Verify isolated user fork and unique test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t105"
+      - name: Checkout own test fixtures, no persisted credentials
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout exact unmerged Loohi native sheet revision, read-only
+        uses: actions/checkout@v4
+        with:
+          repository: Loohi/solidcraft
+          ref: 84ef88b10e394c9ea9f90459c242e2033c6f7133
+          path: src
+          persist-credentials: false
+      - name: Inject 3 engine disk tests and 6 T104 GUI cases on top of T103 test-only widget
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t105-report
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 ../overlay/tests/fixtures/t103/inject_tests.py | tee ../t105-report/inject.log
+          test "$(grep -c '^#\[test\]' ../overlay/tests/fixtures/t104/advanced_native_tests.rs)" -eq 6
+          test "$(grep -c '^#\[test\]' ../overlay/tests/fixtures/t105/disk_roundtrip_engine_tests.rs)" -eq 3
+          cat ../overlay/tests/fixtures/t104/advanced_native_tests.rs >> crates/ui-egui/src/drawing_sheet_page_tests.rs
+          printf '\n' >> crates/engine/src/cmd/drawing_dimension_tests.rs
+          cat ../overlay/tests/fixtures/t105/disk_roundtrip_engine_tests.rs >> crates/engine/src/cmd/drawing_dimension_tests.rs
+          git diff --check
+          test "$(git diff --name-only | sort)" = "$(printf 'crates/engine/src/cmd/drawing_dimension_tests.rs\ncrates/ui-egui/src/drawing_sheet_page.rs\ncrates/ui-egui/src/drawing_sheet_page_tests.rs')"
+          test -f crates/ui-egui/src/t103_warning_poc.rs
+          printf 'TEST=105\nSOURCE_SHA=%s\nNEW_DISK_ENGINE_CASES=3\nNATIVE_GUI_CASES=T104_6_T103_7_PLUS_4_CONTROLS\nSCOPE=RUNNER_ONLY_TESTS\nPRODUCTION_UI_CHANGED=NO\nMAX_JOB_MINUTES=125\nNO_ARTIFICIAL_SLEEP=TRUE\n' "$SOURCE_SHA" > ../t105-report/summary.txt
+      - name: Install stable Rust, rustfmt, clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache CI and dev profile Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t105-ci-dev-disk-long
+          cache-on-failure: true
+      - name: Strict rustfmt and Clippy, verify only runner-local test source modifications
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t105-report/fmt.log 2>&1
+          cargo fmt --all -- --check > ../t105-report/fmt-check.log 2>&1 || { tail -160 ../t105-report/fmt-check.log; exit 1; }
+          git diff --check
+          test "$(git diff --name-only | sort)" = "$(printf 'crates/engine/src/cmd/drawing_dimension_tests.rs\ncrates/ui-egui/src/drawing_sheet_page.rs\ncrates/ui-egui/src/drawing_sheet_page_tests.rs')"
+          git diff > ../t105-report/test-only-runner.patch
+          cp crates/ui-egui/src/t103_warning_poc.rs ../t105-report/ci-only-warning-card.rs
+          timeout 44m cargo clippy -p solidcraft-engine -p solidcraft-ui-egui --all-targets --profile ci --locked -- -D warnings > ../t105-report/clippy.log 2>&1 || { tail -160 ../t105-report/clippy.log; exit 1; }
+          echo "CI_RUSTFMT_CLIPPY=PASS" >> ../t105-report/summary.txt
+      - name: CI optimized profile - compile full native Engine and GUI library test binaries
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 59m cargo test -p solidcraft-engine -p solidcraft-ui-egui --lib --profile ci --locked --no-run --message-format=json > ../t105-report/ci-binaries.jsonl 2> ../t105-report/ci-compile.log || { tail -160 ../t105-report/ci-compile.log; exit 1; }
+          echo "CI_COMPILE=PASS" >> ../t105-report/summary.txt
+      - name: CI profile - 3 new real disk tests, 17 native GUI checks, both Drawing subsets
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          builds=../t105-report/ci-binaries.jsonl
+          errors=0
+          for testname in \
+            t105_repaired_edge_and_healthy_dimension_survive_disk_roundtrip_in_both_formats \
+            t105_lost_and_healthy_dimensions_remain_distinct_after_disk_load_and_update \
+            t105_copy_dimension_to_second_sheet_survives_real_disk_load_with_distinct_ids
+          do
+            if python3 "$runner" "$builds" solidcraft_engine "$testname" "../t105-report/ci-$testname.log" pass 1 > "../t105-report/ci-$testname.outcome.txt" 2>&1; then
+              echo "CI_ENGINE_PASS=$testname" | tee -a ../t105-report/summary.txt
+            else
+              echo "CI_ENGINE_FAIL=$testname" | tee -a ../t105-report/summary.txt
+              tail -110 "../t105-report/ci-$testname.outcome.txt" || true
+              errors=$((errors+1))
+            fi
+          done
+          for testname in \
+            t104_two_stale_dimensions_can_be_updated_with_one_explicit_click \
+            t104_lost_and_stale_never_silently_repair_a_lost_reference \
+            t104_clicked_repair_is_kept_when_drawing_closes_and_reopens_in_session \
+            t104_candidate_click_passes_the_exact_inspect_candidate \
+            t104_three_consecutive_repair_undo_redo_cycles_have_no_ghost_warning \
+            t104_status_matrix_preserves_id_reason_and_never_invents_current_value \
+            t103_native_update_button_clears_deferred_dimension_only_after_click \
+            t103_native_lost_edge_repair_candidate_click_undo_redo \
+            t103_native_no_repair_candidates_does_not_offer_false_action \
+            t103_native_selected_repair_does_not_touch_other_dimension \
+            t103_native_all_current_has_no_update_or_repair_buttons \
+            t103_warning_message_prioritises_lost_ambiguous_and_stale \
+            t103_warning_message_ignores_healthy_dimensions \
+            the_plate_sheet_draws_its_lines_and_text \
+            a_views_state_is_in_words \
+            fit_sheet_shows_the_whole_sheet_and_zoom_stays_in_range \
+            no_drawing_open_shows_the_note
+          do
+            if python3 "$runner" "$builds" solidcraft_ui_egui "$testname" "../t105-report/ci-$testname.log" pass 1 > "../t105-report/ci-$testname.outcome.txt" 2>&1; then
+              echo "CI_UI_PASS=$testname" | tee -a ../t105-report/summary.txt
+            else
+              echo "CI_UI_FAIL=$testname" | tee -a ../t105-report/summary.txt
+              tail -110 "../t105-report/ci-$testname.outcome.txt" || true
+              errors=$((errors+1))
+            fi
+          done
+          for spec in "solidcraft_ui_egui drawing 58" "solidcraft_engine drawing 395"; do
+            read -r crate pattern minimum <<< "$spec"
+            if python3 "$runner" "$builds" "$crate" "$pattern" "../t105-report/ci-suite-$crate.log" pass "$minimum" > "../t105-report/ci-suite-$crate.outcome.txt" 2>&1; then
+              echo "CI_DRAWING_SUITE_PASS=$crate" | tee -a ../t105-report/summary.txt
+            else
+              echo "CI_DRAWING_SUITE_FAIL=$crate" | tee -a ../t105-report/summary.txt
+              tail -110 "../t105-report/ci-suite-$crate.outcome.txt" || true
+              errors=$((errors+1))
+            fi
+          done
+          echo "CI_TARGETED_ERRORS=$errors" >> ../t105-report/summary.txt
+          test "$errors" -eq 0
+      - name: Broad Engine library - thousands of tests with documented upstream failures separately excluded
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 43m python3 ../overlay/tests/fixtures/t105/run_engine_except_known.py ../t105-report/ci-binaries.jsonl ../t105-report/ci-engine-all-except-known.log ../t105-report/ci-engine-all-except-known-summary.json > ../t105-report/ci-engine-broad-console.txt 2>&1 || { tail -130 ../t105-report/ci-engine-broad-console.txt; tail -90 ../t105-report/ci-engine-all-except-known.log 2>/dev/null || true; exit 1; }
+          cat ../t105-report/ci-engine-all-except-known-summary.json
+          echo "CI_ENGINE_BROAD_EXCEPT_DOCUMENTED_KNOWN_FAILURES=PASS" >> ../t105-report/summary.txt
+      - name: Dev profile - independent native Engine and GUI compilation with debug assertions
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 62m cargo test -p solidcraft-engine -p solidcraft-ui-egui --lib --profile dev --locked --no-run --message-format=json > ../t105-report/dev-binaries.jsonl 2> ../t105-report/dev-compile.log || { tail -170 ../t105-report/dev-compile.log; exit 1; }
+          echo "DEV_COMPILE=PASS" >> ../t105-report/summary.txt
+      - name: Dev profile - repeat disk tests, native GUI interactive checks and full Drawing subsets
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          builds=../t105-report/dev-binaries.jsonl
+          errors=0
+          for testname in \
+            t105_repaired_edge_and_healthy_dimension_survive_disk_roundtrip_in_both_formats \
+            t105_lost_and_healthy_dimensions_remain_distinct_after_disk_load_and_update \
+            t105_copy_dimension_to_second_sheet_survives_real_disk_load_with_distinct_ids
+          do
+            if python3 "$runner" "$builds" solidcraft_engine "$testname" "../t105-report/dev-$testname.log" pass 1 > "../t105-report/dev-$testname.outcome.txt" 2>&1; then
+              echo "DEV_ENGINE_PASS=$testname" | tee -a ../t105-report/summary.txt
+            else
+              echo "DEV_ENGINE_FAIL=$testname" | tee -a ../t105-report/summary.txt
+              tail -110 "../t105-report/dev-$testname.outcome.txt" || true
+              errors=$((errors+1))
+            fi
+          done
+          for testname in \
+            t104_two_stale_dimensions_can_be_updated_with_one_explicit_click \
+            t104_lost_and_stale_never_silently_repair_a_lost_reference \
+            t104_clicked_repair_is_kept_when_drawing_closes_and_reopens_in_session \
+            t104_candidate_click_passes_the_exact_inspect_candidate \
+            t104_three_consecutive_repair_undo_redo_cycles_have_no_ghost_warning \
+            t104_status_matrix_preserves_id_reason_and_never_invents_current_value \
+            t103_native_update_button_clears_deferred_dimension_only_after_click \
+            t103_native_lost_edge_repair_candidate_click_undo_redo \
+            t103_native_no_repair_candidates_does_not_offer_false_action \
+            t103_native_selected_repair_does_not_touch_other_dimension \
+            t103_native_all_current_has_no_update_or_repair_buttons \
+            t103_warning_message_prioritises_lost_ambiguous_and_stale \
+            t103_warning_message_ignores_healthy_dimensions \
+            the_plate_sheet_draws_its_lines_and_text \
+            a_views_state_is_in_words \
+            fit_sheet_shows_the_whole_sheet_and_zoom_stays_in_range \
+            no_drawing_open_shows_the_note
+          do
+            if python3 "$runner" "$builds" solidcraft_ui_egui "$testname" "../t105-report/dev-$testname.log" pass 1 > "../t105-report/dev-$testname.outcome.txt" 2>&1; then
+              echo "DEV_UI_PASS=$testname" | tee -a ../t105-report/summary.txt
+            else
+              echo "DEV_UI_FAIL=$testname" | tee -a ../t105-report/summary.txt
+              tail -110 "../t105-report/dev-$testname.outcome.txt" || true
+              errors=$((errors+1))
+            fi
+          done
+          for spec in "solidcraft_ui_egui drawing 58" "solidcraft_engine drawing 395"; do
+            read -r crate pattern minimum <<< "$spec"
+            if python3 "$runner" "$builds" "$crate" "$pattern" "../t105-report/dev-suite-$crate.log" pass "$minimum" > "../t105-report/dev-suite-$crate.outcome.txt" 2>&1; then
+              echo "DEV_DRAWING_SUITE_PASS=$crate" | tee -a ../t105-report/summary.txt
+            else
+              echo "DEV_DRAWING_SUITE_FAIL=$crate" | tee -a ../t105-report/summary.txt
+              tail -110 "../t105-report/dev-suite-$crate.outcome.txt" || true
+              errors=$((errors+1))
+            fi
+          done
+          echo "DEV_TARGETED_ERRORS=$errors" >> ../t105-report/summary.txt
+          test "$errors" -eq 0
+          echo "RESULT=T105_NEW_DISK_SAVERELOAD_MULTISHEET_AND_CI_DEV_DRAWING_ENGINE_BASELINE_PASS" >> ../t105-report/summary.txt
+          echo "T105: real disk save/reopen in both formats, two sheets, explicit repair, existing GUI checks, full engine suite except documented known failures, CI and dev compilation. Runner-only fixture, official product UI unchanged." >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload original logs, CI/dev results and temporary test-only patches on every outcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t105-long-disk-multisheet-dualprofile
+          path: t105-report/
+          retention-days: 14
+          if-no-files-found: warn
