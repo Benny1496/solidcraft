@@ -1,0 +1,152 @@
+name: "SolidCraft Test 100 - extended native GUI and engine Drawing regression"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t100
+    paths:
+      - .github/workflows/solidcraft-t100.yml
+      - tests/fixtures/t100/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solidcraft-t100-native-warning-poc
+  cancel-in-progress: false
+
+jobs:
+  egui-warning-poc:
+    name: "T100 extended / 6 native UI cases plus UI and Engine drawing regressions"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: "84ef88b10e394c9ea9f90459c242e2033c6f7133"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Verify own fork and test branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t100"
+
+      - name: Checkout isolated overlay, read-only
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+
+      - name: Checkout precise Loohi PR 13211 source, read-only
+        uses: actions/checkout@v4
+        with:
+          repository: Loohi/solidcraft
+          ref: 84ef88b10e394c9ea9f90459c242e2033c6f7133
+          path: src
+          persist-credentials: false
+
+      - name: Inject explicitly test-only proof of concept, never product
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p ../t100-report
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 ../overlay/tests/fixtures/t100/inject_tests.py | tee ../t100-report/inject.log
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 2
+          test "$(git diff --name-only | sort)" = "$(printf 'crates/ui-egui/src/drawing_sheet_page.rs\ncrates/ui-egui/src/drawing_sheet_page_tests.rs')"
+          test -f crates/ui-egui/src/t100_warning_poc.rs
+          printf "TEST=99\nBASE=Loohi/solidcraft#13211\nHEAD_SHA=%s\nPOC_SCOPE=CI_RUNNER_ONLY_CFG_TEST\nINTEGRATED_D07_GUI=NO\nREAL_REPAIR_CONTROL=NO\n" "$SOURCE_SHA" > ../t100-report/summary.txt
+
+      - name: Install Rust stable, rustfmt and Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache native egui build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t100-native-egui-poc
+          cache-on-failure: true
+
+      - name: Format and check prototype does not spill into production sources
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo fmt --all > ../t100-report/fmt-apply.log 2>&1
+          cargo fmt --all -- --check > ../t100-report/fmt-check.log 2>&1 || { tail -120 ../t100-report/fmt-check.log; exit 1; }
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 2
+          test "$(git diff --name-only | sort)" = "$(printf 'crates/ui-egui/src/drawing_sheet_page.rs\ncrates/ui-egui/src/drawing_sheet_page_tests.rs')"
+          git diff > ../t100-report/runner-only-tests.patch
+          cp crates/ui-egui/src/t100_warning_poc.rs ../t100-report/runner-only-warning-poc.rs
+          timeout 39m cargo clippy -p solidcraft-engine -p solidcraft-ui-egui --all-targets --profile ci --locked -- -D warnings > ../t100-report/clippy.log 2>&1 || { tail -150 ../t100-report/clippy.log; exit 1; }
+          echo "RUSTFMT_CLIPPY=PASS" >> ../t100-report/summary.txt
+
+      - name: Compile native UI and Engine library test binaries once
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 66m cargo test -p solidcraft-ui-egui -p solidcraft-engine --lib --profile ci --locked --no-run --message-format=json > ../t100-report/build-artifacts.jsonl 2> ../t100-report/compile.log || { tail -150 ../t100-report/compile.log; exit 1; }
+          echo "NATIVE_EGUI_COMPILED=PASS" >> ../t100-report/summary.txt
+
+      - name: Run 6 native UI checks, 4 controls and two real Drawing regression suites
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          runner=../overlay/tests/fixtures/t91/run_prebuilt.py
+          binaries=../t100-report/build-artifacts.jsonl
+          failures=0
+          for item in \
+            t100_native_current_sheet_shows_all_current_status_pill \
+            t100_native_deferred_dimension_only_shows_needs_update_without_stale_views \
+            t100_native_lost_dimension_reveals_id_reason_and_undo_recovers \
+            t100_d26_priority_maps_lost_ambiguous_stale_and_healthy \
+            t100_d07_fallback_reasons_remain_explicit_without_old_measurements \
+            t100_native_disabled_prototype_does_not_modify_sheet_inspection \
+            the_plate_sheet_draws_its_lines_and_text \
+            a_views_state_is_in_words \
+            fit_sheet_shows_the_whole_sheet_and_zoom_stays_in_range \
+            no_drawing_open_shows_the_note
+          do
+            if python3 "$runner" "$binaries" solidcraft_ui_egui "$item" "../t100-report/$item.log" pass 1 > "../t100-report/$item.outcome.txt" 2>&1; then
+              echo "T100_PASS=$item" | tee -a ../t100-report/summary.txt
+            else
+              echo "T100_FAIL=$item" | tee -a ../t100-report/summary.txt
+              tail -120 "../t100-report/$item.outcome.txt"
+              failures=$((failures + 1))
+            fi
+          done
+          # Complement the 5 new scenarios with both crates' complete Drawing subsets.
+          # Each compiled binary is reused, so no pointless repeat compilation.
+          for spec in "solidcraft_ui_egui drawing 15" "solidcraft_engine drawing 70"; do
+            read -r crate pattern minimum <<< "$spec"
+            if python3 "$runner" "$binaries" "$crate" "$pattern" "../t100-report/suite-$crate.log" pass "$minimum" > "../t100-report/suite-$crate.outcome.txt" 2>&1; then
+              echo "T100_SUITE_PASS=$crate/$pattern; MINIMUM=$minimum" | tee -a ../t100-report/summary.txt
+            else
+              echo "T100_SUITE_FAIL=$crate/$pattern" | tee -a ../t100-report/summary.txt
+              tail -120 "../t100-report/suite-$crate.outcome.txt"
+              failures=$((failures + 1))
+            fi
+          done
+          if [ "$failures" -ne 0 ]; then
+            printf "FINAL=T100_PROTOTYPE_REQUIRES_REVIEW\nFAILURES=%s\n" "$failures" | tee -a ../t100-report/summary.txt
+            exit 1
+          fi
+          echo "FINAL=T100_EXTENDED_6_UI_CHECKS_4_CONTROLS_PLUS_BOTH_DRAWING_SUITES_PASS_NOT_PRODUCTION" | tee -a ../t100-report/summary.txt
+          echo "6 native UI prototype tests, 4 controls and complete native UI/Engine Drawing regression suites. No product GUI integration." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Archive original test logs and runner-only source even if tests fail
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t100-native-warning-poc
+          path: t100-report/
+          retention-days: 14
+          if-no-files-found: warn
