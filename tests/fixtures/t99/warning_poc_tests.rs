@@ -62,7 +62,8 @@ fn t99_native_deferred_dimension_only_shows_needs_update_without_stale_views() {
     let engine=h.app.run("drawing.status",json!({})).unwrap();
     assert_eq!(engine["held"],true,"{engine}");
     assert_eq!(engine["waiting"],0,"{engine}");
-    let drawn_page=page(&mut h);\n    let states=&drawn_page["views"];
+    let drawn_page = page(&mut h);
+    let states = &drawn_page["views"];
     assert!(states.as_array().unwrap().iter().all(|v|v["out_of_date"]==false),"{states}");
     let p=t99_poc(&mut h);
     assert_eq!(p["count"],1,"{p}");
