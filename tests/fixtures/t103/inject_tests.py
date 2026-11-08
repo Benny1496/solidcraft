@@ -17,9 +17,9 @@ assert "fn t103_native_update_button" not in existing
 assert "pub(super) fn show(" in poc
 assert "LAST_ACTION: RefCell<Value> = const {" in poc, "Clippy thread_local initializer regression"
 assert "&& let Some(candidates)" in poc, "Clippy nested-if regression"
-assert 'if let Some(candidates) = details["candidates"].as_array() {' in poc
+assert '&& let Some(candidates) = details["candidates"].as_array() {' in poc, "Expected chained if-let for Clippy"
 assert poc.count("Order::Foreground")==1
-assert cases.count("#[test]")==7, "Expected five new integration tests"
+assert cases.count("#[test]")==7, "Expected seven native egui test cases"
 assert poc.count("Order::Foreground")==1
 source=source.replace(anchor,anchor+'\n    #[cfg(test)]\n    let t103_warning_poc = t103_warning_poc::show(app, ui);')
 source=source.replace(finish,
@@ -32,4 +32,4 @@ source=source.replace("mod tests;", 'mod tests;\n\n#[cfg(test)]\n#[path = "t103_
 sheet.write_text(source,encoding="utf-8")
 tests.write_text(existing.rstrip("\n")+"\n\n"+cases.rstrip("\n")+"\n",encoding="utf-8")
 Path("crates/ui-egui/src/t103_warning_poc.rs").write_text(poc,encoding="utf-8")
-print("T103_INJECTED=5_REAL_NATIVE_EGUI_UPDATE_AND_REPAIR_ACTION_TESTS_CI_ONLY",flush=True)
+print("T103_INJECTED=7_NATIVE_EGUI_ACTION_AND_STATUS_CHECKS_CI_ONLY",flush=True)
