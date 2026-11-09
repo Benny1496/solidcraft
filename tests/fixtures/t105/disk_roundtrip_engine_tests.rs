@@ -22,11 +22,28 @@ fn t105_repaired_edge_and_healthy_dimension_survive_disk_roundtrip_in_both_forma
         let from_disk = run(&mut fresh, INSPECT, json!({"dimension":edge}));
         reads(&from_disk,80.0,"80.00");
         assert_eq!(from_disk["dimension"],edge,"repaired id must survive disk load");
-        assert_eq!(from_disk["record"],fixed["record"],"repaired record must survive disk load");
+        // The saved file materializes last_good on reopen, while the immediate
+        // repair reply may not include it yet. Compare every authored field,
+        // and assert the cached measurement independently rather than treating
+        // an additional persisted last_good as a lost repair.
+        assert_eq!(from_disk["record"]["last_good"], json!(80.0),
+                   "{filename}: repaired dimension must retain its last valid reading");
+        let mut disk_record = from_disk["record"].clone();
+        let mut repair_record = fixed["record"].clone();
+        disk_record.as_object_mut().unwrap().remove("last_good");
+        repair_record.as_object_mut().unwrap().remove("last_good");
+        assert_eq!(disk_record, repair_record, "{filename}: repaired authored fields must survive disk load");
         let stable_after=run(&mut fresh, INSPECT, json!({"dimension":stable}));
         reads(&stable_after,80.0,"80.00");
         assert_eq!(stable_after["dimension"],stable);
-        assert_eq!(stable_after["record"],stable_before["record"],"other dimension untouched across disk load");
+        assert_eq!(stable_after["record"]["last_good"], json!(80.0),
+                   "{filename}: healthy dimension must retain its last valid reading");
+        let mut stable_disk_record = stable_after["record"].clone();
+        let mut stable_original_record = stable_before["record"].clone();
+        stable_disk_record.as_object_mut().unwrap().remove("last_good");
+        stable_original_record.as_object_mut().unwrap().remove("last_good");
+        assert_eq!(stable_disk_record, stable_original_record,
+                   "{filename}: other dimension's authored fields must survive disk load unchanged");
         assert!(!fresh.is_dirty(),"reads after disk load are read only");
     }
     println!("T105_PASS=REPAIR_PERSISTS_ON_DISK_BOTH_NATIVE_AND_JSON_OTHER_DIMENSION_UNTOUCHED");
