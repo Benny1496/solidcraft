@@ -1,0 +1,111 @@
+name: "SolidCraft Test #106 - PR review corrections validation"
+on:
+  push:
+    branches: [tests/solidcraft-review-fixes-20261109]
+    paths: [.github/workflows/solidcraft-review-fixes-106.yml]
+permissions:
+  contents: read
+jobs:
+  reviewer-fixes:
+    name: "Verify PR #${{ matrix.pr }} / validator, formatting, engine drawing tests"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pr: 8288
+            revision: 844146420e7d526f2f8f1eaed9619304a8c52963
+            fixture: tests/fixtures/w23a-drawing-updates/validate.py
+          - pr: 11881
+            revision: ae63b74371eea9a76d29da42540154ce96433e2e
+            fixture: tests/fixtures/w23-assembly-sheet/validate.py
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout exact already-pushed PR head, without writable credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Benny1496/solidcraft
+          ref: ${{ matrix.revision }}
+          persist-credentials: false
+      - name: Check exact commit and real CI wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ matrix.revision }}"
+          grep -q -- 'Drawing acceptance fixture contracts' .github/workflows/ci.yml
+          grep -q -- 'python3 -I tests/fixtures/w23a-drawing-updates/validate.py' .github/workflows/ci.yml
+          grep -q -- 'python3 -I tests/fixtures/w23-assembly-sheet/validate.py' .github/workflows/ci.yml
+          test -f "${{ matrix.fixture }}"
+      - name: Run actual upstream static W23 fixture contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p t106-report
+          python3 -I "${{ matrix.fixture }}" 2>&1 | tee t106-report/validator.log
+          echo "VALIDATOR=PASS" > t106-report/summary.txt
+      - name: Install Rust with rustfmt and clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: t106-pr-${{ matrix.pr }}-review
+          cache-on-failure: true
+      - name: Enforce exact rustfmt of the committed PR source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if cargo fmt --all -- --check > t106-report/rustfmt.log 2>&1; then
+            echo "RUSTFMT=PASS" | tee -a t106-report/summary.txt
+          else
+            cat t106-report/rustfmt.log
+            echo "RUSTFMT=FAIL" | tee -a t106-report/summary.txt
+            exit 1
+          fi
+      - name: Strict engine Clippy checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 48m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > t106-report/clippy.log 2>&1 || { tail -140 t106-report/clippy.log; exit 1; }
+          echo "CLIPPY=PASS" | tee -a t106-report/summary.txt
+      - name: Native Drawing engine regression excluding only documented known failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          excluded=()
+          while IFS= read -r line; do
+            case "${line%% *}" in
+              solidcraft-engine::*drawing*) excluded+=(--skip "${line%% *}") ;;
+            esac
+          done < tests/KNOWN_FAILING_TESTS
+          # Convert the documented nextest names to ordinary cargo test names.
+          for i in "${!excluded[@]}"; do
+            if [[ "${excluded[$i]}" == solidcraft-engine::* ]]; then
+              excluded[$i]="${excluded[$i]#solidcraft-engine::}"
+            fi
+          done
+          printf '%s\n' "${excluded[@]}" > t106-report/skipped-known-drawing.txt
+          timeout 42m cargo test -p solidcraft-engine --lib --profile ci --locked -- drawing "${excluded[@]}" --test-threads=2 > t106-report/drawing-engine.log 2>&1 || { tail -180 t106-report/drawing-engine.log; exit 1; }
+          tail -12 t106-report/drawing-engine.log
+          echo "DRAWING_ENGINE=PASS_EXCEPT_DOCUMENTED_KNOWN" | tee -a t106-report/summary.txt
+      - name: Additional W23 assembly acceptance cases for PR 11881
+        if: matrix.pr == 11881
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 15m cargo test -p solidcraft-engine --lib --profile ci --locked -- assembly_sheet --test-threads=2 > t106-report/assembly-engine.log 2>&1 || { tail -150 t106-report/assembly-engine.log; exit 1; }
+          tail -12 t106-report/assembly-engine.log
+          echo "ASSEMBLY_ENGINE=PASS" | tee -a t106-report/summary.txt
+      - name: Preserve original test logs on success or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t106-pr-${{ matrix.pr }}-review-fixes
+          path: t106-report/
+          retention-days: 14
+          if-no-files-found: warn
