@@ -1,0 +1,98 @@
+name: "SolidCraft T109 - Issue 4890 shared export groups"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t109
+    paths:
+      - .github/workflows/solidcraft-t109.yml
+permissions:
+  contents: read
+concurrency:
+  group: solidcraft-t109-arc-export-groups
+  cancel-in-progress: false
+env:
+  FEATURE_SHA: "2688e93ce375531014e9bf6d45046afc02b646b9"
+  BASE_SHA: "cb1e3252e27e2458eb7cff1b4a871cdb45ea4eab"
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: "2"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  shared-groups-native:
+    name: "T109 / real Arc groups and drawing scene tests"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 115
+    steps:
+      - name: Verify isolated CI runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t109"
+          mkdir -p t109-report
+          echo "PINNED_FEATURE_SHA=$FEATURE_SHA" | tee t109-report/source.txt
+          echo "ORIGINAL_DRAWINGS_SHA=$BASE_SHA" | tee -a t109-report/source.txt
+      - name: Checkout the exact own isolated feature commit
+        uses: actions/checkout@v4
+        with:
+          repository: Benny1496/solidcraft
+          ref: 2688e93ce375531014e9bf6d45046afc02b646b9
+          path: src
+          persist-credentials: false
+      - name: Setup stable Rust fmt and Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache feature-branch Rust engine dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t109-issue4890-engine
+          cache-on-failure: true
+      - name: Verify exact source and expected Arc fields
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$FEATURE_SHA"
+          test "$(grep -c 'group: Option<Arc<Group>>' crates/engine/src/drawing_scene.rs)" -eq 2
+          grep -Fq 'fn a_scratch_export_copy_shares_view_and_dimension_groups' crates/engine/src/drawing_scene_tests.rs
+          grep -Fq 'Arc::ptr_eq(a, b)' crates/engine/src/drawing_scene_tests.rs
+          grep -Fq 'let deep_clone = Arc::new((**original).clone())' crates/engine/src/drawing_scene_tests.rs
+          test -z "$(git status --porcelain)"
+          echo "SOURCE_AND_POINTER_CONTRACT=PASS" | tee ../t109-report/summary.txt
+      - name: Rust formatting check
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../t109-report/rustfmt.log 2>&1 || { tail -140 ../t109-report/rustfmt.log; exit 1; }
+          echo "RUSTFMT=PASS" | tee -a ../t109-report/summary.txt
+      - name: Run actual native Drawing scene regression suite
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 85m cargo test -p solidcraft-engine --lib --profile ci --locked drawing_scene -- --nocapture > ../t109-report/native-scene.log 2>&1 || { tail -180 ../t109-report/native-scene.log; exit 1; }
+          grep -Fq 'a_scratch_export_copy_shares_view_and_dimension_groups ... ok' ../t109-report/native-scene.log
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed;' ../t109-report/native-scene.log
+          grep 'test result:' ../t109-report/native-scene.log | tail -3 | tee -a ../t109-report/summary.txt
+          echo "ARC_PTR_EQ_REGRESSION=PASS" | tee -a ../t109-report/summary.txt
+          echo "SCENE_NATIVE_SUITE=PASS" | tee -a ../t109-report/summary.txt
+      - name: Run actual native engine Clippy with tests
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 30m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t109-report/clippy.log 2>&1 || { tail -140 ../t109-report/clippy.log; exit 1; }
+          test -z "$(git status --porcelain)"
+          echo "CLIPPY_ALL_TARGETS=PASS" | tee -a ../t109-report/summary.txt
+      - name: Archive real logs for independent review
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t109-arc-group-native
+          path: t109-report/
+          retention-days: 30
+          if-no-files-found: warn
