@@ -1,0 +1,225 @@
+name: "SolidCraft T107 - PR13055 cross-version regressions"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t107
+    paths:
+      - .github/workflows/solidcraft-t107.yml
+      - tests/fixtures/t107/**
+permissions:
+  contents: read
+concurrency:
+  group: solidcraft-t107-pr13055-compatibility
+  cancel-in-progress: false
+env:
+  PR_SHA: "5c17c14947d9422a0610fe71fd2a8c21dc4c5417"
+  DRAWINGS_SHA: "773d5d7fbc3b2e03199b58d0d2748fc162198495"
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: "2"
+  RUST_BACKTRACE: "1"
+jobs:
+  pinned-contract-audit:
+    name: "T107 / pinned source compatibility audit"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Validate isolated test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t107"
+          mkdir -p "$GITHUB_WORKSPACE/t107-report"
+      - name: Checkout own test fixtures
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout pinned CamWight PR 13055 without modifying it
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 5c17c14947d9422a0610fe71fd2a8c21dc4c5417
+          path: cam-pr
+          persist-credentials: false
+      - name: Checkout current pinned official drawings reference
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 773d5d7fbc3b2e03199b58d0d2748fc162198495
+          path: drawings
+          persist-credentials: false
+      - name: Audit both integration assumptions without executing changed code
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 overlay/tests/fixtures/t107/t107_contract_audit.py cam-pr drawings t107-report/source-contract-audit.json | tee t107-report/source-contract-audit.log
+          printf '%s\n' "STATIC_AUDIT=PASS" "RUNTIME_REPRODUCTION=NOT_RUN_IN_THIS_JOB" > t107-report/summary.txt
+      - name: Archive exact source evidence even if audit fails
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t107-source-audit
+          path: t107-report/
+          if-no-files-found: warn
+          retention-days: 30
+
+  cam-native-tests:
+    name: "T107 / Cam PR native checks and expected-negative note kind"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 115
+    steps:
+      - name: Verify isolated test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t107"
+          mkdir -p t107-report
+      - name: Checkout own runner-only test fixture
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Checkout exact unchanged CamWight PR
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 5c17c14947d9422a0610fe71fd2a8c21dc4c5417
+          path: src
+          persist-credentials: false
+      - name: Install stable Rust and lint tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache pinned Cam PR Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t107-cam-pr-engine
+          cache-on-failure: true
+      - name: Format and Clippy on unchanged Cam PR baseline
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR_SHA"
+          cargo fmt --all -- --check > ../t107-report/cam-fmt.log 2>&1 || { tail -120 ../t107-report/cam-fmt.log; exit 1; }
+          timeout 55m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t107-report/cam-clippy.log 2>&1 || { tail -120 ../t107-report/cam-clippy.log; exit 1; }
+          echo "CAM_BASELINE_FMT_CLIPPY=PASS" | tee -a ../t107-report/summary.txt
+      - name: Run original real drawing.check regression suite
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 48m cargo test -p solidcraft-engine --lib --profile ci --locked drawing_check -- --nocapture > ../t107-report/cam-original-drawing-check.log 2>&1 || { tail -160 ../t107-report/cam-original-drawing-check.log; exit 1; }
+          grep -Eq 'running [1-9][0-9]* tests?' ../t107-report/cam-original-drawing-check.log
+          grep -Fq 'test result: ok.' ../t107-report/cam-original-drawing-check.log
+          grep 'test result:' ../t107-report/cam-original-drawing-check.log | tail -4 | tee -a ../t107-report/summary.txt
+          echo "CAM_ORIGINAL_CHECK_TESTS=PASS" | tee -a ../t107-report/summary.txt
+      - name: Append exactly one expected-negative test in runner only
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR_SHA"
+          test "$(grep -c '^#\[test\]' ../overlay/tests/fixtures/t107/pr13055_note_kind_regression.rs)" -eq 1
+          cat ../overlay/tests/fixtures/t107/pr13055_note_kind_regression.rs >> crates/engine/src/cmd/drawing_check_tests.rs
+          git diff --check
+          test "$(git diff --name-only)" = "crates/engine/src/cmd/drawing_check_tests.rs"
+          git diff > ../t107-report/runner-only-test.patch
+          printf '%s\n' "Runner-only test appended; upstream PR unchanged" > ../t107-report/injection.txt
+      - name: Execute expected-negative test and verify the precise mismatch
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          set +e
+          timeout 45m cargo test -p solidcraft-engine --lib --profile ci --locked t107_out_of_date_note_retains_note_record_kind_after_scene_contract_expands -- --nocapture > ../t107-report/cam-negative-note-kind.log 2>&1
+          code=$?
+          set -e
+          echo "NEGATIVE_TEST_EXIT_CODE=$code" | tee -a ../t107-report/summary.txt
+          if [ "$code" -eq 0 ]; then
+            echo "Unexpected: contract issue not reproduced in this synthetic scenario" | tee -a ../t107-report/summary.txt
+            exit 1
+          fi
+          if [ "$code" -eq 124 ]; then
+            echo "FAIL: negative test timed out, not a reproduced regression" | tee -a ../t107-report/summary.txt
+            exit 1
+          fi
+          grep -Fq "running 1 test" ../t107-report/cam-negative-note-kind.log
+          grep -Fq "left: Dimension" ../t107-report/cam-negative-note-kind.log
+          grep -Fq "right: Note" ../t107-report/cam-negative-note-kind.log
+          grep -Fq "t107_out_of_date_note_retains_note_record_kind_after_scene_contract_expands" ../t107-report/cam-negative-note-kind.log
+          echo "SIMULATED_NOTE_KIND_CONTRACT_REGRESSION=REPRODUCED_EXPECTED_NEGATIVE" | tee -a ../t107-report/summary.txt
+          echo "IMPORTANT: no combined-current-drawings code was built; not a full integration test." | tee -a ../t107-report/summary.txt
+      - name: Archive actual native logs and runner-only patch
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t107-cam-native
+          path: t107-report/
+          if-no-files-found: warn
+          retention-days: 30
+
+  latest-drawings-native:
+    name: "T107 / upstream exploded views and note reference tests"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - name: Verify isolated test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t107"
+          mkdir -p t107-report
+      - name: Checkout exact official drawings snapshot
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 773d5d7fbc3b2e03199b58d0d2748fc162198495
+          path: src
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Cache upstream Drawing Engine dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t107-drawings-reference-engine
+          cache-on-failure: true
+      - name: Validate exact upstream snapshot, format and unchanged worktree
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$DRAWINGS_SHA"
+          cargo fmt --all -- --check > ../t107-report/drawings-fmt.log 2>&1 || { tail -120 ../t107-report/drawings-fmt.log; exit 1; }
+          test -z "$(git status --porcelain)"
+      - name: Run upstream native engine note and exploded-dimension reference tests
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          for name in             a_note_on_the_model_an_exploded_view_holds_back_is_out_of_date             a_dimension_an_exploded_view_holds_back_is_out_of_date_everywhere             a_note_on_an_edge_follows_the_model_and_keeps_its_place_when_lost
+          do
+            echo "START $name" | tee -a ../t107-report/summary.txt
+            timeout 48m cargo test -p solidcraft-engine --lib --profile ci --locked "$name" -- --nocapture > "../t107-report/drawings-$name.log" 2>&1 || { tail -170 "../t107-report/drawings-$name.log"; exit 1; }
+            grep -Fq 'running 1 test' "../t107-report/drawings-$name.log"
+            grep -Fq 'test result: ok.' "../t107-report/drawings-$name.log"
+            echo "UPSTREAM_NATIVE_PASS=$name" | tee -a ../t107-report/summary.txt
+          done
+          test -z "$(git status --porcelain)"
+          echo "UPSTREAM_NATIVE_REFERENCE=PASS" | tee -a ../t107-report/summary.txt
+      - name: Archive upstream source/test evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t107-upstream-native
+          path: t107-report/
+          if-no-files-found: warn
+          retention-days: 30
