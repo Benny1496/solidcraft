@@ -1,0 +1,178 @@
+name: "SolidCraft T108 - merged PR13055 native integration regressions"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t108
+    paths:
+      - .github/workflows/solidcraft-t108.yml
+      - tests/fixtures/t108/**
+permissions:
+  contents: read
+concurrency:
+  group: solidcraft-t108-merged-check
+  cancel-in-progress: false
+env:
+  DRAWINGS_SHA: "cb1e3252e27e2458eb7cff1b4a871cdb45ea4eab"
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: "2"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  pinned-source-audit:
+    name: "T108 / merged source and kernel-case contract"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Confirm isolated fork test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t108"
+          mkdir -p t108-report
+      - name: Check out exact official drawings snapshot
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: cb1e3252e27e2458eb7cff1b4a871cdb45ea4eab
+          path: src
+          persist-credentials: false
+      - name: Verify merged drawing contracts and kernel coverage registration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C src rev-parse HEAD)" = "$DRAWINGS_SHA"
+          python3 - <<'PY' | tee t108-report/source-contract.log
+          from pathlib import Path
+          root=Path("src")
+          check=(root/"crates/engine/src/cmd/drawing_check_tests.rs").read_text()
+          scene=(root/"crates/engine/src/drawing_scene_tests.rs").read_text()
+          exempt=(root/"tests/kernel-cases/EXEMPT").read_text()
+          required={
+            "merged note kind and coverage": "fn a_note_an_exploded_view_holds_back_is_a_note_out_of_date_and_covers_nothing",
+            "held dimension reason": "fn a_dimension_an_exploded_view_holds_back_says_why",
+            "held dimension no coverage": "fn a_dimension_an_exploded_view_holds_back_covers_nothing",
+            "lost note branch": "fn a_notes_lost_branch_is_listed_by_its_number",
+          }
+          for name,needle in required.items():
+              assert needle in check, f"MISSING: {name}"
+              print("SOURCE_PRESENT: "+name)
+          for needle in ["fn a_note_on_the_model_an_exploded_view_holds_back_is_out_of_date",
+                         "fn a_dimension_an_exploded_view_holds_back_is_out_of_date_everywhere",
+                         "fn a_held_deferred_drawing_exports_the_same_from_a_scratch_copy"]:
+              assert needle in scene, f"MISSING: {needle}"
+              print("SOURCE_PRESENT: "+needle)
+          assert any(row.startswith("drawing.title_block.logo ") for row in exempt.splitlines()), "Kernel EXEMPT fix missing"
+          print("KERNEL_COVERAGE_ENTRY_PRESENT: drawing.title_block.logo")
+          print("STATIC_CONTRACT_PASS (not a native execution)")
+          PY
+          git -C src diff --exit-code
+      - name: Upload static evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t108-source-audit
+          path: t108-report/
+          retention-days: 30
+          if-no-files-found: warn
+
+  merged-native-regressions:
+    name: "T108 / merged native drawing.check and mixed-annotation regressions"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 115
+    steps:
+      - name: Confirm isolated fork test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t108"
+          mkdir -p t108-report
+      - name: Check out runner-only integration test
+        uses: actions/checkout@v4
+        with:
+          path: overlay
+          persist-credentials: false
+      - name: Check out exact official drawings snapshot
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: cb1e3252e27e2458eb7cff1b4a871cdb45ea4eab
+          path: src
+          persist-credentials: false
+      - name: Install Rust fmt and Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache pinned engine dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t108-merged-drawings-engine
+          cache-on-failure: true
+      - name: Confirm source and baseline formatting without modifying files
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$DRAWINGS_SHA"
+          cargo fmt --all -- --check > ../t108-report/rustfmt.log 2>&1 || { tail -120 ../t108-report/rustfmt.log; exit 1; }
+          test -z "$(git status --porcelain)"
+          echo "OFFICIAL_BASELINE_FORMAT=PASS" | tee -a ../t108-report/summary.txt
+      - name: Add combined regression test only inside this runner
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$DRAWINGS_SHA"
+          test "$(grep -c '^#\[test\]' ../overlay/tests/fixtures/t108/mixed_held_annotations.rs)" -eq 1
+          cat ../overlay/tests/fixtures/t108/mixed_held_annotations.rs >> crates/engine/src/cmd/drawing_check_tests.rs
+          git diff --check
+          test "$(git diff --name-only)" = "crates/engine/src/cmd/drawing_check_tests.rs"
+          git diff > ../t108-report/runner-only.patch
+          echo "EXACT_MERGED_SOURCE_WITH_RUNNER_ONLY_TEST=YES" | tee -a ../t108-report/summary.txt
+      - name: Execute actual merged drawing.check suite and new combined regression
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 75m cargo test -p solidcraft-engine --lib --profile ci --locked drawing_check -- --nocapture > ../t108-report/drawing-check-native.log 2>&1 || { tail -180 ../t108-report/drawing-check-native.log; exit 1; }
+          grep -Fq 't108_mixed_held_note_and_dimension_keep_kind_across_scene_export_and_reassembly ... ok' ../t108-report/drawing-check-native.log
+          grep -Eq 'running [1-9][0-9]* tests?' ../t108-report/drawing-check-native.log
+          grep -Fq 'test result: ok.' ../t108-report/drawing-check-native.log
+          grep 'test result:' ../t108-report/drawing-check-native.log | tail -3 | tee -a ../t108-report/summary.txt
+          echo "MIXED_HELD_ANNOTATION_NATIVE=PASS" | tee -a ../t108-report/summary.txt
+      - name: Check current export and exploded-view native regressions
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in \
+            a_note_on_the_model_an_exploded_view_holds_back_is_out_of_date \
+            a_dimension_an_exploded_view_holds_back_is_out_of_date_everywhere \
+            a_held_deferred_drawing_exports_the_same_from_a_scratch_copy
+          do
+            echo "START_NATIVE=$name" | tee -a ../t108-report/summary.txt
+            timeout 18m cargo test -p solidcraft-engine --lib --profile ci --locked "$name" -- --nocapture > "../t108-report/$name.log" 2>&1 || { tail -120 "../t108-report/$name.log"; exit 1; }
+            grep -Fq 'running 1 test' "../t108-report/$name.log"
+            grep -Fq 'test result: ok.' "../t108-report/$name.log"
+            echo "NATIVE_PASS=$name" | tee -a ../t108-report/summary.txt
+          done
+      - name: Clippy with runner-only test compiled as actual engine test
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 25m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t108-report/clippy.log 2>&1 || { tail -140 ../t108-report/clippy.log; exit 1; }
+          echo "CLIPPY_ALL_TARGETS=PASS" | tee -a ../t108-report/summary.txt
+          test "$(git rev-parse HEAD)" = "$DRAWINGS_SHA"
+          test "$(git diff --name-only)" = "crates/engine/src/cmd/drawing_check_tests.rs"
+      - name: Upload native logs and exact temporary patch
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t108-merged-native
+          path: t108-report/
+          retention-days: 30
+          if-no-files-found: warn
