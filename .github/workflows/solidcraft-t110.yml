@@ -1,0 +1,143 @@
+name: "SolidCraft T110 - issue 4890 compatibility on latest drawings"
+on:
+  push:
+    branches:
+      - tests/solidcraft-t110
+    paths:
+      - .github/workflows/solidcraft-t110.yml
+permissions:
+  contents: read
+concurrency:
+  group: solidcraft-t110-issue4890-upstream-compatibility
+  cancel-in-progress: false
+env:
+  UPSTREAM_SHA: "a757c0f343c8abe52900bccd428af82c01d706da"
+  BASE_SHA: "cb1e3252e27e2458eb7cff1b4a871cdb45ea4eab"
+  FEATURE_SHA: "93457889ef1cc9fb6446fc579d99882de7c2fb6d"
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: "2"
+  RUST_BACKTRACE: "1"
+jobs:
+  upstream-compat:
+    name: "T110 / compile and test #4890 on latest drawings"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Verify isolated fork runner and record pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t110"
+          mkdir -p t110-report
+          printf 'UPSTREAM_SHA=%s\nBASE_SHA=%s\nFEATURE_SHA=%s\n' "$UPSTREAM_SHA" "$BASE_SHA" "$FEATURE_SHA" | tee t110-report/source.txt
+      - name: Checkout current official drawings, not the old feature branch
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: a757c0f343c8abe52900bccd428af82c01d706da
+          fetch-depth: 2
+          persist-credentials: false
+          path: src
+      - name: Reapply only the exact feature diff on latest upstream in the runner
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
+          git cat-file -e "$BASE_SHA^{commit}"
+          git fetch --no-tags --depth=1 https://github.com/Benny1496/solidcraft.git feat/issue4890-shared-drawing-groups
+          test "$(git rev-parse FETCH_HEAD)" = "$FEATURE_SHA"
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA" "$FEATURE_SHA")
+          test "${#changed[@]}" -eq 2
+          test "${changed[0]}" = "crates/engine/src/drawing_scene.rs"
+          test "${changed[1]}" = "crates/engine/src/drawing_scene_tests.rs"
+          git diff --binary "$BASE_SHA" "$FEATURE_SHA" -- "${changed[@]}" > ../t110-report/feature.patch
+          test -s ../t110-report/feature.patch
+          git apply --check ../t110-report/feature.patch
+          git apply ../t110-report/feature.patch
+          test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
+          test "$(git diff --name-only | wc -l)" -eq 2
+          test "$(grep -c 'group: Option<Arc<Group>>' crates/engine/src/drawing_scene.rs)" -eq 2
+          grep -Fq 'fn a_scratch_export_copy_shares_view_and_dimension_groups' crates/engine/src/drawing_scene_tests.rs
+          echo "UPSTREAM_PATCH_APPLIES_CLEANLY=PASS" | tee t110-report-step.txt
+          cp t110-report-step.txt ../t110-report/summary.txt
+      - name: Setup stable Rust, fmt and Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t110-issue4890-latest-upstream
+          cache-on-failure: true
+      - name: Check formatting on up-to-date source plus exact feature patch
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../t110-report/fmt.log 2>&1 || { tail -120 ../t110-report/fmt.log; exit 1; }
+          echo "RUSTFMT=PASS" | tee -a ../t110-report/summary.txt
+      - name: Run real native drawing scene and Arc pointer regression tests
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 85m cargo test -p solidcraft-engine --lib --profile ci --locked drawing_scene -- --nocapture > ../t110-report/scene.log 2>&1 || { tail -140 ../t110-report/scene.log; exit 1; }
+          grep -Fq 'a_scratch_export_copy_shares_view_and_dimension_groups ... ok' ../t110-report/scene.log
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed;' ../t110-report/scene.log
+          grep 'test result:' ../t110-report/scene.log | tail -1 | tee -a ../t110-report/summary.txt
+          echo "ARC_PTR_EQ_SCENE_TESTS=PASS" | tee -a ../t110-report/summary.txt
+      - name: Run SVG PNG and error path export regression tests
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 30m cargo test -p solidcraft-engine --lib --profile ci --locked drawing_export_tests -- --nocapture > ../t110-report/exports.log 2>&1 || { tail -140 ../t110-report/exports.log; exit 1; }
+          grep -Fq 'a_sheet_exports_as_its_scenes_svg ... ok' ../t110-report/exports.log
+          grep -Fq 'a_sheet_exports_as_its_scenes_png ... ok' ../t110-report/exports.log
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed;' ../t110-report/exports.log
+          grep 'test result:' ../t110-report/exports.log | tail -1 | tee -a ../t110-report/summary.txt
+          echo "SVG_PNG_EXPORT_REGRESSIONS=PASS" | tee -a ../t110-report/summary.txt
+      - name: Run drawing check tests with current title block field semantics
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 25m cargo test -p solidcraft-engine --lib --profile ci --locked drawing_check_tests -- --nocapture > ../t110-report/drawing-check.log 2>&1 || { tail -140 ../t110-report/drawing-check.log; exit 1; }
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed;' ../t110-report/drawing-check.log
+          grep 'test result:' ../t110-report/drawing-check.log | tail -1 | tee -a ../t110-report/summary.txt
+          echo "DRAWING_CHECK_COMPAT=PASS" | tee -a ../t110-report/summary.txt
+      - name: Compile the dependent UI package
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 40m cargo check -p solidcraft-ui-egui --locked > ../t110-report/ui-check.log 2>&1 || { tail -160 ../t110-report/ui-check.log; exit 1; }
+          echo "UI_EGUI_COMPILE=PASS" | tee -a ../t110-report/summary.txt
+      - name: Run actual UI export worker regression
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 40m cargo test -p solidcraft-ui-egui --lib --profile ci --locked a_held_deferred_sheet_written_beside_the_window_is_the_one_exported_at_once -- --nocapture > ../t110-report/ui-export.log 2>&1 || { tail -180 ../t110-report/ui-export.log; exit 1; }
+          grep -Fq 'a_held_deferred_sheet_written_beside_the_window_is_the_one_exported_at_once ... ok' ../t110-report/ui-export.log
+          echo "UI_EXPORT_WORKER=PASS" | tee -a ../t110-report/summary.txt
+      - name: Check all engine test targets with strict Clippy
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 35m cargo clippy -p solidcraft-engine --all-targets --profile ci --locked -- -D warnings > ../t110-report/clippy.log 2>&1 || { tail -140 ../t110-report/clippy.log; exit 1; }
+          test "$(git diff --name-only | wc -l)" -eq 2
+          echo "CLIPPY_ENGINE_ALL_TARGETS=PASS" | tee -a ../t110-report/summary.txt
+      - name: Upload runner logs and exact feature patch for review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t110-upstream-compat-native
+          path: t110-report/
+          retention-days: 30
+          if-no-files-found: warn
