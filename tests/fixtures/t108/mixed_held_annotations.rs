@@ -45,7 +45,7 @@ fn t108_mixed_held_note_and_dimension_keep_kind_across_scene_export_and_reassemb
     let assembled = checked(&mut s, json!({}));
     let held_again = of_kind(&assembled, "out_of_date");
     for record in &held {
-        assert!(!held_again.iter().any(|(_, id)| id == record.as_str().unwrap()),
+        assert!(!held_again.iter().any(|(_, id)| id.as_str() == record.as_str().unwrap()),
             "assembled view must release its note/dimension: {assembled}");
     }
 }
