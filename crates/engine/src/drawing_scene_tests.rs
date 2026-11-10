@@ -1742,7 +1742,10 @@ fn overfill(s: &mut Session, view: u64) -> Drawn {
     let items = vec![Item::Stroke { path, closed: false, width_mm: 0.5, pattern: None }];
     let group = Group { object: view, kind: ObjectKind::View, items };
     entry.serial = serial;
-    std::mem::replace(&mut entry.drawn, Drawn { group: Some(Arc::new(group)), status: Status::Drawn, stats: None, boundary: None, frame: None, owners: None })
+    std::mem::replace(
+        &mut entry.drawn,
+        Drawn { group: Some(Arc::new(group)), status: Status::Drawn, stats: None, boundary: None, frame: None, owners: None },
+    )
 }
 
 /// Each dimension's word is the one inspect uses: read, then lost when its body goes, with why. Its
