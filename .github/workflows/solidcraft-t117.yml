@@ -1,0 +1,148 @@
+name: SolidCraft T117 - Loohi drawing UI compatibility on merged drawings
+on:
+  push:
+    branches: [tests/solidcraft-t117]
+    paths: [.github/workflows/solidcraft-t117.yml]
+permissions:
+  contents: read
+concurrency:
+  group: solidcraft-t117-loohi-ui
+  cancel-in-progress: false
+env:
+  DRAWINGS_SHA: ecaff47b1c59b19771545b97b7df39ac748c5633
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "2"
+  RUST_BACKTRACE: "1"
+jobs:
+  integration:
+    name: "T117 / Loohi PR ${{ matrix.pr }} ${{ matrix.kind }} on official drawings"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pr: "13401"
+            kind: export-panel
+            sha: fba50814236aaf992d3b0ce8e5d3e2d604baddcf
+            filter: "drawing_export_panel::tests::"
+            new_file: crates/ui-egui/src/drawing_export_panel_tests.rs
+            critical: "fn cancel_while_sheets_are_written_stops_them_and_says_so"
+            artifact: t117-pr13401-export-window
+          - pr: "13211"
+            kind: sheet-page
+            sha: 84ef88b10e394c9ea9f90459c242e2033c6f7133
+            filter: "drawing_sheet_page::tests::"
+            new_file: crates/ui-egui/src/drawing_sheet_page_tests.rs
+            critical: "fn true_size_is_one_millimetre_at_any_ui_scale"
+            artifact: t117-pr13211-sheet-page
+    steps:
+      - name: Confirm isolated workflow and exact source pins
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Benny1496/solidcraft
+          test "$GITHUB_REF_NAME" = tests/solidcraft-t117
+          mkdir -p t117-report
+          printf 'TEST=T117\nRUN=%s\nUPSTREAM_SHA=%s\nPR=%s\nPR_SHA=%s\n' "$GITHUB_RUN_ID" "$DRAWINGS_SHA" "${{ matrix.pr }}" "${{ matrix.sha }}" | tee t117-report/source.txt
+      - name: Checkout latest verified official drawings, not old synthetic PR merge
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: ecaff47b1c59b19771545b97b7df39ac748c5633
+          path: src
+          fetch-depth: 150
+          persist-credentials: false
+      - name: Fetch exact Loohi head and attempt only a local, non-pushed merge
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$DRAWINGS_SHA"
+          git fetch --no-tags --depth=250 https://github.com/Loohi/solidcraft.git "${{ matrix.sha }}" > ../t117-report/fetch.log 2>&1 || { tail -100 ../t117-report/fetch.log; exit 1; }
+          test "$(git rev-parse FETCH_HEAD)" = "${{ matrix.sha }}"
+          if ! git merge-base HEAD FETCH_HEAD > ../t117-report/merge-base.txt; then
+            echo "NO_MERGE_BASE_IN_FETCHED_HISTORY: fetch/integration setup issue, not an assertion failure" | tee -a ../t117-report/summary.txt
+            exit 1
+          fi
+          if git -c user.name="SolidCraft CI" -c user.email="ci@example.invalid" merge --no-commit --no-ff FETCH_HEAD > ../t117-report/merge.log 2>&1; then
+            echo LOCAL_MERGE_WITH_CURRENT_DRAWINGS=PASS | tee -a ../t117-report/summary.txt
+          else
+            echo "LOCAL_MERGE_FAILED: potential conflicts, read merge.log" | tee -a ../t117-report/summary.txt
+            git diff --name-only --diff-filter=U | tee ../t117-report/conflict-files.txt
+            tail -120 ../t117-report/merge.log
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$DRAWINGS_SHA"
+          test -z "$(git ls-files -u)"
+          git diff --check HEAD > ../t117-report/diff-check.log 2>&1 || { cat ../t117-report/diff-check.log; exit 1; }
+          git diff --stat HEAD > ../t117-report/diff-stat.txt
+          test -f "${{ matrix.new_file }}"
+          grep -Fq '${{ matrix.critical }}' "${{ matrix.new_file }}"
+          echo ORIGINAL_NEW_UI_TESTS_FOUND=PASS | tee -a ../t117-report/summary.txt
+      - name: Setup stable Rust + rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Isolated Cargo cache for each UI variant
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t117-${{ matrix.kind }}-merged-drawings
+          cache-on-failure: true
+      - name: Check formatting after temporary integration
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../t117-report/fmt.log 2>&1 || { tail -140 ../t117-report/fmt.log; exit 1; }
+          echo RUSTFMT=PASS | tee -a ../t117-report/summary.txt
+      - name: Execute all 11 new genuine UI integration tests
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 95m cargo test -p solidcraft-ui-egui --lib --profile ci --locked '${{ matrix.filter }}' -- --nocapture > ../t117-report/ui-tests.log 2>&1 || { tail -190 ../t117-report/ui-tests.log; exit 1; }
+          grep -Fq 'test result: ok. 11 passed; 0 failed;' ../t117-report/ui-tests.log || { tail -190 ../t117-report/ui-tests.log; exit 1; }
+          if [ "${{ matrix.pr }}" = "13401" ]; then
+            for case in the_window_writes_svg_and_png_on_the_chosen_paper a_refused_sheet_names_its_failed_view_from_the_status cancel_while_sheets_are_written_stops_them_and_says_so cancel_stops_only_the_windows_own_sheets; do
+              grep -Fq "$case ... ok" ../t117-report/ui-tests.log || exit 1
+            done
+          else
+            for case in true_size_is_one_millimetre_at_any_ui_scale fit_sheet_shows_the_whole_sheet_and_zoom_stays_in_range pan_moves_the_sheet_and_leaves_the_design_camera sheet_colour_is_screen_only a_views_state_is_in_words; do
+              grep -Fq "$case ... ok" ../t117-report/ui-tests.log || exit 1
+            done
+          fi
+          grep 'test result:' ../t117-report/ui-tests.log | tail -1 | tee -a ../t117-report/summary.txt
+          echo PENDING_PR_UI_TESTS=PASS | tee -a ../t117-report/summary.txt
+      - name: Test the engine export or sheet scene against temporary UI integration
+        working-directory: src
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.pr }}" = "13401" ]; then
+            filter='cmd::drawing_export::tests::'
+            count='test result: ok. 12 passed; 0 failed;'
+            case='a_cancelled_png_export_writes_no_file'
+          else
+            filter='drawing_scene::tests::'
+            count='test result: ok. 96 passed; 0 failed;'
+            case='a_scratch_export_copy_shares_view_and_dimension_groups'
+          fi
+          timeout 40m cargo test -p solidcraft-engine --lib --profile ci --locked "$filter" -- --nocapture > ../t117-report/engine-tests.log 2>&1 || { tail -160 ../t117-report/engine-tests.log; exit 1; }
+          grep -Fq "$count" ../t117-report/engine-tests.log
+          grep -Fq "$case ... ok" ../t117-report/engine-tests.log
+          grep 'test result:' ../t117-report/engine-tests.log | tail -1 | tee -a ../t117-report/summary.txt
+          echo PRODUCT_ENGINE_COMPATIBILITY=PASS | tee -a ../t117-report/summary.txt
+      - name: Compile entire UI against temporary merge
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 35m cargo check -p solidcraft-ui-egui --locked > ../t117-report/ui-check.log 2>&1 || { tail -170 ../t117-report/ui-check.log; exit 1; }
+          test "$(git rev-parse HEAD)" = "$DRAWINGS_SHA"
+          test -z "$(git ls-files -u)"
+          echo FULL_UI_COMPILE=PASS | tee -a ../t117-report/summary.txt
+      - name: Upload exact original logs, including merge or test failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: t117-report/
+          retention-days: 30
+          if-no-files-found: warn
