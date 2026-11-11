@@ -1,0 +1,196 @@
+name: SolidCraft T115 - Diagnose D07 D26 reference regressions
+on:
+  push:
+    branches: [tests/solidcraft-t115]
+    paths: [.github/workflows/solidcraft-t115.yml]
+permissions:
+  contents: read
+concurrency:
+  group: solidcraft-t115-dimension-baseline-vs-merged
+  cancel-in-progress: false
+env:
+  BEFORE_SHA: "1e66a42a8b7a895683d0beb631a95037f9aeb56c"
+  MERGED_SHA: "ecaff47b1c59b19771545b97b7df39ac748c5633"
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "2"
+  RUST_BACKTRACE: "1"
+jobs:
+  reference-before-pr14864:
+    name: "T115 / inspect both known failures on official pre-#14864 base"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 145
+    steps:
+      - name: Record baseline intent and expected exact source SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t115"
+          mkdir -p baseline-report
+          printf 'TEST=T115\nROLE=before_PR_14864\nOFFICIAL_SHA=%s\nRUN_ID=%s\nEXPECTED_CURRENT_PRODUCT_FAILS=2\n' "$BEFORE_SHA" "$GITHUB_RUN_ID" | tee baseline-report/source.txt
+      - name: Checkout exact official drawings before PR 14864
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 1e66a42a8b7a895683d0beb631a95037f9aeb56c
+          path: src
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify prior actual source and both regression test names
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BEFORE_SHA"
+          grep -Fq 'fn a_new_hole_never_takes_the_dimension_of_an_undone_one' crates/engine/src/cmd/drawing_dimension_tests.rs
+          grep -Fq 'fn renaming_the_plate_keeps_its_five_dimensions' crates/engine/src/cmd/drawing_dimension_tests.rs
+          test -z "$(git status --porcelain)"
+          echo EXACT_PRIOR_CODE_AND_TESTS_VERIFIED=PASS | tee ../baseline-report/summary.txt
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Reuse compiled Rust dependencies where possible
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t115-pr14864-baseline
+          cache-on-failure: true
+      - name: Independently reproduce or refute both failures before PR 14864
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          for case in a_new_hole_never_takes_the_dimension_of_an_undone_one renaming_the_plate_keeps_its_five_dimensions; do
+            logfile="../baseline-report/$case.log"
+            if timeout 90m cargo test -p solidcraft-engine --lib --profile ci --locked "$case" -- --nocapture > "$logfile" 2>&1; then rc=0; else rc=$?; fi
+            grep -Fq 'running 1 test' "$logfile" || { tail -130 "$logfile"; exit 1; }
+            grep -Eq 'test result: (ok|FAILED)\. (1 passed; 0 failed|0 passed; 1 failed);' "$logfile" || { tail -130 "$logfile"; exit 1; }
+            grep -Fq "$case" "$logfile" || exit 1
+            printf 'PRIOR_SOURCE_CASE=%s EXIT_CODE=%s RESULT=%s\n' "$case" "$rc" "$([ "$rc" -eq 0 ] && echo PASS || echo FAIL)" | tee -a ../baseline-report/summary.txt
+          done
+          echo "BASELINE_EXECUTION_RECORDED=YES; failed assertions remain FAILED, not marked as passed" | tee -a ../baseline-report/summary.txt
+      - name: Archive reference logs even if setup fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t115-before-pr14864-comparison
+          path: baseline-report/
+          retention-days: 30
+          if-no-files-found: warn
+  current-merged-regression:
+    name: "T115 / run all D07 D26 gates independently on merged drawings"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Record exact merged official SHA and branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t115"
+          mkdir -p current-report
+          printf 'TEST=T115\nROLE=merged_official\nOFFICIAL_SHA=%s\nRUN_ID=%s\n' "$MERGED_SHA" "$GITHUB_RUN_ID" | tee current-report/source.txt
+      - name: Checkout official drawings with merged PR 14864
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: ecaff47b1c59b19771545b97b7df39ac748c5633
+          path: src
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check merged code, repair tests and read-only check sources
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$MERGED_SHA"
+          grep -Fq 'fn a_new_hole_never_takes_the_dimension_of_an_undone_one' crates/engine/src/cmd/drawing_dimension_tests.rs
+          grep -Fq 'fn renaming_the_plate_keeps_its_five_dimensions' crates/engine/src/cmd/drawing_dimension_tests.rs
+          grep -Fq 'fn a_dimension_a_posed_view_holds_back_says_why_and_covers_nothing' crates/engine/src/cmd/drawing_check_tests.rs
+          grep -Fq 'fn a_scratch_export_copy_shares_view_and_dimension_groups' crates/engine/src/drawing_scene_tests.rs
+          test -z "$(git status --porcelain)"
+          echo MERGED_PRODUCT_AND_REAL_TESTS_FOUND=PASS | tee ../current-report/summary.txt
+      - name: Setup Rust formatting
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Cache Rust outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t115-current-d07-d26-standalone
+          cache-on-failure: true
+      - name: Rustfmt check on official merged code
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../current-report/fmt.log 2>&1 || { tail -100 ../current-report/fmt.log; exit 1; }
+          echo RUSTFMT=PASS | tee -a ../current-report/summary.txt
+      - name: Run every native dimension test and retain exact failure result
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          if timeout 85m cargo test -p solidcraft-engine --lib --profile ci --locked 'cmd::drawing_dimension::tests::' -- --nocapture > ../current-report/dimension.log 2>&1; then rc=0; else rc=$?; fi
+          echo "$rc" > ../current-report/dimension-exit.txt
+          grep -Fq 'running 54 tests' ../current-report/dimension.log || { tail -130 ../current-report/dimension.log; exit 1; }
+          grep -Eq 'test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed;' ../current-report/dimension.log || { tail -130 ../current-report/dimension.log; exit 1; }
+          grep 'test result:' ../current-report/dimension.log | tail -1 | tee -a ../current-report/summary.txt
+          if [ "$rc" -ne 0 ]; then
+            echo "DIMENSION_MODULE=FAILED; actual failures retained, final quality gate will be red" | tee -a ../current-report/summary.txt
+          else
+            echo DIMENSION_MODULE=PASS | tee -a ../current-report/summary.txt
+          fi
+      - name: Run actual drawing check even when dimension tests fail
+        if: always()
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 45m cargo test -p solidcraft-engine --lib --profile ci --locked 'cmd::drawing_check::tests::' -- --nocapture > ../current-report/check.log 2>&1 || { tail -140 ../current-report/check.log; exit 1; }
+          grep -Eq 'test result: ok\. ([2-9][0-9]|[1-9][0-9]{2,}) passed; 0 failed;' ../current-report/check.log
+          grep -Fq 'a_dimension_a_posed_view_holds_back_says_why_and_covers_nothing ... ok' ../current-report/check.log
+          grep -Fq 'the_check_changes_nothing_and_answers_the_same ... ok' ../current-report/check.log
+          grep 'test result:' ../current-report/check.log | tail -1 | tee -a ../current-report/summary.txt
+          echo DRAWING_CHECK_INDEPENDENT=PASS | tee -a ../current-report/summary.txt
+      - name: Run native drawing scenes even when dimension tests fail
+        if: always()
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 45m cargo test -p solidcraft-engine --lib --profile ci --locked drawing_scene -- --nocapture > ../current-report/scene.log 2>&1 || { tail -140 ../current-report/scene.log; exit 1; }
+          grep -Eq 'test result: ok\. ([8-9][0-9]|[1-9][0-9]{2,}) passed; 0 failed;' ../current-report/scene.log
+          grep -Fq 'a_scratch_export_copy_shares_view_and_dimension_groups ... ok' ../current-report/scene.log
+          grep -Fq 'a_held_deferred_drawing_exports_the_same_from_a_scratch_copy ... ok' ../current-report/scene.log
+          grep 'test result:' ../current-report/scene.log | tail -1 | tee -a ../current-report/summary.txt
+          echo DRAWING_SCENE_INDEPENDENT=PASS | tee -a ../current-report/summary.txt
+      - name: Compile UI dependency even when dimension tests fail
+        if: always()
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 50m cargo check -p solidcraft-ui-egui --locked > ../current-report/ui-check.log 2>&1 || { tail -140 ../current-report/ui-check.log; exit 1; }
+          test -z "$(git status --porcelain)"
+          echo UI_ENGINE_COMPILE_INDEPENDENT=PASS | tee -a ../current-report/summary.txt
+      - name: Enforce no unresolved product failure is reported green
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f current-report/dimension-exit.txt || { echo "NO_REAL_DIMENSION_EXECUTION" >&2; exit 1; }
+          if [ "$(cat current-report/dimension-exit.txt)" != "0" ]; then
+            echo "T115_PRODUCT_REGRESSIONS_UNRESOLVED=TRUE; red by design" | tee -a current-report/summary.txt
+            exit 1
+          fi
+          echo T115_NO_KNOWN_DIMENSION_FAILURES=PASS | tee -a current-report/summary.txt
+      - name: Archive current logs including failed tests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t115-merged-d07-d26-gates
+          path: current-report/
+          retention-days: 30
+          if-no-files-found: warn
