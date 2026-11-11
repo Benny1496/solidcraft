@@ -1,0 +1,113 @@
+name: SolidCraft T114 - Issue 4890 paper export writers
+on:
+  push:
+    branches: [tests/solidcraft-t114]
+    paths: [.github/workflows/solidcraft-t114.yml]
+permissions:
+  contents: read
+concurrency:
+  group: t114-issue4890-paper-writers
+  cancel-in-progress: false
+env:
+  UPSTREAM_SHA: ecaff47b1c59b19771545b97b7df39ac748c5633
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "2"
+jobs:
+  paper:
+    name: T114 / W10 paper geometry and W21 real SVG PNG writers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Verify isolated fork and record source SHA
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Benny1496/solidcraft
+          test "$GITHUB_REF_NAME" = tests/solidcraft-t114
+          mkdir -p t114-report
+          printf 'UPSTREAM_SHA=%s\nRUN_ID=%s\n' "$UPSTREAM_SHA" "$GITHUB_RUN_ID" | tee t114-report/source.txt
+      - name: Checkout exact merged official drawings
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: ecaff47b1c59b19771545b97b7df39ac748c5633
+          path: src
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify paper writer source and negative tests before expensive run
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
+          grep -Fq 'fn an_a3_drawing_border_and_its_trimming_marks_validate_and_round_trip' crates/geom/src/paper_tests.rs
+          grep -Fq 'fn a_blue_svg_is_the_white_one_in_its_colours' crates/io/src/paper_tests.rs
+          grep -Fq 'fn a_watched_sheet_png_reports_its_rows_and_stops_when_cancelled' crates/io/src/paper/png_tests.rs
+          grep -Fq 'fn a_failed_view_is_named_and_nothing_is_written' crates/engine/src/cmd/drawing_export_tests.rs
+          grep -Fq 'fn a_sheet_is_its_border_then_its_views_by_id' crates/engine/src/drawing_scene_tests.rs
+          test -z "$(git status --porcelain)"
+          echo SOURCE_AND_REAL_W10_W21_TESTS=PASS | tee ../t114-report/summary.txt
+      - name: Setup Rust and cache
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t114-paper-svg-png-writers
+          cache-on-failure: true
+      - name: Formatting of actual official source
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../t114-report/fmt.log 2>&1 || { tail -100 ../t114-report/fmt.log; exit 1; }
+          echo RUSTFMT=PASS | tee -a ../t114-report/summary.txt
+      - name: Native W10 geometry paper scene clip and bounds tests
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 80m cargo test -p solidcraft-geom --lib --profile ci --locked 'paper::' -- --nocapture > ../t114-report/geometry.log 2>&1 || { tail -150 ../t114-report/geometry.log; exit 1; }
+          grep -Eq 'test result: ok\. ([3-9][0-9]|[1-9][0-9]{2,}) passed; 0 failed;' ../t114-report/geometry.log
+          for case in an_a3_drawing_border_and_its_trimming_marks_validate_and_round_trip a_line_is_above_zero_and_at_most_10_mm_wide a_dash_pattern_is_an_even_2_to_12_lengths_with_its_phase_inside_it; do
+            grep -Fq "$case ... ok" ../t114-report/geometry.log
+          done
+          grep 'test result:' ../t114-report/geometry.log | tail -1 | tee -a ../t114-report/summary.txt
+          echo W10_GEOMETRY_PAPER_CLIP_VALIDATION=PASS | tee -a ../t114-report/summary.txt
+      - name: Native W21 SVG PNG exact pixel and cancellation writer tests
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 50m cargo test -p solidcraft-io --lib --profile ci --locked 'paper::' -- --nocapture > ../t114-report/writers.log 2>&1 || { tail -160 ../t114-report/writers.log; exit 1; }
+          grep -Eq 'test result: ok\. ([3-9][0-9]|[1-9][0-9]{2,}) passed; 0 failed;' ../t114-report/writers.log
+          for case in a_blue_svg_is_the_white_one_in_its_colours a_blue_png_is_the_white_one_in_its_colours a_sheet_is_its_size_at_the_dpi_and_records_it a_watched_sheet_png_reports_its_rows_and_stops_when_cancelled fuzzed_clips_cut_pictures_in_both_writers; do
+            grep -Fq "$case ... ok" ../t114-report/writers.log
+          done
+          grep 'test result:' ../t114-report/writers.log | tail -1 | tee -a ../t114-report/summary.txt
+          echo W21_REAL_SVG_PNG_WRITERS_AND_CANCEL=PASS | tee -a ../t114-report/summary.txt
+      - name: Native drawing export command SVG PNG and refusal tests
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 35m cargo test -p solidcraft-engine --lib --profile ci --locked 'cmd::drawing_export::tests::' -- --nocapture > ../t114-report/export.log 2>&1 || { tail -160 ../t114-report/export.log; exit 1; }
+          grep -Eq 'test result: ok\. ([1-9][0-9]|[1-9][0-9]{2,}) passed; 0 failed;' ../t114-report/export.log
+          for case in a_sheet_exports_as_its_scenes_svg a_sheet_exports_as_its_scenes_png a_failed_view_is_named_and_nothing_is_written a_cancelled_png_export_writes_no_file a_sheet_exports_on_its_paper; do
+            grep -Fq "$case ... ok" ../t114-report/export.log
+          done
+          grep 'test result:' ../t114-report/export.log | tail -1 | tee -a ../t114-report/summary.txt
+          echo ENGINE_SVG_PNG_EXPORT_AND_NEGATIVES=PASS | tee -a ../t114-report/summary.txt
+      - name: Native paper scene to SVG boundary check
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 30m cargo test -p solidcraft-engine --lib --profile ci --locked 'drawing_scene::tests::a_sheet_is_its_border_then_its_views_by_id' -- --nocapture > ../t114-report/paper-scene.log 2>&1 || { tail -140 ../t114-report/paper-scene.log; exit 1; }
+          grep -Eq 'test result: ok\. 1 passed; 0 failed;' ../t114-report/paper-scene.log
+          grep -Fq 'a_sheet_is_its_border_then_its_views_by_id ... ok' ../t114-report/paper-scene.log
+          test -z "$(git status --porcelain)"
+          echo W10_TO_SVG_ENGINE_INTEGRATION=PASS | tee -a ../t114-report/summary.txt
+      - name: Preserve unmodified original test logs for Node RED archive
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t114-4890-paper-export
+          path: t114-report/
+          retention-days: 30
+          if-no-files-found: warn
