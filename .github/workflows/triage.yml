@@ -12,8 +12,6 @@ on:
   # scripts/triage and only lists the PR's changed paths; the PR's code is never checked out.
   pull_request_target:
     types: [opened]
-  schedule:
-    - cron: '41 5 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
