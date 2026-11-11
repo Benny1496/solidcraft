@@ -1,0 +1,162 @@
+name: SolidCraft T118 - Loohi sheet page Note compatibility repair
+on:
+  push:
+    branches: [tests/solidcraft-t118]
+    paths: [.github/workflows/solidcraft-t118.yml]
+permissions:
+  contents: read
+concurrency:
+  group: solidcraft-t118-note-object-sheet
+  cancel-in-progress: false
+env:
+  OFFICIAL_DRAWINGS_SHA: ecaff47b1c59b19771545b97b7df39ac748c5633
+  LOOHI_SHEET_SHA: 84ef88b10e394c9ea9f90459c242e2033c6f7133
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "2"
+  RUST_BACKTRACE: "1"
+jobs:
+  repaired-sheet-compatibility:
+    name: T118 / drawing sheet Note support, 12 real UI tests and engine regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Gate test-only fork branch and store exact source pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t118"
+          mkdir -p t118-report
+          printf 'TEST=T118\nRUN_ID=%s\nOFFICIAL_SHA=%s\nLOOHI_PR_13211_SHA=%s\nPATCH_SCOPE=runner_only\n' "$GITHUB_RUN_ID" "$OFFICIAL_DRAWINGS_SHA" "$LOOHI_SHEET_SHA" | tee t118-report/source.txt
+      - name: Checkout exact official drawings, including merged PR 14864 and Note enum
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: ecaff47b1c59b19771545b97b7df39ac748c5633
+          path: src
+          fetch-depth: 150
+          persist-credentials: false
+      - name: Integrate exact unmodified Loohi PR 13211 only inside runner
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$OFFICIAL_DRAWINGS_SHA"
+          git fetch --no-tags --depth=250 https://github.com/Loohi/solidcraft.git "$LOOHI_SHEET_SHA" > ../t118-report/fetch.log 2>&1 || { tail -110 ../t118-report/fetch.log; exit 1; }
+          test "$(git rev-parse FETCH_HEAD)" = "$LOOHI_SHEET_SHA"
+          git merge-base HEAD FETCH_HEAD > ../t118-report/merge-base.txt || { echo "Merge ancestry unavailable"; exit 1; }
+          git -c user.name="SolidCraft CI" -c user.email="ci@example.invalid" merge --no-commit --no-ff FETCH_HEAD > ../t118-report/merge.log 2>&1 || { tail -140 ../t118-report/merge.log; exit 1; }
+          test "$(git rev-parse HEAD)" = "$OFFICIAL_DRAWINGS_SHA"
+          test -z "$(git ls-files -u)"
+          git diff --check HEAD > ../t118-report/merged-diff-check.log 2>&1 || { cat ../t118-report/merged-diff-check.log; exit 1; }
+          grep -Fq 'pub enum ObjectKind' crates/geom/src/paper.rs
+          grep -Fq 'ObjectKind::Note => "NOTE"' crates/geom/src/paper.rs
+          grep -Fq 'fn kind_name(kind: ObjectKind)' crates/ui-egui/src/drawing_sheet_page.rs
+          grep -Fq 'fn true_size_is_one_millimetre_at_any_ui_scale' crates/ui-egui/src/drawing_sheet_page_tests.rs
+          echo LOOCAL_MERGE_OFFICIAL_PLUS_13211=PASS | tee ../t118-report/summary.txt
+      - name: Apply minimal Note fix and new regression assertion in runner only
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path("crates/ui-egui/src/drawing_sheet_page.rs")
+          original = source.read_text()
+          anchor = '        ObjectKind::Dimension => "dimension",\n'
+          new_line = '        ObjectKind::Note => "note",\n'
+          assert original.count(anchor) == 1, "Unexpected original match; stop, never guess patch"
+          assert new_line not in original, "PR was updated; do not duplicate a real fix"
+          source.write_text(original.replace(anchor, anchor + new_line, 1))
+          assert source.read_text().count(new_line) == 1
+          tests = Path("crates/ui-egui/src/drawing_sheet_page_tests.rs")
+          old_tests = tests.read_text()
+          assert old_tests.count("#[test]") == 11, "Source test count changed; inspect before running"
+          addition = '''
+          /// A note added on newer drawings is a first-class hoverable annotation, not a view.
+          #[test]
+          fn a_note_object_has_a_named_hover_kind_on_the_sheet() {
+              assert_eq!(kind_name(ObjectKind::Note), "note");
+          }
+          '''
+          assert "fn a_note_object_has_a_named_hover_kind_on_the_sheet" not in old_tests
+          tests.write_text(old_tests.rstrip("\n") + "\n" + addition)
+          assert tests.read_text().count("#[test]") == 12
+          print("RUNNER_ONLY_NOTE_ARM_AND_REGRESSION=APPLIED")
+          PY
+          git diff -- crates/ui-egui/src/drawing_sheet_page.rs > ../t118-report/note-compat-patch.diff
+          git diff -- crates/ui-egui/src/drawing_sheet_page_tests.rs > ../t118-report/note-compat-test.diff
+          test "$(grep -Fc '+        ObjectKind::Note => "note",' ../t118-report/note-compat-patch.diff)" = "1"
+          test "$(grep -Fc '+fn a_note_object_has_a_named_hover_kind_on_the_sheet() {' ../t118-report/note-compat-test.diff)" = "1"
+          git diff --check HEAD > ../t118-report/integration-diff-check.log 2>&1 || { cat ../t118-report/integration-diff-check.log; exit 1; }
+          echo RUNNER_ONLY_NOTE_COMPATIBILITY_PATCH=PASS | tee -a ../t118-report/summary.txt
+      - name: Setup stable Rust toolchain and formatting
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Restore isolated Rust compilation cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t118-note-compat-ui-v1
+          cache-on-failure: true
+      - name: Check formatting of original PR plus minimal local patch
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../t118-report/fmt.log 2>&1 || { tail -150 ../t118-report/fmt.log; exit 1; }
+          echo RUSTFMT=PASS | tee -a ../t118-report/summary.txt
+      - name: Run original eleven Loohi UI scenarios plus explicit Note regression
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 90m cargo test -p solidcraft-ui-egui --lib --profile ci --locked 'drawing_sheet_page::tests::' -- --nocapture > ../t118-report/ui-sheet-tests.log 2>&1 || { tail -200 ../t118-report/ui-sheet-tests.log; exit 1; }
+          grep -Fq 'test result: ok. 12 passed; 0 failed;' ../t118-report/ui-sheet-tests.log || { tail -200 ../t118-report/ui-sheet-tests.log; exit 1; }
+          for name in a_note_object_has_a_named_hover_kind_on_the_sheet true_size_is_one_millimetre_at_any_ui_scale fit_sheet_shows_the_whole_sheet_and_zoom_stays_in_range pan_moves_the_sheet_and_leaves_the_design_camera sheet_colour_is_screen_only a_views_state_is_in_words; do
+            grep -Fq "$name ... ok" ../t118-report/ui-sheet-tests.log || { echo "Missing successful test $name"; exit 1; }
+          done
+          grep 'test result:' ../t118-report/ui-sheet-tests.log | tail -1 | tee -a ../t118-report/summary.txt
+          echo ALL_ORIGINAL_SHEET_UI_PLUS_NOTE_REGRESSION=PASS | tee -a ../t118-report/summary.txt
+      - name: Check all 96 native drawing scenes including notes
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 45m cargo test -p solidcraft-engine --lib --profile ci --locked 'drawing_scene::tests::' -- --nocapture > ../t118-report/scenes.log 2>&1 || { tail -170 ../t118-report/scenes.log; exit 1; }
+          grep -Fq 'test result: ok. 96 passed; 0 failed;' ../t118-report/scenes.log
+          for name in a_scratch_export_copy_shares_view_and_dimension_groups a_held_drawing_keeps_its_notes_and_exports_them_from_a_scratch_copy; do
+            grep -Fq "$name ... ok" ../t118-report/scenes.log
+          done
+          grep 'test result:' ../t118-report/scenes.log | tail -1 | tee -a ../t118-report/summary.txt
+          echo DRAWING_SCENES_NOTE_INTEGRATION=PASS | tee -a ../t118-report/summary.txt
+      - name: Check 26 read-only drawing status and lost notes cases
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 30m cargo test -p solidcraft-engine --lib --profile ci --locked 'cmd::drawing_check::tests::' -- --nocapture > ../t118-report/check.log 2>&1 || { tail -170 ../t118-report/check.log; exit 1; }
+          grep -Fq 'test result: ok. 26 passed; 0 failed;' ../t118-report/check.log
+          grep -Fq 'a_lost_note_is_listed ... ok' ../t118-report/check.log
+          grep -Fq 'a_notes_lost_branch_is_listed_by_its_number ... ok' ../t118-report/check.log
+          grep 'test result:' ../t118-report/check.log | tail -1 | tee -a ../t118-report/summary.txt
+          echo READ_ONLY_STATUS_AND_NOTE_CHECK=PASS | tee -a ../t118-report/summary.txt
+      - name: Check full UI build and verify no unmerged paths or upstream modification
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 40m cargo check -p solidcraft-ui-egui --locked > ../t118-report/ui-check.log 2>&1 || { tail -170 ../t118-report/ui-check.log; exit 1; }
+          test "$(git rev-parse HEAD)" = "$OFFICIAL_DRAWINGS_SHA"
+          test -z "$(git ls-files -u)"
+          echo FULL_UI_COMPILE_LOCAL_PATCH_ONLY=PASS | tee -a ../t118-report/summary.txt
+      - name: Always archive exact logs, merge proof and local patch
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t118-loohi-sheet-note-compat
+          path: t118-report/
+          if-no-files-found: warn
+          retention-days: 30
