@@ -1,0 +1,109 @@
+name: SolidCraft T113 - D07 D26 dimension safety
+on:
+  push:
+    branches: [tests/solidcraft-t113]
+    paths: [.github/workflows/solidcraft-t113.yml]
+permissions:
+  contents: read
+concurrency:
+  group: t113-d07-d26-engine
+  cancel-in-progress: false
+env:
+  UPSTREAM_SHA: ecaff47b1c59b19771545b97b7df39ac748c5633
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "2"
+jobs:
+  native:
+    name: T113 / dimension inspect repair and check native regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Validate branch and create audit
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Benny1496/solidcraft
+          test "$GITHUB_REF_NAME" = tests/solidcraft-t113
+          mkdir -p t113-report
+          printf 'UPSTREAM_SHA=%s\nRUN_ID=%s\n' "$UPSTREAM_SHA" "$GITHUB_RUN_ID" | tee t113-report/source.txt
+      - name: Checkout pinned official drawings
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: ecaff47b1c59b19771545b97b7df39ac748c5633
+          path: src
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Validate original product and test sources
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
+          grep -Fq 'pub struct DrawingStatusResult' crates/engine/src/schema/drawing_scene.rs
+          grep -Fq 'pub struct RepairParams' crates/engine/src/schema/drawing_dimension.rs
+          grep -Fq 'pub struct CheckResult' crates/engine/src/schema/drawing_check.rs
+          grep -Fq 'fn a_repair_is_one_undo_step_and_undone_is_lost_again' crates/engine/src/cmd/drawing_dimension_tests.rs
+          grep -Fq 'fn a_dimension_a_posed_view_holds_back_says_why_and_covers_nothing' crates/engine/src/cmd/drawing_check_tests.rs
+          test -z "$(git status --porcelain)"
+          echo SOURCE_PIN_AND_REAL_TESTS=PASS | tee ../t113-report/summary.txt
+      - name: Setup Rust and cache
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t113-d07-d26-native-merged
+          cache-on-failure: true
+      - name: Format check
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../t113-report/fmt.log 2>&1 || { tail -80 ../t113-report/fmt.log; exit 1; }
+          echo RUSTFMT=PASS | tee -a ../t113-report/summary.txt
+      - name: Real dimension inspect repair invalid picks undo save reload tests
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 85m cargo test -p solidcraft-engine --lib --profile ci --locked 'cmd::drawing_dimension::tests::' -- --nocapture > ../t113-report/dimension.log 2>&1 || { tail -140 ../t113-report/dimension.log; exit 1; }
+          grep -Eq 'test result: ok\. ([4-9][0-9]|[1-9][0-9]{2,}) passed; 0 failed;' ../t113-report/dimension.log
+          for case in a_lost_dimension_keeps_its_last_good_value_after_reopening fillet_then_repair_reads_again_with_the_same_id_and_place a_repair_is_one_undo_step_and_undone_is_lost_again a_bad_repair_pick_changes_nothing an_ambiguous_length_is_repaired_to_one_piece background_saves_and_autosaves_keep_the_last_good_value; do
+            grep -Fq "$case ... ok" ../t113-report/dimension.log
+          done
+          grep 'test result:' ../t113-report/dimension.log | tail -1 | tee -a ../t113-report/summary.txt
+          echo DIMENSION_REPAIR_AND_PERSISTENCE=PASS | tee -a ../t113-report/summary.txt
+      - name: Real check drawing lost ambiguous held posed exploded tests
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 35m cargo test -p solidcraft-engine --lib --profile ci --locked 'cmd::drawing_check::tests::' -- --nocapture > ../t113-report/check.log 2>&1 || { tail -140 ../t113-report/check.log; exit 1; }
+          grep -Eq 'test result: ok\. ([2-9][0-9]|[1-9][0-9]{2,}) passed; 0 failed;' ../t113-report/check.log
+          for case in a_lost_dimension_and_an_empty_part_number_are_listed_and_nothing_else a_held_view_and_its_dimension_are_out_of_date a_dimension_an_exploded_view_holds_back_says_why a_dimension_a_posed_view_holds_back_says_why_and_covers_nothing the_check_changes_nothing_and_answers_the_same; do
+            grep -Fq "$case ... ok" ../t113-report/check.log
+          done
+          grep 'test result:' ../t113-report/check.log | tail -1 | tee -a ../t113-report/summary.txt
+          echo CHECK_READONLY_POSED_EXPLODED=PASS | tee -a ../t113-report/summary.txt
+      - name: Real paper scene status provider regression
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 40m cargo test -p solidcraft-engine --lib --profile ci --locked drawing_scene -- --nocapture > ../t113-report/scene.log 2>&1 || { tail -140 ../t113-report/scene.log; exit 1; }
+          grep -Eq 'test result: ok\. ([8-9][0-9]|[1-9][0-9]{2,}) passed; 0 failed;' ../t113-report/scene.log
+          grep -Fq 'a_scratch_export_copy_shares_view_and_dimension_groups ... ok' ../t113-report/scene.log
+          grep 'test result:' ../t113-report/scene.log | tail -1 | tee -a ../t113-report/summary.txt
+          echo SCENE_STATUS_PROVIDER=PASS | tee -a ../t113-report/summary.txt
+      - name: UI dependency compile without claiming implemented D07 UI
+        working-directory: src
+        run: |
+          set -euo pipefail
+          timeout 40m cargo check -p solidcraft-ui-egui --locked > ../t113-report/ui.log 2>&1 || { tail -140 ../t113-report/ui.log; exit 1; }
+          test -z "$(git status --porcelain)"
+          echo UI_COMPAT_ONLY_NOT_D07_PRODUCT_UI=PASS | tee -a ../t113-report/summary.txt
+      - name: Preserve all logs for SHA256 original archive
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t113-d07-d26-native
+          path: t113-report/
+          retention-days: 30
+          if-no-files-found: warn
