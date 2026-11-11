@@ -25,8 +25,6 @@ on:
     workflows: ["Mirror to SolidCore"]
     types: [completed]
     branches: [main]
-  schedule:
-    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:
