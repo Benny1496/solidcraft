@@ -28,9 +28,6 @@
 name: Release
 
 on:
-  schedule:
-    - cron: '0 0 * * *'
-      timezone: America/New_York
   push:
     branches: [release]
   workflow_dispatch:
