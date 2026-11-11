@@ -1,0 +1,129 @@
+name: SolidCraft T116 - 4890 UI export and held drawing integration
+on:
+  push:
+    branches: [tests/solidcraft-t116]
+    paths: [.github/workflows/solidcraft-t116.yml]
+permissions:
+  contents: read
+concurrency:
+  group: solidcraft-t116-ui-export-and-held-sheet
+  cancel-in-progress: false
+env:
+  UPSTREAM_SHA: "ecaff47b1c59b19771545b97b7df39ac748c5633"
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "2"
+  RUST_BACKTRACE: "1"
+jobs:
+  ui-export-integration:
+    name: "T116 / real egui export worker and held drawing sheet integration"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Verify isolated fork branch and record official source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Benny1496/solidcraft"
+          test "$GITHUB_REF_NAME" = "tests/solidcraft-t116"
+          mkdir -p t116-report
+          printf 'TEST=T116\nPINNED_UPSTREAM_SHA=%s\nRUN_ID=%s\n' "$UPSTREAM_SHA" "$GITHUB_RUN_ID" | tee t116-report/source.txt
+      - name: Checkout pinned official drawings with merged #14864
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: ecaff47b1c59b19771545b97b7df39ac748c5633
+          path: src
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify actual product UI tests, scene tests, no product modifications
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"
+          grep -Fq 'fn sheet_docking_and_settings_only_change_ui_preferences' crates/ui-egui/src/drawing_workspace.rs
+          grep -Fq 'fn ticks_draw_the_sheet_beside_the_window' crates/ui-egui/src/drawing_jobs.rs
+          grep -Fq 'fn a_held_deferred_drawing_exports_the_same_from_a_scratch_copy' crates/engine/src/drawing_scene_tests.rs
+          grep -Fq 'fn a_held_drawing_keeps_its_notes_and_exports_them_from_a_scratch_copy' crates/engine/src/drawing_scene_tests.rs
+          grep -Fq 'fn a_reopened_held_drawing_exports_the_same_from_a_scratch_copy_before_its_sheet_is_read' crates/engine/src/drawing_scene_tests.rs
+          grep -Fq 'fn a_scratch_export_copy_shares_view_and_dimension_groups' crates/engine/src/drawing_scene_tests.rs
+          test -z "$(git status --porcelain)"
+          echo EXACT_PRODUCT_AND_UI_SCENARIOS=PASS | tee ../t116-report/summary.txt
+      - name: Setup stable Rust compiler and formatter
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Cache compiled Rust outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t116-ui-egui-real-export-and-scenarios
+          cache-on-failure: true
+      - name: Verify unchanged official Rust formatting
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check > ../t116-report/fmt.log 2>&1 || { tail -110 ../t116-report/fmt.log; exit 1; }
+          echo RUSTFMT=PASS | tee -a ../t116-report/summary.txt
+      - name: Run real background export worker UI integration
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 85m cargo test -p solidcraft-ui-egui --lib --profile ci --locked a_held_deferred_sheet_written_beside_the_window_is_the_one_exported_at_once -- --nocapture > ../t116-report/ui-export.log 2>&1 || { tail -160 ../t116-report/ui-export.log; exit 1; }
+          grep -Fq 'a_held_deferred_sheet_written_beside_the_window_is_the_one_exported_at_once ... ok' ../t116-report/ui-export.log
+          grep -Eq 'test result: ok\. 1 passed; 0 failed;' ../t116-report/ui-export.log
+          echo UI_REAL_BACKGROUND_EXPORT=PASS | tee -a ../t116-report/summary.txt
+      - name: Test drawing workspace sheet docking and non-destructive preferences
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 40m cargo test -p solidcraft-ui-egui --lib --profile ci --locked 'drawing_workspace::tests::' -- --nocapture > ../t116-report/ui-workspace.log 2>&1 || { tail -170 ../t116-report/ui-workspace.log; exit 1; }
+          grep -Eq 'test result: ok\. ([3-9]|[1-9][0-9]+) passed; 0 failed;' ../t116-report/ui-workspace.log
+          for name in workspace_and_options_leave_source_and_camera_unchanged sheet_docking_and_settings_only_change_ui_preferences crowded_sheet_strip_moves_beneath_browser_without_changing_its_dock_preference; do
+            grep -Fq "$name ... ok" ../t116-report/ui-workspace.log
+          done
+          grep 'test result:' ../t116-report/ui-workspace.log | tail -1 | tee -a ../t116-report/summary.txt
+          echo UI_SHEET_WORKSPACE_COMPAT=PASS | tee -a ../t116-report/summary.txt
+      - name: Test asynchronous sheet drawing jobs in actual UI
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 30m cargo test -p solidcraft-ui-egui --lib --profile ci --locked 'drawing_jobs::tests::' -- --nocapture > ../t116-report/ui-jobs.log 2>&1 || { tail -150 ../t116-report/ui-jobs.log; exit 1; }
+          grep -Eq 'test result: ok\. 1 passed; 0 failed;' ../t116-report/ui-jobs.log
+          grep -Fq 'ticks_draw_the_sheet_beside_the_window ... ok' ../t116-report/ui-jobs.log
+          echo UI_ASYNC_DRAWING_JOB=PASS | tee -a ../t116-report/summary.txt
+      - name: Test held deferred scratch export and lost note edge cases on engine
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 35m cargo test -p solidcraft-engine --lib --profile ci --locked 'drawing_scene::tests::a_held' -- --nocapture > ../t116-report/engine-held.log 2>&1 || { tail -180 ../t116-report/engine-held.log; exit 1; }
+          grep -Eq 'test result: ok\. ([2-9]|[1-9][0-9]+) passed; 0 failed;' ../t116-report/engine-held.log
+          for name in a_held_deferred_drawing_exports_the_same_from_a_scratch_copy a_held_drawing_keeps_its_notes_and_exports_them_from_a_scratch_copy; do
+            grep -Fq "$name ... ok" ../t116-report/engine-held.log
+          done
+          grep 'test result:' ../t116-report/engine-held.log | tail -1 | tee -a ../t116-report/summary.txt
+          echo ENGINE_HELD_NOTE_EXPORT_COMPAT=PASS | tee -a ../t116-report/summary.txt
+      - name: Test held drawing after reopening and lazily reading its sheet
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 30m cargo test -p solidcraft-engine --lib --profile ci --locked a_reopened_held_drawing_exports_the_same_from_a_scratch_copy_before_its_sheet_is_read -- --nocapture > ../t116-report/engine-reopen.log 2>&1 || { tail -140 ../t116-report/engine-reopen.log; exit 1; }
+          grep -Eq 'test result: ok\. 1 passed; 0 failed;' ../t116-report/engine-reopen.log
+          grep -Fq 'a_reopened_held_drawing_exports_the_same_from_a_scratch_copy_before_its_sheet_is_read ... ok' ../t116-report/engine-reopen.log
+          test -z "$(git status --porcelain)"
+          echo ENGINE_REOPENED_HELD_EXPORT=PASS | tee -a ../t116-report/summary.txt
+      - name: Archive all actual run logs including failure cases
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t116-4890-ui-scratch-export
+          path: t116-report/
+          retention-days: 30
+          if-no-files-found: warn
