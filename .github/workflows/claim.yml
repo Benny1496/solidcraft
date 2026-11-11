@@ -10,8 +10,6 @@ on:
   # scripts/claim and only reads the PR's title, body and author; the PR's code is never checked out.
   pull_request_target:
     types: [opened, reopened]
-  schedule:
-    - cron: '17 5 * * *'
   workflow_dispatch:
 
 permissions:
