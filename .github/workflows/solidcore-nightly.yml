@@ -4,8 +4,6 @@
 name: SolidCore nightly
 
 on:
-  schedule:
-    - cron: "41 3 * * *"
   workflow_dispatch:
 
 permissions:
