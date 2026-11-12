@@ -11,6 +11,8 @@ jobs:
     timeout-minutes: 140
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -18,6 +20,7 @@ jobs:
       - name: Verify pinned official drawings base and unchanged production fix
         run: |
           set -euo pipefail
+          mkdir -p t132-report
           BASE=6c264401398a9fe01ac79b37f445fc70ed6cf5cd
           git cat-file -e "${BASE}^{commit}"
           git merge-base --is-ancestor "$BASE" HEAD
