@@ -171,7 +171,7 @@ mod w23a_engine_integration_tests {
         let mut session = Session::default();
         let replies = session.run_script(&script).expect("W23a script must execute");
         let view = replies.last().expect("W23a creates a view")["view"].clone();
-        let drawing = session.drawing("w23a").expect("W23a drawing").id;
+        let drawing = replies[replies.len() - 2]["drawing"].clone();
         let centre = Vec3::from([20.0, 20.0, 20.0]);
         let mesh = session.model.state().body("Plate").expect("Plate body").mesh();
         let index = mesh.edges.iter().position(|edge| {
@@ -186,7 +186,7 @@ mod w23a_engine_integration_tests {
 
         command(&mut session, "drawing.close", json!({}));
         command(&mut session, "timeline.delete", json!({"feature": "Bore1"}));
-        command(&mut session, "drawing.open", json!({"drawing": format!("{drawing}")}));
+        command(&mut session, "drawing.open", json!({"drawing": drawing}));
         let engine_status = command(&mut session, "drawing.status", json!({}));
         let attention = from_status(&engine_status);
         let id = dimension.as_str().expect("dimension ID");
