@@ -1,7 +1,7 @@
 //! Read-only M1-A projection of drawing.status and drawing.dimension.inspect.
 //! No drawing command, update, repair or persistence mutation is performed here.
-use std::collections::{BTreeMap, BTreeSet};
 use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ViewItem {
@@ -68,28 +68,42 @@ impl DrawingAttention {
 /// Projects one engine response; never guesses a dimension's sheet from its order.
 /// Malformed entries are ignored rather than assigned fabricated identifiers.
 pub fn from_status(status: &Value) -> DrawingAttention {
-    let views = status.get("views").and_then(Value::as_array).into_iter().flatten().filter_map(|v| {
-        Some(ViewItem {
-            id: v.get("view")?.as_str()?.to_owned(),
-            sheet: v.get("sheet")?.as_str()?.to_owned(),
-            status: v.get("status")?.as_str()?.to_owned(),
-            reason: v.get("reason").and_then(Value::as_str).map(str::to_owned),
+    let views = status
+        .get("views")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|v| {
+            Some(ViewItem {
+                id: v.get("view")?.as_str()?.to_owned(),
+                sheet: v.get("sheet")?.as_str()?.to_owned(),
+                status: v.get("status")?.as_str()?.to_owned(),
+                reason: v.get("reason").and_then(Value::as_str).map(str::to_owned),
+            })
         })
-    }).collect();
+        .collect();
     let mut seen = BTreeSet::new();
-    let dimensions = status.get("dimensions").and_then(Value::as_array).into_iter().flatten().filter_map(|d| {
-        let id = d.get("dimension")?.as_str()?.to_owned();
-        if !seen.insert(id.clone()) { return None; }
-        Some(DimensionItem {
-            id,
-            view: None,
-            sheet: None,
-            status: d.get("status")?.as_str()?.to_owned(),
-            why: d.get("why").and_then(Value::as_str).map(str::to_owned),
-            out_of_date: d.get("out_of_date").and_then(Value::as_bool).unwrap_or(false),
-            inspect_error: None,
+    let dimensions = status
+        .get("dimensions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|d| {
+            let id = d.get("dimension")?.as_str()?.to_owned();
+            if !seen.insert(id.clone()) {
+                return None;
+            }
+            Some(DimensionItem {
+                id,
+                view: None,
+                sheet: None,
+                status: d.get("status")?.as_str()?.to_owned(),
+                why: d.get("why").and_then(Value::as_str).map(str::to_owned),
+                out_of_date: d.get("out_of_date").and_then(Value::as_bool).unwrap_or(false),
+                inspect_error: None,
+            })
         })
-    }).collect();
+        .collect();
     DrawingAttention {
         views,
         dimensions,
@@ -118,7 +132,9 @@ mod tests {
 
     #[test]
     fn held_without_waiting_and_drawn_reason_are_preserved() {
-        let a = from_status(&json!({"views":[{"view":"v","sheet":"s","status":"current","reason":"study no longer exists"}],"dimensions":[{"dimension":"d","status":"ok","out_of_date":true}],"waiting":0,"held":true}));
+        let a = from_status(
+            &json!({"views":[{"view":"v","sheet":"s","status":"current","reason":"study no longer exists"}],"dimensions":[{"dimension":"d","status":"ok","out_of_date":true}],"waiting":0,"held":true}),
+        );
         assert!(a.held);
         assert_eq!(a.waiting_views, 0);
         assert_eq!(a.views[0].reason.as_deref(), Some("study no longer exists"));
