@@ -1,0 +1,48 @@
+name: SolidCraft Stage 4 Followup Test 132 Drawings Compatibility
+on:
+  push:
+    branches:
+      - tests/solidcraft-t132-drawings-15564-compat
+permissions:
+  contents: read
+jobs:
+  upstream-drawings-compat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 140
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: drawings-t132-merged-15564
+      - name: Verify pinned official drawings base and unchanged production fix
+        run: |
+          set -euo pipefail
+          BASE=6c264401398a9fe01ac79b37f445fc70ed6cf5cd
+          git cat-file -e "${BASE}^{commit}"
+          git merge-base --is-ancestor "$BASE" HEAD
+          test "$(git rev-parse HEAD:crates/engine/src/drawing_scene.rs)" = "$(git rev-parse "$BASE":crates/engine/src/drawing_scene.rs)"
+          grep -q 'fn on_paper(' crates/engine/src/drawing_scene.rs
+          grep -q 'fn a_note_that_prints_nothing_is_not_outside_the_sheet' crates/engine/src/cmd/drawing_check_tests.rs
+          echo "T132_BASE_VERIFIED official_drawings=$BASE included_merged_PR_15564=true production_code_unchanged=true"
+          git rev-parse HEAD
+      - name: Run real merged Drawings compatibility and related regressions
+        run: |
+          set -euo pipefail
+          mkdir -p t132-report
+          {
+            echo "T132_PHASE=integrated_real_drawing_scene_check_and_dimension"
+            timeout 115m cargo test -p solidcraft-engine --lib --profile ci current_drawings_15564_blank_note_does_not_hide_real_dimension_or_outside_note -- --nocapture
+            echo "T132_PHASE=upstream_drawing_check_regressions"
+            timeout 115m cargo test -p solidcraft-engine --lib --profile ci drawing_check -- --nocapture
+            echo "T132_PHASE=upstream_drawing_scene_regressions"
+            timeout 115m cargo test -p solidcraft-engine --lib --profile ci drawing_scene -- --nocapture
+            echo "T132_DRAWINGS_COMPAT_SUITE_PASS all_three_filters_completed=true"
+          } 2>&1 | tee t132-report/result.log
+      - name: Preserve native GitHub Actions logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t132-upstream-drawings-compatibility
+          path: t132-report/
+          retention-days: 30
