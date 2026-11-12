@@ -295,5 +295,13 @@ mod sensor_enclosure_stage2_dimension_tests {
         assert_eq!(item.status, "lost");
         assert!(item.needs_attention());
         assert!(inspected.get("last_good").is_some(), "lost measurement retains last_good: {inspected}");
+        let drawing = run(&mut s, "drawing.close", json!({}))["closed"].clone();
+        run(&mut s, "edit.undo", json!({}));
+        run(&mut s, "drawing.open", json!({"drawing": drawing}));
+        let recovered = run(&mut s, "drawing.dimension.inspect", json!({"dimension": dimension.clone()}));
+        assert_eq!(recovered["status"], "ok", "undo must restore the original dimension: {recovered}");
+        let after = from_status(&run(&mut s, "drawing.status", json!({})));
+        assert_eq!(after.dimensions.iter().find(|d| d.id == id).expect("recovered dimension").status, "ok");
+
     }
 }
