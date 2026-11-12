@@ -183,6 +183,7 @@ mod blend_dialog_tests;
 #[cfg(test)]
 mod boundary_dialog_tests;
 pub(crate) mod display_lod;
+pub mod drawing_dimension_status;
 pub mod drawing_jobs;
 pub mod drawing_workspace;
 #[cfg(test)]
