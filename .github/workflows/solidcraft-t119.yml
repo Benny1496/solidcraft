@@ -4,7 +4,7 @@ on:
     branches: [tests/solidcraft-t119]
     paths: [.github/workflows/solidcraft-t119.yml]
 permissions:
-  contents: read
+  contents: write
 jobs:
   m1a:
     runs-on: ubuntu-24.04
@@ -14,14 +14,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Benny1496/solidcraft
-          ref: 4e0daad7bed1e3f3d7c5a6a19cfbeb4659964228
+          ref: feature/drawing-d07-d26-status-m1
           path: src
-          persist-credentials: false
+          persist-credentials: true
       - name: Verify source
         working-directory: src
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "4e0daad7bed1e3f3d7c5a6a19cfbeb4659964228"
+          test "$(git branch --show-current)" = "feature/drawing-d07-d26-status-m1"
           grep -Fq 'pub mod drawing_dimension_status;' crates/ui-egui/src/lib.rs
           git diff --check HEAD
       - name: Setup Rust
@@ -43,6 +43,11 @@ jobs:
           cargo fmt --all -- --check >> ../t119-report/fmt.log 2>&1 || { tail -100 ../t119-report/fmt.log; exit 1; }
           git diff -- crates/ui-egui/src/drawing_dimension_status.rs > ../t119-report/m1a-rustfmt.patch
           test -s ../t119-report/m1a-rustfmt.patch
+          git config user.name 'SolidCraft Test Runner'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/ui-egui/src/drawing_dimension_status.rs crates/ui-egui/src/drawing_status_controller.rs
+          git commit -m 'style: apply rustfmt to M1-A modules'
+          git push origin HEAD:feature/drawing-d07-d26-status-m1
       - name: Compile UI
         working-directory: src
         shell: bash
@@ -53,7 +58,8 @@ jobs:
         shell: bash
         run: |
           timeout 100m cargo test -p solidcraft-ui-egui --lib --profile ci --locked 'drawing_dimension_status::tests::' -- --nocapture > ../t119-report/tests.log 2>&1 || { tail -160 ../t119-report/tests.log; exit 1; }
-          grep -Fq 'test result: ok. 3 passed; 0 failed;' ../t119-report/tests.log
+          timeout 100m cargo test -p solidcraft-ui-egui --lib --profile ci --locked 'drawing_status_controller::tests::' -- --nocapture >> ../t119-report/tests.log 2>&1 || { tail -160 ../t119-report/tests.log; exit 1; }
+          test "$(grep -c 'test result: ok. 3 passed; 0 failed;' ../t119-report/tests.log)" -eq 2
       - name: Archive logs
         if: always()
         uses: actions/upload-artifact@v4
