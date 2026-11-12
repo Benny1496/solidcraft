@@ -1225,6 +1225,10 @@ impl SolveApp {
             drawing_workspace::refresh_attention(self);
             timeline::stop_playback(self);
         }
+        if done.is_ok() && matches!(id, "drawing.open" | "drawing.close" | "drawing.create" | "drawing.delete" | "drawing.update") {
+            self.drawing_workspace.attention_error = Some("Drawing state changed".into());
+            drawing_workspace::refresh_attention(self);
+        }
         let selection_changed = self.session.selection != selected_before || matches!(id, "select.set" | "select.clear" | "select.same_look");
         if done.is_ok() && selection_changed {
             self.tree.clear_folder_pick();
