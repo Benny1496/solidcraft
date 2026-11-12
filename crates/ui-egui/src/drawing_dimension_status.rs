@@ -310,3 +310,114 @@ mod stage4_selene_native_engine_gate {
         );
     }
 }
+
+#[cfg(test)]
+mod stage4_selene_negative_component_dimension {
+
+    use super::*;
+    use serde_json::{json, Value};
+    use solidcraft_engine::{io, Session};
+    use std::time::Instant;
+
+    const SELENE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/render/selene/models/SELENE-functional.solidcraft");
+    const TARGET: &str = "Pi5 BCM2712 substrate";
+    const COMPONENT: &str = "Raspberry Pi 5 componentry";
+
+    fn run(s: &mut Session, id: &str, p: Value) -> Value {
+        s.execute(id, &p).unwrap_or_else(|e| panic!("{id}: {e}"))
+    }
+
+    /// Real SELENE model, no synthesized placeholder geometry; a single native
+    /// occurrence is drawn to keep assembly occlusion out of the measurement.
+    fn open_selene() -> (Session, Value, Vec<u64>, Instant) {
+        let start = Instant::now();
+        let (doc, saved) = io::read_design_file(SELENE, None::<fn(io::DesignPreview)>)
+            .expect("read original 439883-byte native SELENE file");
+        assert_eq!(doc.features.len(), 5_484, "unmodified functional SELENE master");
+        let component = doc.components.iter().find(|c| c.name == COMPONENT)
+            .expect("Pi5 componentry in actual native SELENE model").id;
+        let occurrence = doc.occurrences.iter().find(|o| o.component == component && o.parent == 0)
+            .expect("placed Pi5 componentry native occurrence").id;
+        let mut s = Session::opened_at(doc, saved.as_ref(), Some(SELENE));
+        assert_eq!(s.model.state().bodies.len(), 2_116, "complete real SELENE assembly evaluated");
+        assert!(s.model.state().body(TARGET).is_some(), "actual Pi5 BCM2712 substrate body required");
+        println!("SELENE_DIM_PHASE=loaded body={} occurrence={} elapsed_ms={}", TARGET, occurrence, start.elapsed().as_millis());
+        run(&mut s, "drawing.create", json!({"name": "SELENE Pi5 component dimension integration"}));
+        let path = vec![occurrence];
+        let view = run(&mut s, "drawing.view.base", json!({
+            "sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [205, 170],
+            "source": {"occurrences": [path.clone()]}
+        }))["view"].clone();
+        assert!(view.is_string(), "native subassembly view missing");
+        (s, view, path, start)
+    }
+
+    /// Real top perimeter edge, measured along X. The Pi5 substrate is a box
+    /// 15.5 x 15.5 x 0.55 mm, documented by the official electronics builder.
+    /// Find its live mesh index rather than assuming a topology ordering.
+    fn upper_x_edge(s: &Session) -> usize {
+        let state = s.model.state();
+        let mesh = state.body(TARGET).expect("Pi5 substrate exists").mesh();
+        let top_z = mesh.edges.iter().flat_map(|line| line.iter()).map(|p| p.z)
+            .fold(f64::NEG_INFINITY, f64::max);
+        mesh.edges.iter().position(|line| {
+            if line.len() < 2 { return false; }
+            let a = &line[0];
+            let b = line.last().unwrap();
+            let dx = (a.x - b.x).abs();
+            let dy = (a.y - b.y).abs();
+            dx > 15.48 && dx < 15.52 && dy < 1e-4
+                && line.iter().all(|p| (p.z - top_z).abs() < 1e-4)
+        }).expect("live unsplit 15.5-mm top edge on original Pi5 substrate")
+    }
+
+    fn dimension(s: &mut Session, view: &Value, path: &[u64]) -> Value {
+        let index = upper_x_edge(s);
+        let reply = run(s, "drawing.dimension.add", json!({
+            "view": view,
+            "kind": {"length": {"edge": {"body": TARGET, "index": index, "path": path}}},
+            "text": {"at": [14.0, 22.0]}
+        }));
+        assert_eq!(reply["status"], "ok", "real Pi5 edge must be dimensionable: {reply}");
+        let id = reply["dimension"].clone();
+        assert!(id.is_string(), "persistent dimension ID missing: {reply}");
+        let measured = reply["value"].as_f64().expect("real measured value");
+        assert!((measured - 15.5).abs() < 0.02, "Pi5 substrate expected 15.5 mm: {reply}");
+        id
+    }
+
+    #[test]
+    fn stage4_selene_negative_component_suppression_and_undo_recovery() {
+        let (mut s, view, path, start) = open_selene();
+        let id = dimension(&mut s, &view, &path);
+        let original = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id.clone()}));
+        assert_eq!(original["status"], "ok");
+        let key = id.as_str().expect("stable ID").to_owned();
+        let drawing = run(&mut s, "drawing.close", json!({}))["closed"].clone();
+
+        run(&mut s, "timeline.suppress", json!({"feature": TARGET, "suppressed": true}));
+        run(&mut s, "drawing.open", json!({"drawing": drawing.clone()}));
+        let suppressed = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id.clone()}));
+        assert_eq!(suppressed["status"], "suppressed", "suppressed original component must not look valid: {suppressed}");
+        assert!(suppressed.get("value").is_none(), "no current value on a suppressed feature: {suppressed}");
+        assert!((suppressed["last_good"].as_f64().expect("preserve last good") - 15.5).abs() < 0.02);
+        let state = run(&mut s, "drawing.status", json!({}));
+        let attention = from_status(&state);
+        let item = attention.dimensions.iter().find(|d| d.id == key)
+            .unwrap_or_else(|| panic!("suppressed component measurement not reported: {state}"));
+        assert_eq!(item.status, "suppressed");
+        assert!(item.needs_attention(), "status adapter must warn about suppressed component reference");
+        assert_eq!(attention.dimensions.iter().filter(|d| d.id == key).count(), 1, "no duplicate warning for same dimension ID");
+
+        run(&mut s, "drawing.close", json!({}));
+        run(&mut s, "edit.undo", json!({}));
+        run(&mut s, "drawing.open", json!({"drawing": drawing}));
+        let recovered = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id.clone()}));
+        assert_eq!(recovered["status"], "ok", "undo must restore actual SELENE edge: {recovered}");
+        assert_eq!(recovered["record"]["kind"], original["record"]["kind"], "persistent name must survive");
+        assert!((recovered["value"].as_f64().unwrap() - 15.5).abs() < 0.02);
+        let restored_status = from_status(&run(&mut s, "drawing.status", json!({})));
+        assert_eq!(restored_status.dimensions.iter().find(|d| d.id == key).expect("restored dimension").status, "ok");
+        println!("T130_SELENE_NEGATIVE_PASS component=Pi5_BCM2712 suppressed=detected last_good=15.5 undo=restored elapsed_ms={}", start.elapsed().as_millis());
+    }
+}
