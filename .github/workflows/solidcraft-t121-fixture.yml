@@ -1,0 +1,35 @@
+name: SolidCraft Stage 2 Sensor Enclosure Fixture Gate
+on:
+  push:
+    branches:
+      - tests/solidcraft-t121-fixture
+permissions:
+  contents: read
+jobs:
+  fixture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: t121-sensor-fixture
+      - name: Verify pinned fixture and test
+        run: |
+          set -euo pipefail
+          test -s tests/fixtures/sensor_enclosure_stage2.json
+          grep -Fq official_sensor_enclosure_executes_and_accepts_a_drawing_view crates/ui-egui/src/drawing_dimension_status.rs
+      - name: Validate actual model execution and drawing creation
+        run: |
+          set -euo pipefail
+          mkdir -p t121-fixture-report
+          timeout 95m cargo test -p solidcraft-ui-egui --lib --profile ci sensor_enclosure_stage2_fixture_validation -- --nocapture 2>&1 | tee t121-fixture-report/validation.log
+      - name: Upload original log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t121-sensor-fixture-gate
+          path: t121-fixture-report/
+          if-no-files-found: warn
+          retention-days: 30
