@@ -310,3 +310,155 @@ mod stage4_selene_native_engine_gate {
         );
     }
 }
+
+#[cfg(test)]
+mod stage4_selene_multisheet_native_persistence {
+    use super::*;
+    use serde_json::{json, Value};
+    use solidcraft_engine::{io, Session};
+    use std::time::Instant;
+
+    const SELENE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/render/selene/models/SELENE-functional.solidcraft");
+    const TARGET: &str = "Pi5 BCM2712 substrate";
+    const NEIGHBOR: &str = "Pi5 BCM2712 heat spreader";
+
+    fn run(s: &mut Session, id: &str, args: Value) -> Value {
+        s.execute(id, &args).unwrap_or_else(|e| panic!("{id}: {e}"))
+    }
+
+    /// Mesh edge selection is based on the geometry in the evaluated production
+    /// model, not on an arbitrary index or a hand-built test substitute.
+    fn top_x_edge(s: &Session, body: &str, expected: f64) -> usize {
+        let state = s.model.state();
+        let mesh = state.body(body).unwrap_or_else(|| panic!("real SELENE body absent: {body}")).mesh();
+        let z = mesh.edges.iter().flat_map(|edge| edge.iter()).map(|p| p.z).fold(f64::NEG_INFINITY, f64::max);
+        mesh.edges.iter().position(|line| {
+            if line.len() < 2 { return false; }
+            let first = &line[0];
+            let last = line.last().unwrap();
+            let dx = (first.x - last.x).abs();
+            dx > expected - 0.02 && dx < expected + 0.02
+                && (first.y - last.y).abs() < 1e-4
+                && line.iter().all(|p| (p.z - z).abs() < 1e-4)
+        }).unwrap_or_else(|| panic!("missing {expected}mm top edge on real SELENE body {body}"))
+    }
+
+    fn add_dimension(s: &mut Session, view: &Value, path: &[u64], body: &str, expected: f64) -> Value {
+        let index = top_x_edge(s, body, expected);
+        let read = run(s, "drawing.dimension.add", json!({
+            "view": view,
+            "kind": {"length": {"edge": {"body": body, "index": index, "path": path}}},
+            "text": {"at": [17.0, 26.0]}
+        }));
+        assert_eq!(read["status"], "ok", "first real dimension must be valid: {read}");
+        assert!((read["value"].as_f64().expect("real measured length") - expected).abs() < 0.02,
+            "unexpected native SELENE geometry on {body}: {read}");
+        assert!(read["dimension"].is_string(), "persistent dimension ID missing: {read}");
+        read["dimension"].clone()
+    }
+
+    #[test]
+    fn stage4_selene_multisheet_native_save_reopen_keeps_valid_and_suppressed_dimensions() {
+        let started = Instant::now();
+        let (doc, model) = io::read_design_file(SELENE, None::<fn(io::DesignPreview)>)
+            .expect("official functional SELENE native design");
+        assert_eq!(doc.features.len(), 5_484);
+        let component = doc.components.iter().find(|x| x.name == "Raspberry Pi 5 componentry")
+            .expect("the original Pi5 native component").id;
+        let occurrence = doc.occurrences.iter().find(|x| x.component == component && x.parent == 0)
+            .expect("Pi5 occurrence under root").id;
+        let path = vec![occurrence];
+        let mut session = Session::opened_at(doc, model.as_ref(), Some(SELENE));
+        assert_eq!(session.model.state().bodies.len(), 2_116);
+        println!("T131_PHASE=loaded_original elapsed_ms={}", started.elapsed().as_millis());
+
+        // Two different native SELENE bodies, dimensioned on two persisted sheets.
+        run(&mut session, "drawing.create", json!({"name": "SELENE multi-sheet persistence regression"}));
+        let v1 = run(&mut session, "drawing.view.base", json!({
+            "sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [205, 170],
+            "source": {"occurrences": [path.clone()]}
+        }))["view"].clone();
+        let primary = add_dimension(&mut session, &v1, &path, TARGET, 15.5);
+        run(&mut session, "drawing.sheet.add", json!({"name": "Healthy Pi5"}));
+        let v2 = run(&mut session, "drawing.view.base", json!({
+            "sheet": "Healthy Pi5", "view": "top", "scale": "1:2", "position_mm": [205, 170],
+            "source": {"occurrences": [path.clone()]}
+        }))["view"].clone();
+        let healthy = add_dimension(&mut session, &v2, &path, NEIGHBOR, 13.6);
+        let primary_ref = run(&mut session, "drawing.dimension.inspect", json!({"dimension": primary.clone()}))["record"]["kind"].clone();
+        let healthy_ref = run(&mut session, "drawing.dimension.inspect", json!({"dimension": healthy.clone()}))["record"]["kind"].clone();
+        let draw_id = run(&mut session, "drawing.close", json!({}))["closed"].clone();
+
+        // Suppress only the first body's source feature. A second dimension on a
+        // different sheet must remain measurable despite this intentionally bad reference.
+        run(&mut session, "timeline.suppress", json!({"feature": TARGET, "suppressed": true}));
+        run(&mut session, "drawing.open", json!({"drawing": draw_id.clone()}));
+        let bad_before = run(&mut session, "drawing.dimension.inspect", json!({"dimension": primary.clone()}));
+        let good_before = run(&mut session, "drawing.dimension.inspect", json!({"dimension": healthy.clone()}));
+        assert_eq!(bad_before["status"], "suppressed", "suppression not detected: {bad_before}");
+        assert_eq!(good_before["status"], "ok", "unaffected neighbor must stay valid: {good_before}");
+        assert!((bad_before["last_good"].as_f64().expect("previously valid measurement") - 15.5).abs() < 0.02);
+        assert!((good_before["value"].as_f64().unwrap() - 13.6).abs() < 0.02);
+        let status_before = from_status(&run(&mut session, "drawing.status", json!({})));
+        assert_eq!(status_before.dimensions.len(), 2, "both real sheet dimensions must be listed");
+        let bad_item = status_before.dimensions.iter().find(|d| d.id == primary.as_str().unwrap()).unwrap();
+        let good_item = status_before.dimensions.iter().find(|d| d.id == healthy.as_str().unwrap()).unwrap();
+        assert_eq!(bad_item.status, "suppressed");
+        assert_eq!(good_item.status, "ok");
+        assert!(bad_item.sheet.is_some() && good_item.sheet.is_some() && bad_item.sheet != good_item.sheet,
+            "two dimension IDs should remain on distinct sheets");
+
+        // Serialize the current session's *authoritative design* as a real native
+        // .sc container. Session::design() explicitly materializes last_good values
+        // that have been read in this session. Use a scratch file, never the master.
+        let saved_bytes = io::write_design_container(&session.design())
+            .expect("save altered SELENE drawing as native SolidCraft container");
+        assert!(io::is_design_container(&saved_bytes), "save must produce a real binary design");
+        let saved_path = std::env::temp_dir().join(format!("solidcraft-t131-selene-{}.sc", std::process::id()));
+        std::fs::write(&saved_path, &saved_bytes).expect("write CI-only native SELENE copy");
+        println!("T131_PHASE=native_saved bytes={} elapsed_ms={}", saved_bytes.len(), started.elapsed().as_millis());
+
+        let file = saved_path.to_str().expect("UTF-8 temp directory");
+        let (loaded, cache) = io::read_design_file(file, None::<fn(io::DesignPreview)>)
+            .expect("reopen temporary SELENE-native design from disk");
+        assert_eq!(loaded.features.len(), 5_484, "saving must retain the full SELENE feature timeline");
+        assert_eq!(loaded.drawings.len(), 1, "the saved drawing must survive");
+        assert_eq!(loaded.drawings[0].sheets.len(), 2, "both sheets must survive native persistence");
+        let mut reopened = Session::opened_at(loaded, cache.as_ref(), Some(file));
+        assert!(reopened.model.state().body(NEIGHBOR).is_some(), "healthy neighbor must still be in reloaded model");
+        run(&mut reopened, "drawing.open", json!({"drawing": draw_id.clone()}));
+        let bad_after = run(&mut reopened, "drawing.dimension.inspect", json!({"dimension": primary.clone()}));
+        let good_after = run(&mut reopened, "drawing.dimension.inspect", json!({"dimension": healthy.clone()}));
+        assert_eq!(bad_after["status"], "suppressed", "reopen must retain warning: {bad_after}");
+        assert!(bad_after.get("value").is_none(), "suppressed measure cannot invent a current value: {bad_after}");
+        assert!((bad_after["last_good"].as_f64().expect("saved last-good must survive") - 15.5).abs() < 0.02);
+        assert_eq!(good_after["status"], "ok", "neighbor still valid after reopening: {good_after}");
+        assert!((good_after["value"].as_f64().unwrap() - 13.6).abs() < 0.02);
+        assert_eq!(bad_after["record"]["kind"], primary_ref, "original Pi5 reference must persist unchanged");
+        assert_eq!(good_after["record"]["kind"], healthy_ref, "healthy Pi5 reference must persist unchanged");
+        let status_after = from_status(&run(&mut reopened, "drawing.status", json!({})));
+        assert_eq!(status_after.dimensions.len(), 2);
+        let broken = status_after.dimensions.iter().find(|x| x.id == primary.as_str().unwrap()).unwrap();
+        let intact = status_after.dimensions.iter().find(|x| x.id == healthy.as_str().unwrap()).unwrap();
+        assert_eq!(broken.status, "suppressed");
+        assert_eq!(intact.status, "ok");
+        assert_ne!(broken.sheet, intact.sheet, "sheet mapping must persist across file save/open");
+        println!("T131_PHASE=reopened_native verified_two_sheets=true last_good=15.5 healthy=13.6 elapsed_ms={}", started.elapsed().as_millis());
+
+        // Explicit repair after reopening, not Undo: undo history is intentionally
+        // per-session and must not be assumed to persist in the .sc design file.
+        run(&mut reopened, "drawing.close", json!({}));
+        run(&mut reopened, "timeline.suppress", json!({"feature": TARGET, "suppressed": false}));
+        run(&mut reopened, "drawing.open", json!({"drawing": draw_id}));
+        let repaired = run(&mut reopened, "drawing.dimension.inspect", json!({"dimension": primary.clone()}));
+        let untouched = run(&mut reopened, "drawing.dimension.inspect", json!({"dimension": healthy.clone()}));
+        assert_eq!(repaired["status"], "ok", "explicit unsuppress should restore the named Pi5 edge: {repaired}");
+        assert_eq!(repaired["record"]["kind"], primary_ref);
+        assert!((repaired["value"].as_f64().unwrap() - 15.5).abs() < 0.02);
+        assert_eq!(untouched["status"], "ok");
+        assert!((untouched["value"].as_f64().unwrap() - 13.6).abs() < 0.02);
+
+        std::fs::remove_file(&saved_path).expect("remove CI-only native copy");
+        println!("T131_SELENE_PERSISTENCE_PASS two_sheets=2 native_reopen=true suppressed_last_good=15.5 healthy=13.6 explicit_repair=ok elapsed_ms={}", started.elapsed().as_millis());
+    }
+}
