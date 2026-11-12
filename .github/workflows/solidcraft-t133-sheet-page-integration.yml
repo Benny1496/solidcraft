@@ -76,7 +76,10 @@ jobs:
                   if name.endswith("view_navigation.rs"):
                       assert "view.tool.zoom" in ours and ".any_part()" in theirs
                       value = ours
-                      for command in ("fit", "home", "tool"):
+                      fit = '.icon("fit").key("F6").noundo().doc_only().params('
+                      assert value.count(fit) == 1, "Fit command starts before the conflict hunk"
+                      value = value.replace(fit, '.icon("fit").key("F6").noundo().doc_only().any_part().params(', 1)
+                      for command in ("home", "tool"):
                           marker = f'CommandSpec::new("view.{command}"'
                           pos = value.index(marker)
                           next_pos = value.find("CommandSpec::new(", pos + 1)
