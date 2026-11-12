@@ -1,0 +1,61 @@
+name: SolidCraft T119 - M1A compile
+on:
+  push:
+    branches: [tests/solidcraft-t119]
+    paths: [.github/workflows/solidcraft-t119.yml]
+permissions:
+  contents: read
+jobs:
+  m1a:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Checkout exact M1A source
+        uses: actions/checkout@v4
+        with:
+          repository: Benny1496/solidcraft
+          ref: 4e0daad7bed1e3f3d7c5a6a19cfbeb4659964228
+          path: src
+          persist-credentials: false
+      - name: Verify source
+        working-directory: src
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "4e0daad7bed1e3f3d7c5a6a19cfbeb4659964228"
+          grep -Fq 'pub mod drawing_dimension_status;' crates/ui-egui/src/lib.rs
+          git diff --check HEAD
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: t119-m1a
+          cache-on-failure: true
+      - name: Check source formatting
+        working-directory: src
+        shell: bash
+        run: |
+          mkdir -p ../t119-report
+          cargo fmt --all -- --check > ../t119-report/fmt.log 2>&1 || { tail -100 ../t119-report/fmt.log; exit 1; }
+      - name: Compile UI
+        working-directory: src
+        shell: bash
+        run: |
+          timeout 100m cargo check -p solidcraft-ui-egui --locked > ../t119-report/check.log 2>&1 || { tail -160 ../t119-report/check.log; exit 1; }
+      - name: Run M1A tests
+        working-directory: src
+        shell: bash
+        run: |
+          timeout 100m cargo test -p solidcraft-ui-egui --lib --profile ci --locked 'drawing_dimension_status::tests::' -- --nocapture > ../t119-report/tests.log 2>&1 || { tail -160 ../t119-report/tests.log; exit 1; }
+          grep -Fq 'test result: ok. 3 passed; 0 failed;' ../t119-report/tests.log
+      - name: Archive logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t119-m1a-compile
+          path: t119-report/
+          if-no-files-found: warn
+          retention-days: 30
