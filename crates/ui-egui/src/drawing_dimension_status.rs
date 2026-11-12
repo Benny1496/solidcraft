@@ -310,3 +310,117 @@ mod stage4_selene_native_engine_gate {
         );
     }
 }
+
+#[cfg(test)]
+mod stage4_selene_positive_component_dimension {
+
+    use super::*;
+    use serde_json::{json, Value};
+    use solidcraft_engine::{io, Session};
+    use std::time::Instant;
+
+    const SELENE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/render/selene/models/SELENE-functional.solidcraft");
+    const TARGET: &str = "Pi5 BCM2712 substrate";
+    const COMPONENT: &str = "Raspberry Pi 5 componentry";
+
+    fn run(s: &mut Session, id: &str, p: Value) -> Value {
+        s.execute(id, &p).unwrap_or_else(|e| panic!("{id}: {e}"))
+    }
+
+    /// Real SELENE model, no synthesized placeholder geometry; a single native
+    /// occurrence is drawn to keep assembly occlusion out of the measurement.
+    fn open_selene() -> (Session, Value, Vec<u64>, Instant) {
+        let start = Instant::now();
+        let (doc, saved) = io::read_design_file(SELENE, None::<fn(io::DesignPreview)>)
+            .expect("read original 439883-byte native SELENE file");
+        assert_eq!(doc.features.len(), 5_484, "unmodified functional SELENE master");
+        let component = doc.components.iter().find(|c| c.name == COMPONENT)
+            .expect("Pi5 componentry in actual native SELENE model").id;
+        let occurrence = doc.occurrences.iter().find(|o| o.component == component && o.parent == 0)
+            .expect("placed Pi5 componentry native occurrence").id;
+        let mut s = Session::opened_at(doc, saved.as_ref(), Some(SELENE));
+        assert_eq!(s.model.state().bodies.len(), 2_116, "complete real SELENE assembly evaluated");
+        assert!(s.model.state().body(TARGET).is_some(), "actual Pi5 BCM2712 substrate body required");
+        println!("SELENE_DIM_PHASE=loaded body={} occurrence={} elapsed_ms={}", TARGET, occurrence, start.elapsed().as_millis());
+        run(&mut s, "drawing.create", json!({"name": "SELENE Pi5 component dimension integration"}));
+        let path = vec![occurrence];
+        let view = run(&mut s, "drawing.view.base", json!({
+            "sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [205, 170],
+            "source": {"occurrences": [path.clone()]}
+        }))["view"].clone();
+        assert!(view.is_string(), "native subassembly view missing");
+        (s, view, path, start)
+    }
+
+    /// Real top perimeter edge, measured along X. The Pi5 substrate is a box
+    /// 15.5 x 15.5 x 0.55 mm, documented by the official electronics builder.
+    /// Find its live mesh index rather than assuming a topology ordering.
+    fn upper_x_edge(s: &Session) -> usize {
+        let state = s.model.state();
+        let mesh = state.body(TARGET).expect("Pi5 substrate exists").mesh();
+        let top_z = mesh.edges.iter().flat_map(|line| line.iter()).map(|p| p.z)
+            .fold(f64::NEG_INFINITY, f64::max);
+        mesh.edges.iter().position(|line| {
+            if line.len() < 2 { return false; }
+            let a = &line[0];
+            let b = line.last().unwrap();
+            let dx = (a.x - b.x).abs();
+            let dy = (a.y - b.y).abs();
+            dx > 15.48 && dx < 15.52 && dy < 1e-4
+                && line.iter().all(|p| (p.z - top_z).abs() < 1e-4)
+        }).expect("live unsplit 15.5-mm top edge on original Pi5 substrate")
+    }
+
+    fn dimension(s: &mut Session, view: &Value, path: &[u64]) -> Value {
+        let index = upper_x_edge(s);
+        let reply = run(s, "drawing.dimension.add", json!({
+            "view": view,
+            "kind": {"length": {"edge": {"body": TARGET, "index": index, "path": path}}},
+            "text": {"at": [14.0, 22.0]}
+        }));
+        assert_eq!(reply["status"], "ok", "real Pi5 edge must be dimensionable: {reply}");
+        let id = reply["dimension"].clone();
+        assert!(id.is_string(), "persistent dimension ID missing: {reply}");
+        let measured = reply["value"].as_f64().expect("real measured value");
+        assert!((measured - 15.5).abs() < 0.02, "Pi5 substrate expected 15.5 mm: {reply}");
+        id
+    }
+
+    #[test]
+    fn stage4_selene_positive_component_dimension_updates_and_undo_redo() {
+        let (mut s, view, path, start) = open_selene();
+        let id = dimension(&mut s, &view, &path);
+        let original = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id.clone()}));
+        let drawing = run(&mut s, "drawing.close", json!({}))["closed"].clone();
+        let before = run(&mut s, "timeline.inspect", json!({"feature": TARGET}));
+        run(&mut s, "timeline.edit", json!({"feature": TARGET, "set": {"length": "16.0"}}));
+        let after_edit = run(&mut s, "timeline.inspect", json!({"feature": TARGET}));
+        assert_ne!(after_edit["definition"]["length"], before["definition"]["length"], "native Pi5 substrate length must change");
+        run(&mut s, "drawing.open", json!({"drawing": drawing.clone()}));
+        let now = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id.clone()}));
+        assert_eq!(now["status"], "ok", "changed real component edge must remain named: {now}");
+        assert_eq!(now["record"]["kind"], original["record"]["kind"], "persistent component edge reference changed");
+        let value = now["value"].as_f64().expect("updated real Pi5 dimension");
+        assert!((value - 16.0).abs() < 0.02, "measured dimension must follow actual geometry: {now}");
+        let status = run(&mut s, "drawing.status", json!({}));
+        let attention = from_status(&status);
+        let measured = attention.dimensions.iter().find(|d| d.id == id.as_str().unwrap())
+            .unwrap_or_else(|| panic!("changed dimension missing from real status: {status}"));
+        assert_eq!(measured.status, "ok", "out of date does not mean lost");
+        assert!(measured.out_of_date && attention.waiting_views > 0, "model change should flag stale drawing: {status}");
+
+        run(&mut s, "drawing.close", json!({}));
+        run(&mut s, "edit.undo", json!({}));
+        run(&mut s, "drawing.open", json!({"drawing": drawing.clone()}));
+        let undone = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id.clone()}));
+        assert_eq!(undone["status"], "ok");
+        assert!((undone["value"].as_f64().unwrap() - 15.5).abs() < 0.02, "undo must restore old geometry: {undone}");
+        run(&mut s, "drawing.close", json!({}));
+        run(&mut s, "edit.redo", json!({}));
+        run(&mut s, "drawing.open", json!({"drawing": drawing}));
+        let redo = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id}));
+        assert_eq!(redo["status"], "ok");
+        assert!((redo["value"].as_f64().unwrap() - 16.0).abs() < 0.02, "redo must restore new Pi5 dimension: {redo}");
+        println!("T129_SELENE_POSITIVE_PASS component=Pi5_BCM2712 initial=15.5 edited=16 undo=15.5 redo=16 elapsed_ms={}", start.elapsed().as_millis());
+    }
+}
