@@ -399,7 +399,11 @@ mod stage4_selene_multisheet_native_persistence {
         assert_eq!(good_before["status"], "ok", "unaffected neighbor must stay valid: {good_before}");
         assert!((bad_before["last_good"].as_f64().expect("previously valid measurement") - 15.5).abs() < 0.02);
         assert!((good_before["value"].as_f64().unwrap() - 13.6).abs() < 0.02);
-        let status_before = from_status(&run(&mut session, "drawing.status", json!({})));
+        let status_before = from_status(&run(&mut session, "drawing.status", json!({})))
+            .with_inspections(&BTreeMap::from([
+                (primary.as_str().unwrap().to_owned(), Ok(bad_before.clone())),
+                (healthy.as_str().unwrap().to_owned(), Ok(good_before.clone())),
+            ]));
         assert_eq!(status_before.dimensions.len(), 2, "both real sheet dimensions must be listed");
         let bad_item = status_before.dimensions.iter().find(|d| d.id == primary.as_str().unwrap()).unwrap();
         let good_item = status_before.dimensions.iter().find(|d| d.id == healthy.as_str().unwrap()).unwrap();
@@ -436,7 +440,11 @@ mod stage4_selene_multisheet_native_persistence {
         assert!((good_after["value"].as_f64().unwrap() - 13.6).abs() < 0.02);
         assert_eq!(bad_after["record"]["kind"], primary_ref, "original Pi5 reference must persist unchanged");
         assert_eq!(good_after["record"]["kind"], healthy_ref, "healthy Pi5 reference must persist unchanged");
-        let status_after = from_status(&run(&mut reopened, "drawing.status", json!({})));
+        let status_after = from_status(&run(&mut reopened, "drawing.status", json!({})))
+            .with_inspections(&BTreeMap::from([
+                (primary.as_str().unwrap().to_owned(), Ok(bad_after.clone())),
+                (healthy.as_str().unwrap().to_owned(), Ok(good_after.clone())),
+            ]));
         assert_eq!(status_after.dimensions.len(), 2);
         let broken = status_after.dimensions.iter().find(|x| x.id == primary.as_str().unwrap()).unwrap();
         let intact = status_after.dimensions.iter().find(|x| x.id == healthy.as_str().unwrap()).unwrap();
