@@ -1,0 +1,41 @@
+name: SolidCraft Stage 4 Test 128 SELENE Engine Drawing Gate
+on:
+  push:
+    branches:
+      - tests/solidcraft-t128-selene-engine-gate
+permissions:
+  contents: read
+jobs:
+  selene-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 130
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: selene-stage4-t128
+      - name: Verify exact unchanged native SELENE master
+        run: |
+          set -euo pipefail
+          MODEL=assets/render/selene/models/SELENE-functional.solidcraft
+          test -f "$MODEL"
+          test "$(wc -c < "$MODEL" | tr -d ' ')" = "439883"
+          test "$(git hash-object "$MODEL")" = "b30fd8db0f841f97ffd756914350c2b71d2f3c2e"
+          echo "3bd2bfa1c6336394c4a4208d30b52c80d06658a3bd7ea57cc93b774411d1bd68  $MODEL" | sha256sum --check --status
+          unzip -t -qq "$MODEL"
+          echo "SELENE_NATIVE_MASTER_VERIFIED size=439883 sha256=3bd2bfa1c6336394c4a4208d30b52c80d06658a3bd7ea57cc93b774411d1bd68"
+          echo "SELENE_PINNED_BASE=3eb0fd6c73b0620de5aa17ed86568954cdb0d827"
+          git rev-parse HEAD
+      - name: Run real native SELENE model and drawing integration
+        run: |
+          set -euo pipefail
+          mkdir -p t128-report
+          timeout 115m cargo test -p solidcraft-ui-egui --lib --profile ci stage4_full_selene_native_model_loads_and_produces_drawing_status -- --nocapture 2>&1 | tee t128-report/result.log
+      - name: Preserve original native SELENE CI result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t128-selene-stage4-native-engine
+          path: t128-report/
+          retention-days: 30
