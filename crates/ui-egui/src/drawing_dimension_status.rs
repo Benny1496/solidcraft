@@ -248,3 +248,107 @@ mod stage3_issue616_engine_gate {
         assert!(status["views"].as_array().is_some(), "drawing status views missing: {status}");
     }
 }
+
+#[cfg(test)]
+mod stage3_issue616_positive_dimension_test {
+
+    use super::*;
+    use serde_json::{json, Value};
+    use solidcraft_engine::{doc::Document, Session};
+    use solidcraft_geom::Vec3Geom;
+
+    fn execute(s: &mut Session, name: &str, params: Value) -> Value {
+        s.execute(name, &params).unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    fn start() -> (Session, Value) {
+        let original = include_str!("../../../tests/fixtures/issue_616_lid_ribs_stage3.solidcraft");
+        let document = Document::from_json(original).expect("parse unchanged Issue #616 lid fixture");
+        let mut session = Session::new(document);
+        assert!(!session.model.state().body("Lid").expect("Lid").mesh().positions.is_empty());
+        execute(&mut session, "drawing.create", json!({}));
+        let view = execute(&mut session, "drawing.view.base", json!({
+            "sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [150, 180]
+        }))["view"].clone();
+        assert!(view.is_string(), "the real engine must return a drawing view");
+        (session, view)
+    }
+
+    /// Select the longest upper horizontal edge of the chosen physical reinforcement rib.
+    /// A coordinate window avoids hard-coded mesh edge indices, which change after recompute.
+    fn rib_top_edge(s: &Session, x0: f64, x1: f64, y0: f64, y1: f64) -> usize {
+        let state = s.model.state();
+        let mesh = state.body("Lid").expect("real Lid mesh").mesh();
+        let result = mesh.edges.iter().enumerate()
+            .filter(|(_, edge)| {
+                edge.len() >= 2 && edge.iter().all(|p| {
+                    (p.z - 14.1).abs() < 1e-3
+                        && p.x >= x0 && p.x <= x1
+                        && p.y >= y0 && p.y <= y1
+                })
+            })
+            .map(|(index, edge)| (index, edge[0].dist(*edge.last().unwrap())))
+            .filter(|(_, length)| *length > 4.5)
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .expect("an unsplit top edge of the named reinforcement rib must exist");
+        println!("STAGE3_RIB_TOP_EDGE index={} length={}", result.0, result.1);
+        result.0
+    }
+
+    fn length_dimension(s: &mut Session, view: &Value, edge: usize) -> Value {
+        let added = execute(s, "drawing.dimension.add", json!({
+            "view": view,
+            "kind": {"length": {"edge": {"body": "Lid", "index": edge}}},
+            "text": {"at": [14.0, 22.0]}
+        }));
+        assert_eq!(added["status"], "ok", "rib edge must initially be measurable: {added}");
+        let id = added["dimension"].clone();
+        assert!(id.is_string(), "real drawing.dimension.add must issue an ID: {added}");
+        id
+    }
+
+    #[test]
+    fn stage3_positive_rib_dimension_survives_edit_reopen_and_undo_redo() {
+        let (mut session, view) = start();
+        // Rib2: 102.8..104.4 x 48..54, top z=14.1, initial width 6 mm.
+        let edge = rib_top_edge(&session, 102.7, 104.5, 47.9, 54.1);
+        let dimension = length_dimension(&mut session, &view, edge);
+        let original = execute(&mut session, "drawing.dimension.inspect", json!({"dimension": dimension.clone()}));
+        let before = original["value"].as_f64().expect("initial rib length");
+        assert!((before - 6.0).abs() < 0.05, "Rib2 should initially measure 6 mm: {original}");
+
+        let drawing = execute(&mut session, "drawing.close", json!({}))["closed"].clone();
+        let old_rib = execute(&mut session, "timeline.inspect", json!({"feature": "Rib2"}));
+        execute(&mut session, "timeline.edit", json!({"feature": "Rib2", "set": {"width": "7.5"}}));
+        let new_rib = execute(&mut session, "timeline.inspect", json!({"feature": "Rib2"}));
+        assert_ne!(new_rib["definition"]["width"], old_rib["definition"]["width"], "Rib2 width must really change");
+        execute(&mut session, "drawing.open", json!({"drawing": drawing.clone()}));
+        let changed = execute(&mut session, "drawing.dimension.inspect", json!({"dimension": dimension.clone()}));
+        assert_eq!(changed["status"], "ok", "a width edit should preserve the named rib edge: {changed}");
+        assert_eq!(changed["record"]["kind"], original["record"]["kind"], "named dimension reference changed");
+        let after = changed["value"].as_f64().expect("updated measured length");
+        assert!((after - 7.5).abs() < 0.05, "Rib2 dimension must follow its new width: {changed}");
+
+        let raw_status = execute(&mut session, "drawing.status", json!({}));
+        let attention = from_status(&raw_status);
+        let item = attention.dimensions.iter().find(|d| d.id == dimension.as_str().unwrap())
+            .unwrap_or_else(|| panic!("updated dimension ID missing: {raw_status}"));
+        assert_eq!(item.status, "ok", "a stale view is not a lost dimension");
+        assert!(item.out_of_date, "changed model must signal pending view update: {raw_status}");
+        assert!(attention.waiting_views > 0, "pending view update must be visible: {raw_status}");
+
+        execute(&mut session, "drawing.close", json!({}));
+        execute(&mut session, "edit.undo", json!({}));
+        execute(&mut session, "drawing.open", json!({"drawing": drawing.clone()}));
+        let restored = execute(&mut session, "drawing.dimension.inspect", json!({"dimension": dimension.clone()}));
+        assert_eq!(restored["status"], "ok", "undo must preserve a valid named edge: {restored}");
+        assert!((restored["value"].as_f64().unwrap() - 6.0).abs() < 0.05, "undo must restore Rib2 width");
+        execute(&mut session, "drawing.close", json!({}));
+        execute(&mut session, "edit.redo", json!({}));
+        execute(&mut session, "drawing.open", json!({"drawing": drawing}));
+        let redone = execute(&mut session, "drawing.dimension.inspect", json!({"dimension": dimension}));
+        assert_eq!(redone["status"], "ok", "redo must preserve the named reference: {redone}");
+        assert!((redone["value"].as_f64().unwrap() - 7.5).abs() < 0.05, "redo must restore edited width");
+        println!("T126_POSITIVE_PASS initial=6 edited=7.5 undo=6 redo=7.5 named_ref=ok");
+    }
+}
