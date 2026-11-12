@@ -1,0 +1,29 @@
+name: SolidCraft Stage 3 Issue 616 Fixture Gate
+on:
+  push:
+    branches:
+      - tests/solidcraft-t124-lid-ribs-gate
+permissions:
+  contents: read
+jobs:
+  fixture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 105
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: issue616-stage3
+      - name: Validate original lid and ribs corpus
+        run: |
+          set -euo pipefail
+          mkdir -p t124-report
+          timeout 95m cargo test -p solidcraft-ui-egui --lib --profile ci official_lid_ribs_document_has_expected_features_and_rib_references -- --nocapture 2>&1 | tee t124-report/result.log
+      - name: Preserve CI report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t124-issue616-fixture-gate
+          path: t124-report/
+          retention-days: 30
