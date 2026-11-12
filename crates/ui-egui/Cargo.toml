@@ -48,6 +48,7 @@ nix = { workspace = true }
 winreg = "0.56"
 
 [dev-dependencies]
+solidcraft-geom = { workspace = true }
 solidcraft-engine = { workspace = true, features = ["bundled-render-library", "profile"] }
 # Parse the source guard structurally, including code after inline test modules.
 syn = { workspace = true, features = ["visit"] }
