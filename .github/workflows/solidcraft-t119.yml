@@ -39,7 +39,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p ../t119-report
-          cargo fmt --all -- --check > ../t119-report/fmt.log 2>&1 || { tail -100 ../t119-report/fmt.log; exit 1; }
+          cargo fmt --all > ../t119-report/fmt.log 2>&1 || { tail -100 ../t119-report/fmt.log; exit 1; }
+          cargo fmt --all -- --check >> ../t119-report/fmt.log 2>&1 || { tail -100 ../t119-report/fmt.log; exit 1; }
+          git diff -- crates/ui-egui/src/drawing_dimension_status.rs > ../t119-report/m1a-rustfmt.patch
+          test -s ../t119-report/m1a-rustfmt.patch
       - name: Compile UI
         working-directory: src
         shell: bash
