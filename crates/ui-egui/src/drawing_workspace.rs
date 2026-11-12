@@ -3,9 +3,9 @@
 
 use egui::{Rect, Sense, Stroke, pos2, vec2};
 
+use crate::drawing_status_controller::DrawingStatusController;
 use crate::ui_kit::{self, Container, Edge, Surface};
 use crate::{SolveApp, theme::Tokens};
-use crate::drawing_status_controller::DrawingStatusController;
 use serde_json::json;
 
 #[derive(Default)]
@@ -40,7 +40,13 @@ pub fn enter(app: &mut SolveApp, drawing: bool) -> Result<(), String> {
         app.drawing_workspace.strip = None;
         app.drawing_workspace.settings = None;
     }
-    if drawing { refresh_attention(app); } else { app.drawing_workspace.attention.invalidate(); app.drawing_workspace.attention_revision = None; app.drawing_workspace.attention_error = None; }
+    if drawing {
+        refresh_attention(app);
+    } else {
+        app.drawing_workspace.attention.invalidate();
+        app.drawing_workspace.attention_revision = None;
+        app.drawing_workspace.attention_error = None;
+    }
     app.ui.ribbon_context = None;
     app.cancel_view_animation();
     Ok(())
@@ -53,13 +59,16 @@ pub fn reset_document(app: &mut SolveApp) {
     app.drawing_workspace = State::default();
 }
 
-
 /// Refresh only on entry or after a real model revision, never per paint frame.
 /// Missing drawings and failed queries are not interpreted as a healthy drawing.
 pub fn refresh_attention(app: &mut SolveApp) {
-    if !active(app) { return; }
+    if !active(app) {
+        return;
+    }
     let revision = app.session.revision;
-    if app.drawing_workspace.attention_revision == Some(revision) { return; }
+    if app.drawing_workspace.attention_revision == Some(revision) {
+        return;
+    }
     let generation = app.drawing_workspace.attention.invalidate();
     app.drawing_workspace.attention_revision = Some(revision);
     app.drawing_workspace.attention_error = None;
