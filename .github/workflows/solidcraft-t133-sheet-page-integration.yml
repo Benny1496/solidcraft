@@ -43,6 +43,12 @@ jobs:
           if [ "$code" -ne 0 ]; then
             git diff --name-only --diff-filter=U | tee t133-report/conflicts.txt
             git status --short > t133-report/merge-status.txt
+            echo "T133_DIAGNOSTIC_CONFLICT_HUNKS_BEGIN" | tee t133-report/conflict-hunks.txt
+            while IFS= read -r conflicted; do
+              echo "===== FILE: $conflicted =====" >> t133-report/conflict-hunks.txt
+              grep -n -A18 -B7 -E '^(<<<<<<< |=======|>>>>>>> )' "$conflicted" >> t133-report/conflict-hunks.txt || true
+            done < t133-report/conflicts.txt
+            sed -n '1,390p' t133-report/conflict-hunks.txt
             echo "T133_MERGE_BLOCKED_OR_CONFLICT exit=$code; production source NOT treated as merged"
             exit 42
           fi
