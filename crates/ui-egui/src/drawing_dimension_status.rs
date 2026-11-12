@@ -152,3 +152,52 @@ mod tests {
         assert_eq!(a.dimensions[0].sheet, None);
     }
 }
+
+#[cfg(test)]
+mod w23a_engine_integration_tests {
+    use super::*;
+    use serde_json::json;
+    use solidcore_record::Vec3;
+    use solidcraft_engine::Session;
+
+    fn command(session: &mut Session, name: &str, params: Value) -> Value {
+        session.execute(name, &params).unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    /// Exercise the real W23a model, engine status and the actual UI projection.
+    #[test]
+    fn w23a_deleted_bore_is_reported_by_real_engine_and_ui_adapter() {
+        let script: Value = serde_json::from_str(include_str!("../../../examples/acceptance/drawing_m2.json")).unwrap();
+        let mut session = Session::default();
+        let replies = session.run_script(&script).expect("W23a script must execute");
+        let view = replies.last().expect("W23a creates a view")["view"].clone();
+        let drawing = session.drawing("w23a").expect("W23a drawing").id;
+        let centre = Vec3::from([20.0, 20.0, 20.0]);
+        let mesh = session.model.state().body("Plate").expect("Plate body").mesh();
+        let index = mesh.edges.iter().position(|edge| {
+            !edge.is_empty() && edge.iter().all(|point| (point.dist(centre) - 5.0).abs() < 1e-6)
+        }).expect("Bore1 circular edge");
+        let dimension = command(&mut session, "drawing.dimension.add", json!({
+            "view": view,
+            "kind": {"radial": {"edge": {"body": "Plate", "index": index}}},
+            "text": {"at": [12.0, 24.0]}
+        }))["dimension"].clone();
+        assert_eq!(command(&mut session, "drawing.dimension.inspect", json!({"dimension": dimension}))["status"], "ok");
+
+        command(&mut session, "drawing.close", json!({}));
+        command(&mut session, "timeline.delete", json!({"feature": "Bore1"}));
+        command(&mut session, "drawing.open", json!({"drawing": format!("{drawing}")}));
+        let engine_status = command(&mut session, "drawing.status", json!({}));
+        let attention = from_status(&engine_status);
+        let id = dimension.as_str().expect("dimension ID");
+        let lost = attention.dimensions.iter().find(|item| item.id == id)
+            .unwrap_or_else(|| panic!("W23a dimension absent from drawing.status: {engine_status}"));
+        assert_eq!(lost.status, "lost", "{engine_status}");
+        assert!(lost.needs_attention());
+        assert!(attention.dimensions_needing_attention() >= 1);
+        let inspected = command(&mut session, "drawing.dimension.inspect", json!({"dimension": dimension}));
+        assert_eq!(inspected["status"], "lost");
+        let enriched = attention.with_inspections(&BTreeMap::from([(id.to_owned(), Ok(inspected))]));
+        assert!(enriched.dimensions.iter().find(|item| item.id == id).unwrap().view.is_some());
+    }
+}
