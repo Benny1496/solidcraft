@@ -202,3 +202,30 @@ mod w23a_engine_integration_tests {
         assert!(enriched.dimensions.iter().find(|item| item.id == id).unwrap().view.is_some());
     }
 }
+
+#[cfg(test)]
+mod sensor_enclosure_stage2_fixture_validation {
+    use serde_json::{json, Value};
+    use solidcraft_engine::Session;
+
+    #[test]
+    fn official_sensor_enclosure_executes_and_accepts_a_drawing_view() {
+        let source: Value = serde_json::from_str(include_str!("../../../tests/fixtures/sensor_enclosure_stage2.json"))
+            .expect("official sensor enclosure JSON");
+        let commands = source["commands"].as_array().expect("model commands");
+        assert!(commands.len() >= 40, "must use complete official enclosure model");
+        let mut session = Session::default();
+        session.run_script(&source).expect("full sensor enclosure model must execute");
+        let made = session.execute("drawing.create", &json!({}))
+            .expect("create drawing from real sensor enclosure");
+        assert!(made.get("drawing").is_some(), "{made}");
+        let view = session.execute("drawing.view.base", &json!({
+            "sheet": "Sheet 1", "view": "top", "scale": "1:2",
+            "position_mm": [150, 180]
+        })).expect("sensor enclosure drawing base view");
+        assert!(view.get("view").is_some(), "{view}");
+        let status = session.execute("drawing.status", &json!({}))
+            .expect("real engine drawing status");
+        assert!(status.is_object(), "{status}");
+    }
+}
