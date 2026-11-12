@@ -236,7 +236,8 @@ mod stage3_issue616_engine_gate {
         let source = include_str!("../../../tests/fixtures/issue_616_lid_ribs_stage3.solidcraft");
         let doc = Document::from_json(source).expect("parse official issue-616 design");
         let mut session = Session::new(doc);
-        let lid = session.model.state().body("Lid").expect("real engine must evaluate Lid");
+        let model_state = session.model.state();
+        let lid = model_state.body("Lid").expect("real engine must evaluate Lid");
         assert!(!lid.mesh().positions.is_empty(), "lid must have real mesh geometry");
         session.execute("drawing.create", &json!({})).expect("create drawing for original lid");
         let view = session.execute("drawing.view.base", &json!({
