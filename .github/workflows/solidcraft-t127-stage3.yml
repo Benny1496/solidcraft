@@ -1,0 +1,36 @@
+name: SolidCraft Stage 3 Test 127 Negative Undo
+on:
+  push:
+    branches:
+      - tests/solidcraft-t127-lid-ribs-negative
+permissions:
+  contents: read
+jobs:
+  stage3:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 105
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: issue616-stage3-t127
+      - name: Verify unchanged official Issue 616 model fixture
+        run: |
+          set -euo pipefail
+          test "$(git hash-object tests/fixtures/issue_616_lid_ribs_stage3.solidcraft)" = "e2315262e0e3ec13ab36baa0d15025794f9cb339"
+          echo "ISSUE616_FIXTURE=e2315262e0e3ec13ab36baa0d15025794f9cb339"
+          echo "TEST_BASE=3eb0fd6c73b0620de5aa17ed86568954cdb0d827"
+          git rev-parse HEAD
+      - name: Execute real Stage 3 127 dimension integration
+        run: |
+          set -euo pipefail
+          mkdir -p t127-report
+          timeout 95m cargo test -p solidcraft-ui-egui --lib --profile ci stage3_negative_deleted_rib_loses_dimension_and_undo_recovers -- --nocapture 2>&1 | tee t127-report/result.log
+      - name: Preserve original CI result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t127-issue616-negative-undo
+          path: t127-report/
+          retention-days: 30
