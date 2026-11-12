@@ -1,0 +1,40 @@
+name: SolidCraft Stage 4 Test 130 Negative Suppression Undo
+on:
+  push:
+    branches:
+      - tests/solidcraft-t130-selene-negative
+permissions:
+  contents: read
+jobs:
+  selene-dimension:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 140
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: selene-stage4-negative
+      - name: Verify pinned unchanged native SELENE source
+        run: |
+          set -euo pipefail
+          MODEL=assets/render/selene/models/SELENE-functional.solidcraft
+          test "$(git hash-object "$MODEL")" = "b30fd8db0f841f97ffd756914350c2b71d2f3c2e"
+          test "$(wc -c < "$MODEL" | tr -d ' ')" = "439883"
+          echo "3bd2bfa1c6336394c4a4208d30b52c80d06658a3bd7ea57cc93b774411d1bd68  $MODEL" | sha256sum --check
+          unzip -t -qq "$MODEL"
+          echo "SELENE_MASTER_VERIFIED=complete SHA256 match, Git blob unchanged"
+          echo "COMMON_BASE=f3e2898a3acea737bff987a6f9600e3b78eba352"
+          git rev-parse HEAD
+      - name: Run native SELENE component dimension T130
+        run: |
+          set -euo pipefail
+          mkdir -p t130-report
+          timeout 125m cargo test -p solidcraft-ui-egui --lib --profile ci stage4_selene_negative_component_suppression_and_undo_recovery -- --nocapture 2>&1 | tee t130-report/result.log
+      - name: Preserve original CI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t130-selene-negative-undo
+          path: t130-report/
+          retention-days: 30
