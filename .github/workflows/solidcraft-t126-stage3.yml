@@ -1,0 +1,36 @@
+name: SolidCraft Stage 3 Test 126 Positive Dimension
+on:
+  push:
+    branches:
+      - tests/solidcraft-t126-lid-ribs-positive
+permissions:
+  contents: read
+jobs:
+  stage3:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 105
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: issue616-stage3-t126
+      - name: Verify unchanged official Issue 616 model fixture
+        run: |
+          set -euo pipefail
+          test "$(git hash-object tests/fixtures/issue_616_lid_ribs_stage3.solidcraft)" = "e2315262e0e3ec13ab36baa0d15025794f9cb339"
+          echo "ISSUE616_FIXTURE=e2315262e0e3ec13ab36baa0d15025794f9cb339"
+          echo "TEST_BASE=3eb0fd6c73b0620de5aa17ed86568954cdb0d827"
+          git rev-parse HEAD
+      - name: Execute real Stage 3 126 dimension integration
+        run: |
+          set -euo pipefail
+          mkdir -p t126-report
+          timeout 95m cargo test -p solidcraft-ui-egui --lib --profile ci stage3_positive_rib_dimension_survives_edit_reopen_and_undo_redo -- --nocapture 2>&1 | tee t126-report/result.log
+      - name: Preserve original CI result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t126-issue616-positive-dimension
+          path: t126-report/
+          retention-days: 30
