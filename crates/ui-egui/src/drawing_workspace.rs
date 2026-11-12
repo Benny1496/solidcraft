@@ -14,6 +14,7 @@ pub struct State {
     pub attention: DrawingStatusController,
     pub attention_error: Option<String>,
     attention_revision: Option<u64>,
+    attention_drawing: Option<u64>,
     pub settings_open: bool,
     options: Option<&'static str>,
     strip: Option<Rect>,
@@ -45,6 +46,7 @@ pub fn enter(app: &mut SolveApp, drawing: bool) -> Result<(), String> {
     } else {
         app.drawing_workspace.attention.invalidate();
         app.drawing_workspace.attention_revision = None;
+        app.drawing_workspace.attention_drawing = None;
         app.drawing_workspace.attention_error = None;
     }
     app.ui.ribbon_context = None;
@@ -61,16 +63,22 @@ pub fn reset_document(app: &mut SolveApp) {
 
 /// Refresh only on entry or after a real model revision, never per paint frame.
 /// Missing drawings and failed queries are not interpreted as a healthy drawing.
+fn needs_attention_refresh(cached_revision: Option<u64>, cached_drawing: Option<u64>, revision: u64, drawing: Option<u64>, failed: bool) -> bool {
+    failed || cached_revision != Some(revision) || cached_drawing != drawing
+}
+
 pub fn refresh_attention(app: &mut SolveApp) {
     if !active(app) {
         return;
     }
     let revision = app.session.revision;
-    if app.drawing_workspace.attention_revision == Some(revision) {
+    let drawing = app.session.open_drawing;
+    if !needs_attention_refresh(app.drawing_workspace.attention_revision, app.drawing_workspace.attention_drawing, revision, drawing, app.drawing_workspace.attention_error.is_some()) {
         return;
     }
     let generation = app.drawing_workspace.attention.invalidate();
     app.drawing_workspace.attention_revision = Some(revision);
+    app.drawing_workspace.attention_drawing = drawing;
     app.drawing_workspace.attention_error = None;
     if app.session.open_drawing.is_none() {
         app.drawing_workspace.attention_error = Some("No drawing is open".into());
@@ -635,5 +643,30 @@ mod tests {
             );
             assert_eq!(h.app.preferences.drawing_sheet_dock, "top");
         }
+    }
+}
+
+#[cfg(test)]
+mod attention_integration_tests {
+    use super::needs_attention_refresh;
+
+    #[test]
+    fn document_switch_with_same_revision_refreshes() {
+        assert!(needs_attention_refresh(Some(9), Some(1), 9, Some(2), false));
+    }
+
+    #[test]
+    fn failed_query_can_retry_without_revision_change() {
+        assert!(needs_attention_refresh(Some(9), Some(1), 9, Some(1), true));
+    }
+
+    #[test]
+    fn unchanged_document_does_not_poll_per_frame() {
+        assert!(!needs_attention_refresh(Some(9), Some(1), 9, Some(1), false));
+    }
+
+    #[test]
+    fn closing_drawing_invalidates_even_without_revision_change() {
+        assert!(needs_attention_refresh(Some(9), Some(1), 9, None, false));
     }
 }
