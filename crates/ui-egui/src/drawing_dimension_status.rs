@@ -218,7 +218,7 @@ mod sensor_enclosure_stage2_fixture_validation {
         session.run_script(&source).expect("full sensor enclosure model must execute");
         let made = session.execute("drawing.create", &json!({}))
             .expect("create drawing from real sensor enclosure");
-        assert!(made.get("drawing").is_some(), "{made}");
+        assert!(made.get("id").is_some(), "{made}");
         let view = session.execute("drawing.view.base", &json!({
             "sheet": "Sheet 1", "view": "top", "scale": "1:2",
             "position_mm": [150, 180]
