@@ -159,7 +159,7 @@ mod w23a_engine_integration_tests {
     use serde_json::json;
     use solidcore_record::Vec3;
     use solidcraft_engine::Session;
-    use solidcraft_engine::solidcraft_geom::Vec3Geom;
+    use solidcraft_geom::Vec3Geom;
 
     fn command(session: &mut Session, name: &str, params: Value) -> Value {
         session.execute(name, &params).unwrap_or_else(|error| panic!("{name}: {error}"))
@@ -172,7 +172,7 @@ mod w23a_engine_integration_tests {
         let mut session = Session::default();
         let replies = session.run_script(&script).expect("W23a script must execute");
         let view = replies.last().expect("W23a creates a view")["view"].clone();
-        let drawing = replies[replies.len() - 2]["drawing"].clone();
+        let drawing = session.drawing("test").expect("W23a drawing").id;
         let centre = Vec3::from([20.0, 20.0, 20.0]);
         let mesh = session.model.state().body("Plate").expect("Plate body").mesh();
         let index = mesh.edges.iter().position(|edge| {
