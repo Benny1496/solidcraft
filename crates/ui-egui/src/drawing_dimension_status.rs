@@ -229,3 +229,71 @@ mod sensor_enclosure_stage2_fixture_validation {
         assert!(status.is_object(), "{status}");
     }
 }
+
+#[cfg(test)]
+mod sensor_enclosure_stage2_dimension_tests {
+    use super::*;
+    use serde_json::json;
+    use solidcore_record::Vec3;
+    use solidcraft_engine::Session;
+    use solidcraft_geom::Vec3Geom;
+
+    fn run(s: &mut Session, name: &str, p: Value) -> Value {
+        s.execute(name, &p).unwrap_or_else(|e| panic!("{name}: {e}"))
+    }
+
+    fn enclosure() -> (Session, Value, Value) {
+        let script: Value = serde_json::from_str(include_str!("../../../tests/fixtures/sensor_enclosure_stage2.json")).unwrap();
+        let mut s = Session::default();
+        s.run_script(&script).expect("official enclosure model");
+        run(&mut s, "drawing.create", json!({}));
+        let view = run(&mut s, "drawing.view.base", json!({
+            "sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [150, 180]
+        }))["view"].clone();
+        let centre = Vec3::from([-33.5, -23.5, 29.0]);
+        let mesh = s.model.state().body("Lid").expect("Lid body").mesh();
+        let index = mesh.edges.iter().position(|edge| {
+            !edge.is_empty() && edge.iter().all(|point| (point.dist(centre) - 1.6).abs() < 1e-5)
+        }).expect("lid screw rim Ø3.2 mm on upper face");
+        let dimension = run(&mut s, "drawing.dimension.add", json!({
+            "view": view, "kind": {"radial": {"edge": {"body": "Lid", "index": index}}},
+            "text": {"at": [14.0, 22.0]}
+        }))["dimension"].clone();
+        assert_eq!(run(&mut s, "drawing.dimension.inspect", json!({"dimension": dimension}))["status"], "ok");
+        (s, dimension, view)
+    }
+
+    #[test]
+    fn stage2_positive_enclosure_dimension_survives_parameter_edit_and_reopen() {
+        let (mut s, dimension, _) = enclosure();
+        let original = run(&mut s, "drawing.dimension.inspect", json!({"dimension": dimension.clone()}));
+        let drawing = run(&mut s, "drawing.close", json!({}))["closed"].clone();
+        run(&mut s, "parameters.change", json!({"name": "usb_offset", "expression": "11 mm"}));
+        run(&mut s, "drawing.open", json!({"drawing": drawing.clone()}));
+        let after = run(&mut s, "drawing.dimension.inspect", json!({"dimension": dimension.clone()}));
+        assert_eq!(after["status"], "ok", "{after}");
+        assert_eq!(after["record"]["kind"], original["record"]["kind"], "dimension reference changed");
+        let status = from_status(&run(&mut s, "drawing.status", json!({})));
+        let id = dimension.as_str().unwrap();
+        assert!(!status.dimensions.iter().find(|d| d.id == id).expect("dimension in status").needs_attention());
+        run(&mut s, "drawing.close", json!({}));
+        run(&mut s, "drawing.open", json!({"drawing": drawing}));
+        assert_eq!(run(&mut s, "drawing.dimension.inspect", json!({"dimension": dimension}))["status"], "ok");
+    }
+
+    #[test]
+    fn stage2_negative_enclosure_deleted_screw_reports_lost_reference() {
+        let (mut s, dimension, _) = enclosure();
+        let drawing = run(&mut s, "drawing.close", json!({}))["closed"].clone();
+        run(&mut s, "timeline.delete", json!({"feature": "Lid screw"}));
+        run(&mut s, "drawing.open", json!({"drawing": drawing}));
+        let inspected = run(&mut s, "drawing.dimension.inspect", json!({"dimension": dimension.clone()}));
+        assert_eq!(inspected["status"], "lost", "{inspected}");
+        let attention = from_status(&run(&mut s, "drawing.status", json!({})));
+        let id = dimension.as_str().unwrap();
+        let item = attention.dimensions.iter().find(|d| d.id == id).expect("lost dimension in status");
+        assert_eq!(item.status, "lost");
+        assert!(item.needs_attention());
+        assert!(inspected.get("last_good").is_some(), "lost measurement retains last_good: {inspected}");
+    }
+}
