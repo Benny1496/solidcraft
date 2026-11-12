@@ -1,0 +1,29 @@
+name: SolidCraft Stage 3 Test 125 Engine Drawing Gate
+on:
+  push:
+    branches:
+      - tests/solidcraft-t125-lid-ribs-engine
+permissions:
+  contents: read
+jobs:
+  stage3:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 105
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: issue616-stage3
+      - name: Execute real issue 616 lid and ribs engine drawing gate
+        run: |
+          set -euo pipefail
+          mkdir -p t125-report
+          timeout 95m cargo test -p solidcraft-ui-egui --lib --profile ci stage3_real_engine_opens_lid_ribs_and_creates_drawing_view -- --nocapture 2>&1 | tee t125-report/result.log
+      - name: Preserve original CI result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t125-issue616-engine-drawing
+          path: t125-report/
+          retention-days: 30
