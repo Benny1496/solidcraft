@@ -202,3 +202,26 @@ mod w23a_engine_integration_tests {
         assert!(enriched.dimensions.iter().find(|item| item.id == id).unwrap().view.is_some());
     }
 }
+
+#[cfg(test)]
+mod stage3_issue616_fixture_gate {
+    use serde_json::Value;
+
+    #[test]
+    fn official_lid_ribs_document_has_expected_features_and_rib_references() {
+        let source: Value = serde_json::from_str(include_str!("../../../tests/fixtures/issue_616_lid_ribs_stage3.solidcraft"))
+            .expect("official issue-616 .solidcraft JSON document");
+        assert_eq!(source["format"], "solidcraft/15");
+        assert_eq!(source["name"], "issue-616-lid-ribs");
+        let features = source["features"].as_array().expect("document features");
+        assert_eq!(features.len(), 11, "must retain the full original lid model");
+        assert_eq!(features[0]["body_names"][0], "Lid");
+        for name in ["Rib1", "Rib2", "Rib3", "Rib4"] {
+            let rib = features.iter().find(|f| f["name"] == name)
+                .unwrap_or_else(|| panic!("missing original feature {name}"));
+            assert_eq!(rib["type"], "box");
+            assert_eq!(rib["operation"], "join");
+            assert_eq!(rib["suppressed"], false);
+        }
+    }
+}
