@@ -170,12 +170,18 @@ pub(crate) fn browser_contents(app: &mut SolveApp, ui: &mut egui::Ui) {
     } else if let Some(snapshot) = app.drawing_workspace.attention.snapshot() {
         ui.label(format!("Views waiting: {}", snapshot.waiting_views));
         ui.label(format!("Dimensions needing attention: {}", snapshot.dimensions_needing_attention()));
-        if snapshot.held { ui.label("Updates held"); }
+        if snapshot.held {
+            ui.label("Updates held");
+        }
         for dimension in snapshot.dimensions.iter().filter(|d| d.needs_attention()).take(8) {
             ui.label(format!("{}: {}{}", dimension.id, dimension.status, if dimension.out_of_date { " (out of date)" } else { "" }));
-            if let Some(error) = &dimension.inspect_error { ui.label(format!("Inspection unavailable: {error}")); }
+            if let Some(error) = &dimension.inspect_error {
+                ui.label(format!("Inspection unavailable: {error}"));
+            }
         }
-        if snapshot.dimensions_needing_attention() > 8 { ui.label("Additional dimensions need attention"); }
+        if snapshot.dimensions_needing_attention() > 8 {
+            ui.label("Additional dimensions need attention");
+        }
     } else {
         ui.label("Status not yet available");
     }
