@@ -1,0 +1,29 @@
+name: SolidCraft Stage 2 Test 122 Positive
+on:
+  push:
+    branches:
+      - tests/solidcraft-t122-positive
+permissions:
+  contents: read
+jobs:
+  stage2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sensor-stage2-shared
+      - name: Execute actual stage 2 positive integration
+        run: |
+          set -euo pipefail
+          mkdir -p t122-report
+          timeout 95m cargo test -p solidcraft-ui-egui --lib --profile ci stage2_positive_enclosure_dimension_survives_parameter_edit_and_reopen -- --nocapture 2>&1 | tee t122-report/result.log
+      - name: Upload original log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t122-sensor-stage2
+          path: t122-report/
+          retention-days: 30
