@@ -5,10 +5,15 @@ use egui::{Rect, Sense, Stroke, pos2, vec2};
 
 use crate::ui_kit::{self, Container, Edge, Surface};
 use crate::{SolveApp, theme::Tokens};
+use crate::drawing_status_controller::DrawingStatusController;
+use serde_json::json;
 
 #[derive(Default)]
 pub struct State {
     previous_tab: Option<String>,
+    pub attention: DrawingStatusController,
+    pub attention_error: Option<String>,
+    attention_revision: Option<u64>,
     pub settings_open: bool,
     options: Option<&'static str>,
     strip: Option<Rect>,
@@ -35,6 +40,7 @@ pub fn enter(app: &mut SolveApp, drawing: bool) -> Result<(), String> {
         app.drawing_workspace.strip = None;
         app.drawing_workspace.settings = None;
     }
+    if drawing { refresh_attention(app); } else { app.drawing_workspace.attention.invalidate(); app.drawing_workspace.attention_revision = None; app.drawing_workspace.attention_error = None; }
     app.ui.ribbon_context = None;
     app.cancel_view_animation();
     Ok(())
@@ -45,6 +51,33 @@ pub fn reset_document(app: &mut SolveApp) {
         app.ui.tab = "MODEL".into();
     }
     app.drawing_workspace = State::default();
+}
+
+
+/// Refresh only on entry or after a real model revision, never per paint frame.
+/// Missing drawings and failed queries are not interpreted as a healthy drawing.
+pub fn refresh_attention(app: &mut SolveApp) {
+    if !active(app) { return; }
+    let revision = app.session.revision;
+    if app.drawing_workspace.attention_revision == Some(revision) { return; }
+    let generation = app.drawing_workspace.attention.invalidate();
+    app.drawing_workspace.attention_revision = Some(revision);
+    app.drawing_workspace.attention_error = None;
+    if app.session.open_drawing.is_none() {
+        app.drawing_workspace.attention_error = Some("No drawing is open".into());
+        return;
+    }
+    match app.session.execute("drawing.status", &json!({})) {
+        Ok(status) => {
+            app.drawing_workspace.attention.accept_status(generation, status);
+            let pending = app.drawing_workspace.attention.pending_inspections();
+            for id in pending.inspect_ids {
+                let result = app.session.execute("drawing.dimension.inspect", &json!({"dimension": id})).map_err(|e| e.to_string());
+                app.drawing_workspace.attention.accept_inspection(generation, &id, result);
+            }
+        }
+        Err(error) => app.drawing_workspace.attention_error = Some(error.to_string()),
+    }
 }
 
 pub fn can_open_options(id: &str) -> bool {
