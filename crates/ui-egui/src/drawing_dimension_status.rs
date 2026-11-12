@@ -248,3 +248,106 @@ mod stage3_issue616_engine_gate {
         assert!(status["views"].as_array().is_some(), "drawing status views missing: {status}");
     }
 }
+
+#[cfg(test)]
+mod stage3_issue616_negative_dimension_test {
+
+    use super::*;
+    use serde_json::{json, Value};
+    use solidcraft_engine::{doc::Document, Session};
+    use solidcraft_geom::Vec3Geom;
+
+    fn execute(s: &mut Session, name: &str, params: Value) -> Value {
+        s.execute(name, &params).unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    fn start() -> (Session, Value) {
+        let original = include_str!("../../../tests/fixtures/issue_616_lid_ribs_stage3.solidcraft");
+        let document = Document::from_json(original).expect("parse unchanged Issue #616 lid fixture");
+        let mut session = Session::new(document);
+        assert!(!session.model.state().body("Lid").expect("Lid").mesh().positions.is_empty());
+        execute(&mut session, "drawing.create", json!({}));
+        let view = execute(&mut session, "drawing.view.base", json!({
+            "sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [150, 180]
+        }))["view"].clone();
+        assert!(view.is_string(), "the real engine must return a drawing view");
+        (session, view)
+    }
+
+    /// Select the longest upper horizontal edge of the chosen physical reinforcement rib.
+    /// A coordinate window avoids hard-coded mesh edge indices, which change after recompute.
+    fn rib_top_edge(s: &Session, x0: f64, x1: f64, y0: f64, y1: f64) -> usize {
+        let state = s.model.state();
+        let mesh = state.body("Lid").expect("real Lid mesh").mesh();
+        let result = mesh.edges.iter().enumerate()
+            .filter(|(_, edge)| {
+                edge.len() >= 2 && edge.iter().all(|p| {
+                    (p.z - 14.1).abs() < 1e-3
+                        && p.x >= x0 && p.x <= x1
+                        && p.y >= y0 && p.y <= y1
+                })
+            })
+            .map(|(index, edge)| (index, edge[0].dist(*edge.last().unwrap())))
+            .filter(|(_, length)| *length > 4.5)
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .expect("an unsplit top edge of the named reinforcement rib must exist");
+        println!("STAGE3_RIB_TOP_EDGE index={} length={}", result.0, result.1);
+        result.0
+    }
+
+    fn length_dimension(s: &mut Session, view: &Value, edge: usize) -> Value {
+        let added = execute(s, "drawing.dimension.add", json!({
+            "view": view,
+            "kind": {"length": {"edge": {"body": "Lid", "index": edge}}},
+            "text": {"at": [14.0, 22.0]}
+        }));
+        assert_eq!(added["status"], "ok", "rib edge must initially be measurable: {added}");
+        let id = added["dimension"].clone();
+        assert!(id.is_string(), "real drawing.dimension.add must issue an ID: {added}");
+        id
+    }
+
+    #[test]
+    fn stage3_negative_deleted_rib_loses_dimension_and_undo_recovers() {
+        let (mut session, view) = start();
+        // Rib4: 172.4..174.0 x 48..54, top z=14.1.
+        let edge = rib_top_edge(&session, 172.3, 174.1, 47.9, 54.1);
+        let dimension = length_dimension(&mut session, &view, edge);
+        let baseline = execute(&mut session, "drawing.dimension.inspect", json!({"dimension": dimension.clone()}));
+        let value = baseline["value"].as_f64().expect("Rib4 starts with a measurable 6 mm edge");
+        assert!((value - 6.0).abs() < 0.05, "must reference Rib4 top edge: {baseline}");
+        let id = dimension.as_str().expect("persistent dimension ID").to_owned();
+
+        let drawing = execute(&mut session, "drawing.close", json!({}))["closed"].clone();
+        execute(&mut session, "timeline.delete", json!({"feature": "Rib4"}));
+        execute(&mut session, "drawing.open", json!({"drawing": drawing.clone()}));
+        let lost = execute(&mut session, "drawing.dimension.inspect", json!({"dimension": dimension.clone()}));
+        assert_eq!(lost["status"], "lost", "deleting the referenced Rib4 edge must be detected: {lost}");
+        assert!(lost.get("value").is_none(), "a lost edge may not report a current measured value: {lost}");
+        assert!((lost["last_good"].as_f64().expect("last measured value retained") - 6.0).abs() < 0.05);
+
+        let raw_status = execute(&mut session, "drawing.status", json!({}));
+        let attention = from_status(&raw_status);
+        let item = attention.dimensions.iter().find(|d| d.id == id)
+            .unwrap_or_else(|| panic!("lost dimension not reported in drawing.status: {raw_status}"));
+        assert_eq!(item.status, "lost");
+        assert!(item.needs_attention(), "lost edge must be flagged");
+        assert_eq!(attention.dimensions.iter().filter(|d| d.id == id).count(), 1,
+            "a lost and stale dimension must not be duplicated");
+        assert_eq!(attention.dimensions_needing_attention(), 1,
+            "only our intentionally broken dimension should need attention");
+
+        execute(&mut session, "drawing.close", json!({}));
+        execute(&mut session, "edit.undo", json!({}));
+        execute(&mut session, "drawing.open", json!({"drawing": drawing}));
+        let recovered = execute(&mut session, "drawing.dimension.inspect", json!({"dimension": dimension.clone()}));
+        assert_eq!(recovered["status"], "ok", "Undo must restore the original named Rib4 edge: {recovered}");
+        assert_eq!(recovered["record"]["kind"], baseline["record"]["kind"], "persistent reference must survive Undo");
+        assert!((recovered["value"].as_f64().unwrap() - 6.0).abs() < 0.05);
+        let final_status = execute(&mut session, "drawing.status", json!({}));
+        let final_attention = from_status(&final_status);
+        assert_eq!(final_attention.dimensions.iter().find(|d| d.id == id)
+            .expect("recovered dimension ID").status, "ok");
+        println!("T127_NEGATIVE_PASS lost=detected last_good=6 undo=recovered");
+    }
+}
