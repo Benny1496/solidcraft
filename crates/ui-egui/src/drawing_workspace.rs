@@ -73,7 +73,13 @@ pub fn refresh_attention(app: &mut SolveApp) {
     }
     let revision = app.session.revision;
     let drawing = app.session.open_drawing;
-    if !needs_attention_refresh(app.drawing_workspace.attention_revision, app.drawing_workspace.attention_drawing, revision, drawing, app.drawing_workspace.attention_error.is_some()) {
+    if !needs_attention_refresh(
+        app.drawing_workspace.attention_revision,
+        app.drawing_workspace.attention_drawing,
+        revision,
+        drawing,
+        app.drawing_workspace.attention_error.is_some(),
+    ) {
         return;
     }
     let generation = app.drawing_workspace.attention.invalidate();
