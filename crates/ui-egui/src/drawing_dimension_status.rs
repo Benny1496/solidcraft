@@ -273,9 +273,10 @@ mod sensor_enclosure_stage2_dimension_tests {
         let after = run(&mut s, "drawing.dimension.inspect", json!({"dimension": dimension.clone()}));
         assert_eq!(after["status"], "ok", "{after}");
         assert_eq!(after["record"]["kind"], original["record"]["kind"], "dimension reference changed");
-        let status = from_status(&run(&mut s, "drawing.status", json!({})));
+        let raw_status = run(&mut s, "drawing.status", json!({}));
+        let status = from_status(&raw_status);
         let id = dimension.as_str().unwrap();
-        assert!(!status.dimensions.iter().find(|d| d.id == id).expect("dimension in status").needs_attention());
+        assert!(!status.dimensions.iter().find(|d| d.id == id).expect("dimension in status").needs_attention(), "unexpected status after parameter edit: {raw_status}");
         run(&mut s, "drawing.close", json!({}));
         run(&mut s, "drawing.open", json!({"drawing": drawing}));
         assert_eq!(run(&mut s, "drawing.dimension.inspect", json!({"dimension": dimension}))["status"], "ok");
