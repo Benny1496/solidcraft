@@ -225,3 +225,26 @@ mod stage3_issue616_fixture_gate {
         }
     }
 }
+
+#[cfg(test)]
+mod stage3_issue616_engine_gate {
+    use serde_json::json;
+    use solidcraft_doc::Document;
+    use solidcraft_engine::Session;
+
+    #[test]
+    fn stage3_real_engine_opens_lid_ribs_and_creates_drawing_view() {
+        let source = include_str!("../../../tests/fixtures/issue_616_lid_ribs_stage3.solidcraft");
+        let doc = Document::from_json(source).expect("parse official issue-616 design");
+        let mut session = Session::new(doc);
+        let lid = session.model.state().body("Lid").expect("real engine must evaluate Lid");
+        assert!(!lid.mesh().vertices.is_empty(), "lid must have real mesh geometry");
+        session.execute("drawing.create", &json!({})).expect("create drawing for original lid");
+        let view = session.execute("drawing.view.base", &json!({
+            "sheet": "Sheet 1", "view": "top", "scale": "1:2", "position_mm": [150, 180]
+        })).expect("generate drawing view from real lid geometry");
+        assert!(view["view"].is_string(), "drawing view id missing: {view}");
+        let status = session.execute("drawing.status", &json!({})).expect("inspect drawing status");
+        assert!(status["views"].as_array().is_some(), "drawing status views missing: {status}");
+    }
+}
