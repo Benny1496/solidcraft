@@ -42,11 +42,11 @@ jobs:
           cargo fmt --all > ../t119-report/fmt.log 2>&1 || { tail -100 ../t119-report/fmt.log; exit 1; }
           cargo fmt --all -- --check >> ../t119-report/fmt.log 2>&1 || { tail -100 ../t119-report/fmt.log; exit 1; }
           git diff -- crates/ui-egui/src/drawing_dimension_status.rs > ../t119-report/m1a-rustfmt.patch
-          test -s ../t119-report/m1a-rustfmt.patch
+          true # Format diff may be empty after prior successful formatting
           git config user.name 'SolidCraft Test Runner'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates/ui-egui/src/drawing_dimension_status.rs crates/ui-egui/src/drawing_status_controller.rs
-          git commit -m 'style: apply rustfmt to M1-A modules'
+          git add crates/ui-egui/src/drawing_dimension_status.rs crates/ui-egui/src/drawing_status_controller.rs crates/ui-egui/src/drawing_workspace.rs crates/ui-egui/src/lib.rs
+          if ! git diff --cached --quiet; then git commit -m 'style: apply rustfmt to M1-A modules'; fi
           git push origin HEAD:feature/drawing-d07-d26-status-m1
       - name: Compile UI
         working-directory: src
