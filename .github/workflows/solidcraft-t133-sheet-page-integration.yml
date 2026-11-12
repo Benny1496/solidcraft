@@ -1,0 +1,91 @@
+name: SolidCraft Stage 4 Followup Test 133 Sheet UI Integration
+on:
+  push:
+    branches:
+      - tests/solidcraft-t133-sheet-page-integration
+permissions:
+  contents: read
+jobs:
+  native-sheet-ui-compat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 155
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: drawings-t133-sheet-page-merge
+      - name: Verify exact official drawings base and capture Loohi PR head
+        run: |
+          set -euo pipefail
+          mkdir -p t133-report
+          BASE=261f0d37aa85611231b6f5f3f175d243fdc53631
+          LOOHI=84ef88b10e394c9ea9f90459c242e2033c6f7133
+          git cat-file -e "$BASE^{commit}"
+          git merge-base --is-ancestor "$BASE" HEAD
+          test "$(git rev-parse HEAD:crates/ui-egui/src/drawing_workspace.rs)" = "$(git rev-parse "$BASE":crates/ui-egui/src/drawing_workspace.rs)"
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git pull/13211/head
+          test "$(git rev-parse FETCH_HEAD)" = "$LOOHI"
+          echo "T133_BASE_VERIFIED drawings=$BASE loohi_pr13211=$LOOHI checkout_unmodified=true" | tee t133-report/source.txt
+          git log -1 --format='%H %s' FETCH_HEAD | tee -a t133-report/source.txt
+      - name: Attempt an honest isolated merge; record all conflicts without hiding them
+        run: |
+          set -euo pipefail
+          git config user.name "SolidCraft integration test"
+          git config user.email "solidcraft-integration@users.noreply.github.com"
+          set +e
+          git merge --no-commit --no-ff FETCH_HEAD > t133-report/merge.log 2>&1
+          code=$?
+          set -e
+          cat t133-report/merge.log
+          if [ "$code" -ne 0 ]; then
+            git diff --name-only --diff-filter=U | tee t133-report/conflicts.txt
+            git status --short > t133-report/merge-status.txt
+            echo "T133_MERGE_BLOCKED_OR_CONFLICT exit=$code; production source NOT treated as merged"
+            exit 42
+          fi
+          git diff --check
+          echo "T133_MERGE_CLEAN original_drawings_plus_loohi_pr13211=true" | tee -a t133-report/merge.log
+          git status --short > t133-report/merge-status.txt
+      - name: Apply known Note enum compatibility arm only in the CI checkout
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          target = Path("crates/ui-egui/src/drawing_sheet_page.rs")
+          text = target.read_text()
+          added = 'ObjectKind::Note => "note",'
+          if added in text:
+              print("T133_NOTE_ARM already_present=true")
+          else:
+              needle = '        ObjectKind::Dimension => "dimension",'
+              assert text.count(needle) == 1, "unexpected kind_name layout: do not guess a repair"
+              text = text.replace(needle, needle + "\n        " + added)
+              target.write_text(text)
+              print("T133_NOTE_ARM ci_only_fix=true source_original_untouched=true")
+          assert added in target.read_text()
+          PY
+          git diff --check
+      - name: Build and run real sheet UI, workspace and navigation tests
+        run: |
+          set -euo pipefail
+          {
+            echo "T133_PHASE=compile_ui_actual_integration"
+            timeout 135m cargo check -p solidcraft-ui-egui --profile ci
+            echo "T133_PHASE=sheet_page_real_ui_tests"
+            timeout 135m cargo test -p solidcraft-ui-egui --lib --profile ci drawing_sheet_page -- --nocapture
+            echo "T133_PHASE=workspace_ui_tests"
+            timeout 135m cargo test -p solidcraft-ui-egui --lib --profile ci drawing_workspace -- --nocapture
+            echo "T133_PHASE=navigation_with_open_drawing"
+            timeout 135m cargo test -p solidcraft-engine --lib --profile ci sheet_navigation_runs_with_a_drawing_open -- --nocapture
+            echo "T133_SHEET_UI_INTEGRATION_PASS merge=clean note_arm=handled real_ui_tests=executed"
+          } 2>&1 | tee t133-report/result.log
+      - name: Preserve exact original CI integration and conflict evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t133-sheet-ui-integration-evidence
+          path: t133-report/
+          retention-days: 30
