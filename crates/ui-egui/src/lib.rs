@@ -1222,6 +1222,7 @@ impl SolveApp {
         }
         let done = self.command_completed(id, r);
         if self.session.revision != revision {
+            drawing_workspace::refresh_attention(self);
             timeline::stop_playback(self);
         }
         let selection_changed = self.session.selection != selected_before || matches!(id, "select.set" | "select.clear" | "select.same_look");
