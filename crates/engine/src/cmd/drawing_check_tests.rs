@@ -774,3 +774,104 @@ fn a_note_an_exploded_view_holds_back_is_a_note_out_of_date_and_covers_nothing()
     assert_eq!(whys(&reply, "out_of_date"), [("note".to_string(), note.as_str().unwrap().to_string(), why)], "{reply}");
     assert_eq!(coverage_of(&reply, plate)["state"], json!("not_covered"), "{reply}");
 }
+
+/// Cross-feature compatibility after #15564 landed on drawings. A note whose
+/// field prints nothing is not a paper object; a visible off-paper note must
+/// still be reported, and dimension/view objects and model errors must survive.
+/// This checks the real engine response schemas (not a mocked GUI projection).
+#[test]
+fn current_drawings_15564_blank_note_does_not_hide_real_dimension_or_outside_note() {
+    let started = std::time::Instant::now();
+    let (mut s, chamfer) = plate();
+    let (sheet, view) = drawn(&mut s);
+    let sheet_id = ids::encode(sheet);
+    let view_id = ids::encode(view);
+
+    let good = length(&mut s, view, [50.0, 0.0, 0.0]);
+    let vulnerable = length(&mut s, view, [50.0, 0.0, 8.0]);
+    for id in [&good, &vulnerable] {
+        let measured = run(&mut s, "drawing.dimension.inspect", json!({"dimension": id}));
+        assert_eq!(measured["status"], "ok", "the referenced plate edge must exist: {measured}");
+        assert!(measured["value"].as_f64().is_some_and(|v| v.is_finite() && v > 0.0));
+    }
+
+    // An unresolved field is invisible, even when positioned outside the page.
+    let empty = run(&mut s, "drawing.note.add", json!({
+        "anchor": {"sheet": sheet_id.clone()},
+        "at": [850.0, 40.0],
+        "content": [{"field": {"source": "component", "key": "part_number"}}]
+    }))["note"].clone();
+    // The parallel visible note must still count as outside the sheet.
+    let visible = run(&mut s, "drawing.note.add", json!({
+        "anchor": {"sheet": sheet_id.clone()},
+        "at": [1000.0, 65.0],
+        "content": "Visible review note"
+    }))["note"].clone();
+    let findings = checked(&mut s, json!({}));
+    assert_eq!(of_kind(&findings, "outside_sheet"), [named("note", &visible)],
+        "only the printable off-paper note belongs in Check Drawing: {findings}");
+
+    let scene = run(&mut s, "drawing.scene", json!({"sheet": sheet_id.clone()}));
+    let schema = output_schema_for::<crate::schema::drawing_scene::SheetSceneResult>();
+    assert!(conforms(schema.as_value(), schema.as_value(), &scene),
+        "scene must obey its schema without null or infinite empty bounds: {scene}");
+    let objects = scene["objects"].as_array().expect("actual paper objects");
+    let has = |id: &Value| objects.iter().any(|o| o["object"] == *id);
+    assert!(has(&visible) && has(&json!(view_id)) && has(&good) && has(&vulnerable),
+        "visible notes, view and dimensions must survive empty-note filtering");
+    assert!(!has(&empty), "invisible note must not create an empty paper bounding box");
+    for object in objects {
+        for side in ["min", "max"] {
+            let corner = object["bounds_mm"][side].as_array()
+                .unwrap_or_else(|| panic!("paper box lacks {side}: {object}"));
+            assert_eq!(corner.len(), 2);
+            assert!(corner.iter().all(|v| v.as_f64().is_some_and(f64::is_finite)),
+                "paper box contains invalid coordinates: {object}");
+        }
+    }
+    let notes = scene["notes"].as_array().expect("notes stay in the scene records");
+    assert!(notes.iter().any(|n| n["note"] == empty) && notes.iter().any(|n| n["note"] == visible),
+        "an invisible note still exists as a record, not as an object");
+    let blank_hit = run(&mut s, "drawing.scene.hit", json!({
+        "sheet": sheet_id.clone(), "point_mm": [850.0, 40.0]
+    }));
+    assert!(blank_hit["hit"].is_null(), "an empty note must not be pickable: {blank_hit}");
+
+    let status = run(&mut s, "drawing.status", json!({}));
+    assert!(status["views"].as_array().unwrap().iter().any(|v| v["view"] == view_id));
+    for id in [&good, &vulnerable] {
+        assert!(status["dimensions"].as_array().unwrap().iter()
+            .any(|d| d["dimension"] == *id && d["status"] == "ok"),
+            "both real plate dimensions must remain valid: {status}");
+    }
+    println!("T132_PHASE=paper_objects_checked elapsed_ms={}", started.elapsed().as_millis());
+
+    // Negative regression: lose the chamfer's referenced edge. The notes'
+    // visibility decision must not swallow a genuine lost-dimension warning.
+    with_model_changed(&mut s, |s| {
+        run(s, "timeline.delete", json!({"feature": chamfer}));
+    });
+    let after = checked(&mut s, json!({}));
+    assert_eq!(of_kind(&after, "lost"), [named("dimension", &vulnerable)],
+        "Check Drawing must still report the missing edge: {after}");
+    assert_eq!(of_kind(&after, "outside_sheet"), [named("note", &visible)],
+        "empty-note filtering must not conceal a visible off-paper note: {after}");
+    let updated_status = run(&mut s, "drawing.status", json!({}));
+    assert!(updated_status["dimensions"].as_array().unwrap().iter().any(|d|
+        d["dimension"] == vulnerable && d["status"] == "lost"
+    ), "referenced deleted edge must be lost: {updated_status}");
+    assert!(updated_status["dimensions"].as_array().unwrap().iter().any(|d|
+        d["dimension"] == good && d["status"] == "ok"
+    ), "unaffected dimension must remain ok: {updated_status}");
+    let after_scene = run(&mut s, "drawing.scene", json!({"sheet": sheet_id}));
+    assert!(conforms(schema.as_value(), schema.as_value(), &after_scene),
+        "scene must remain schema-valid despite lost model reference: {after_scene}");
+    assert!(!after_scene["objects"].as_array().unwrap().iter().any(|o| o["object"] == empty),
+        "empty notes still create no paper object after the model changes");
+    println!(
+        "T132_DRAWINGS_15564_COMPAT_PASS empty_note=excluded visible_note=outside \
+         views=present dimensions=valid_then_lost unaffected=ok scene_schema=ok \
+         elapsed_ms={}",
+        started.elapsed().as_millis()
+    );
+}
