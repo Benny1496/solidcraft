@@ -1,0 +1,40 @@
+name: SolidCraft Stage 4 Test 129 Positive Component Dimension
+on:
+  push:
+    branches:
+      - tests/solidcraft-t129-selene-positive
+permissions:
+  contents: read
+jobs:
+  selene-dimension:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 140
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: selene-stage4-positive
+      - name: Verify pinned unchanged native SELENE source
+        run: |
+          set -euo pipefail
+          MODEL=assets/render/selene/models/SELENE-functional.solidcraft
+          test "$(git hash-object "$MODEL")" = "b30fd8db0f841f97ffd756914350c2b71d2f3c2e"
+          test "$(wc -c < "$MODEL" | tr -d ' ')" = "439883"
+          echo "3bd2bfa1c6336394c4a4208d30b52c80d06658a3bd7ea57cc93b774411d1bd68  $MODEL" | sha256sum --check
+          unzip -t -qq "$MODEL"
+          echo "SELENE_MASTER_VERIFIED=complete SHA256 match, Git blob unchanged"
+          echo "COMMON_BASE=f3e2898a3acea737bff987a6f9600e3b78eba352"
+          git rev-parse HEAD
+      - name: Run native SELENE component dimension T129
+        run: |
+          set -euo pipefail
+          mkdir -p t129-report
+          timeout 125m cargo test -p solidcraft-ui-egui --lib --profile ci stage4_selene_positive_component_dimension_updates_and_undo_redo -- --nocapture 2>&1 | tee t129-report/result.log
+      - name: Preserve original CI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t129-selene-positive-dimension
+          path: t129-report/
+          retention-days: 30
