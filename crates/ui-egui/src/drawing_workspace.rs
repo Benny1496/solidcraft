@@ -163,6 +163,23 @@ pub(crate) fn left_inset(app: &SolveApp) -> f32 {
 pub(crate) fn browser_contents(app: &mut SolveApp, ui: &mut egui::Ui) {
     ui_kit::text(ui, crate::i18n::tr_label("No drawing objects"), ui_kit::Text::Note("drawing_objects"));
     ui.add_space(Tokens::get().space_8);
+    ui.separator();
+    ui.label("Drawing status (read-only)");
+    if let Some(error) = &app.drawing_workspace.attention_error {
+        ui.label(format!("Status unavailable: {error}"));
+    } else if let Some(snapshot) = app.drawing_workspace.attention.snapshot() {
+        ui.label(format!("Views waiting: {}", snapshot.waiting_views));
+        ui.label(format!("Dimensions needing attention: {}", snapshot.dimensions_needing_attention()));
+        if snapshot.held { ui.label("Updates held"); }
+        for dimension in snapshot.dimensions.iter().filter(|d| d.needs_attention()).take(8) {
+            ui.label(format!("{}: {}{}", dimension.id, dimension.status, if dimension.out_of_date { " (out of date)" } else { "" }));
+            if let Some(error) = &dimension.inspect_error { ui.label(format!("Inspection unavailable: {error}")); }
+        }
+        if snapshot.dimensions_needing_attention() > 8 { ui.label("Additional dimensions need attention"); }
+    } else {
+        ui.label("Status not yet available");
+    }
+    ui.add_space(Tokens::get().space_8);
     ui_kit::text(ui, crate::i18n::tr_label("Source design"), ui_kit::Text::Heading("drawing_source"));
     ui.label(&app.session.doc.name);
     if ui_kit::button(ui, crate::i18n::tr_label("Source properties"), ui_kit::Button::Normal).clicked() {
