@@ -275,7 +275,10 @@ mod sensor_enclosure_stage2_dimension_tests {
         assert_eq!(after["record"]["kind"], original["record"]["kind"], "dimension reference changed");
         let status = from_status(&run(&mut s, "drawing.status", json!({})));
         let id = dimension.as_str().unwrap();
-        assert!(!status.dimensions.iter().find(|d| d.id == id).expect("dimension in status").needs_attention());
+        let item = status.dimensions.iter().find(|d| d.id == id).expect("dimension in status");
+        assert_eq!(item.status, "ok", "parameter edit must preserve live dimension");
+        assert!(item.out_of_date, "changed model must flag drawing dimension for update");
+        assert!(status.waiting_views > 0, "changed model must mark a view waiting for update");
         run(&mut s, "drawing.close", json!({}));
         run(&mut s, "drawing.open", json!({"drawing": drawing}));
         assert_eq!(run(&mut s, "drawing.dimension.inspect", json!({"dimension": dimension}))["status"], "ok");
