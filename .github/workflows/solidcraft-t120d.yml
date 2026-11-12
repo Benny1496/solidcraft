@@ -1,0 +1,44 @@
+name: SolidCraft Test 120d W23a M1A
+on:
+  push:
+    branches:
+      - tests/solidcraft-t120d
+permissions:
+  contents: read
+jobs:
+  w23a:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: t120d-w23a
+      - name: Verify real W23a source
+        run: |
+          set -euo pipefail
+          test -s examples/acceptance/drawing_m2.json
+          grep -Fq w23a_deleted_bore_is_reported_by_real_engine_and_ui_adapter crates/ui-egui/src/drawing_dimension_status.rs
+      - name: Execute real W23a to M1A integration
+        run: |
+          set -euo pipefail
+          mkdir -p t120d-report
+          timeout 110m cargo test -p solidcraft-ui-egui --lib --profile ci w23a_engine_integration_tests -- --nocapture 2>&1 | tee t120d-report/integration.log
+      - name: W23a engine regression - resize
+        run: |
+          set -euo pipefail
+          timeout 25m cargo test -p solidcraft-engine --lib --profile ci changing_a_bores_diameter_keeps_its_dimension -- --nocapture 2>&1 | tee t120d-report/resize.log
+      - name: W23a engine regression - delete and reopen
+        run: |
+          set -euo pipefail
+          timeout 25m cargo test -p solidcraft-engine --lib --profile ci deleting_a_bore_loses_its_dimension_and_never_moves_it -- --nocapture 2>&1 | tee t120d-report/delete.log
+          timeout 25m cargo test -p solidcraft-engine --lib --profile ci reopening_a_plate_keeps_dimensions_and_a_lost_bores_last_value -- --nocapture 2>&1 | tee t120d-report/reopen.log
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t120d-w23a-m1a
+          path: t120d-report/
+          if-no-files-found: warn
+          retention-days: 30
