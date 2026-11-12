@@ -248,3 +248,65 @@ mod stage3_issue616_engine_gate {
         assert!(status["views"].as_array().is_some(), "drawing status views missing: {status}");
     }
 }
+
+#[cfg(test)]
+mod stage4_selene_native_engine_gate {
+    use super::*;
+    use serde_json::json;
+    use solidcraft_engine::{io, Session};
+    use std::time::Instant;
+
+    const SELENE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/render/selene/models/SELENE-functional.solidcraft"
+    );
+
+    fn command(session: &mut Session, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+        session.execute(name, &arguments).unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    /// Load and evaluate the actual original 439,883-byte binary SELENE model, then
+    /// create and inspect a native Drawing view. No mock or reduced geometry.
+    #[test]
+    fn stage4_full_selene_native_model_loads_and_produces_drawing_status() {
+        let started = Instant::now();
+        let bytes = std::fs::read(SELENE).expect("read official functional SELENE artifact");
+        assert_eq!(bytes.len(), 439_883, "unexpected SELENE model size");
+        assert!(io::is_design_container(&bytes), "SELENE must be a native binary container");
+        println!("SELENE_STAGE4_PHASE=verified_native_container bytes={} elapsed_ms={}", bytes.len(), started.elapsed().as_millis());
+
+        // The desktop / CLI loading path preserves any saved evaluation cache and
+        // resolves component links relative to the actual model location.
+        let (document, saved) = io::read_design_file(SELENE, None::<fn(io::DesignPreview)>)
+            .expect("official native SELENE format must be readable by current engine");
+        let features = document.features.len();
+        println!("SELENE_STAGE4_PHASE=parsed features={} saved_model={} elapsed_ms={}", features, saved.is_some(), started.elapsed().as_millis());
+        assert_eq!(features, 5_484, "SELENE fixture no longer matches the documented master");
+
+        let mut session = Session::opened_at(document, saved.as_ref(), Some(SELENE));
+        let body_count = session.model.state().bodies.len();
+        println!("SELENE_STAGE4_PHASE=evaluated bodies={} last_recomputed={} elapsed_ms={}", body_count, session.model.last_recomputed, started.elapsed().as_millis());
+        assert_eq!(body_count, 2_116, "SELENE geometry/body inventory differs from the published master");
+
+        // A real Drawing view is a stronger gate than merely parsing the ZIP or
+        // listing the document's features, and exercises the status adapter.
+        let drawing = command(&mut session, "drawing.create", json!({"name": "SELENE Stage 4 gate"}));
+        assert!(drawing["sheets"].as_array().is_some(), "drawing.create must return a native drawing: {drawing}");
+        println!("SELENE_STAGE4_PHASE=drawing_created elapsed_ms={}", started.elapsed().as_millis());
+        let view = command(&mut session, "drawing.view.base", json!({
+            "sheet": "Sheet 1", "view": "front", "scale": "1:20", "position_mm": [295, 205]
+        }));
+        assert!(view["view"].is_string(), "real SELENE drawing view ID missing: {view}");
+        println!("SELENE_STAGE4_PHASE=drawing_view_created elapsed_ms={}", started.elapsed().as_millis());
+
+        let status = command(&mut session, "drawing.status", json!({}));
+        let views = status["views"].as_array().expect("drawing.status must return actual views");
+        assert!(!views.is_empty(), "SELENE view absent from drawing.status: {status}");
+        let attention = from_status(&status);
+        assert!(!attention.views.is_empty(), "read-only Drawing UI adapter lost the real SELENE view");
+        println!(
+            "T128_SELENE_ENGINE_GATE_PASS features={} bodies={} drawing_views={} ui_views={} elapsed_ms={}",
+            features, body_count, views.len(), attention.views.len(), started.elapsed().as_millis()
+        );
+    }
+}
