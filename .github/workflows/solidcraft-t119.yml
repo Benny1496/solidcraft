@@ -1,4 +1,4 @@
-name: SolidCraft T119 - M1A compile
+name: SolidCraft M1A - status browser integration
 on:
   push:
     branches: [tests/solidcraft-t119]
@@ -23,6 +23,7 @@ jobs:
           set -euo pipefail
           test "$(git branch --show-current)" = "feature/drawing-d07-d26-status-m1"
           grep -Fq 'pub mod drawing_dimension_status;' crates/ui-egui/src/lib.rs
+          grep -Fq 'Drawing status (read-only)' crates/ui-egui/src/drawing_workspace.rs
           git diff --check HEAD
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
