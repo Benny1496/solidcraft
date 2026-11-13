@@ -112,4 +112,57 @@ mod tests {
         assert!(c.accept_inspection(request.generation, "d", Ok(json!({"view":"v"}))));
         assert_eq!(c.snapshot().unwrap().dimensions[0].sheet.as_deref(), Some("sheet"));
     }
+    #[test]
+    fn status_transitions_current_stale_lost_and_back_to_current() {
+        let mut controller = DrawingStatusController::default();
+        let current = json!({"views":[{"view":"v1","sheet":"s1","status":"current"}],"dimensions":[{"dimension":"d1","status":"ok"}]});
+        assert!(controller.accept_status(controller.generation(), current.clone()));
+        assert_eq!(controller.snapshot().unwrap().dimensions_needing_attention(), 0);
+        assert!(controller.pending_inspections().inspect_ids.is_empty());
+
+        let old_generation = controller.generation();
+        controller.invalidate();
+        assert!(controller.snapshot().is_none(), "never display the previous drawing's status after an edit");
+        let stale = json!({"views":[{"view":"v1","sheet":"s1","status":"current"}],"dimensions":[{"dimension":"d1","status":"ok","out_of_date":true}]});
+        assert!(!controller.accept_status(old_generation, current.clone()), "late pre-edit result must be rejected");
+        assert!(controller.accept_status(controller.generation(), stale));
+        assert_eq!(controller.snapshot().unwrap().dimensions_needing_attention(), 1);
+        let req = controller.pending_inspections();
+        assert_eq!(req.inspect_ids, vec!["d1"]);
+        assert!(controller.accept_inspection(req.generation, "d1", Ok(json!({"view":"v1"}))));
+        assert_eq!(controller.snapshot().unwrap().dimensions[0].sheet.as_deref(), Some("s1"));
+
+        controller.invalidate();
+        assert!(!controller.accept_inspection(req.generation, "d1", Ok(json!({"view":"v1"}))));
+        assert!(controller.accept_status(controller.generation(), json!({"views":[{"view":"v1","sheet":"s1","status":"current"}],"dimensions":[{"dimension":"d1","status":"lost"}]})));
+        assert_eq!(controller.snapshot().unwrap().dimensions_needing_attention(), 1);
+        assert_eq!(controller.pending_inspections().inspect_ids, vec!["d1"]);
+
+        controller.invalidate();
+        assert!(controller.accept_status(controller.generation(), current));
+        assert_eq!(controller.snapshot().unwrap().dimensions_needing_attention(), 0);
+        assert!(controller.pending_inspections().inspect_ids.is_empty());
+    }
+
+    #[test]
+    fn drawing_switch_clears_old_sheet_mapping_and_ignores_late_inspection() {
+        let mut controller = DrawingStatusController::default();
+        assert!(controller.accept_status(0, json!({"views":[{"view":"v-old","sheet":"sheet-old","status":"current"}],"dimensions":[{"dimension":"d-old","status":"lost"}]})));
+        let old_request = controller.pending_inspections();
+        assert!(controller.accept_inspection(old_request.generation, "d-old", Ok(json!({"view":"v-old"}))));
+        assert_eq!(controller.snapshot().unwrap().dimensions[0].sheet.as_deref(), Some("sheet-old"));
+
+        controller.invalidate();
+        assert!(controller.snapshot().is_none());
+        assert!(controller.accept_status(controller.generation(), json!({"views":[{"view":"v-new","sheet":"sheet-new","status":"current"}],"dimensions":[{"dimension":"d-new","status":"ambiguous"}]})));
+        assert!(!controller.accept_inspection(old_request.generation, "d-old", Ok(json!({"view":"v-old"}))));
+        let new_request = controller.pending_inspections();
+        assert_eq!(new_request.inspect_ids, vec!["d-new"]);
+        assert!(controller.accept_inspection(new_request.generation, "d-new", Ok(json!({"view":"v-new"}))));
+        let snapshot = controller.snapshot().unwrap();
+        assert_eq!(snapshot.dimensions.len(), 1);
+        assert_eq!(snapshot.dimensions[0].id, "d-new");
+        assert_eq!(snapshot.dimensions[0].sheet.as_deref(), Some("sheet-new"));
+    }
+
 }
