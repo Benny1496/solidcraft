@@ -203,6 +203,10 @@ pub(crate) mod display_lod;
 pub mod drawing_jobs;
 pub mod drawing_sheet_page;
 pub mod drawing_workspace;
+pub mod drawing_attention_card;
+pub mod drawing_dimension_status;
+pub mod drawing_status_controller;
+pub mod drawing_status_engine;
 #[cfg(test)]
 mod file_load_ui_tests;
 #[cfg(test)]
@@ -1426,6 +1430,9 @@ impl SolveApp {
             self.status = None;
         }
         let done = self.command_completed(id, r);
+        if done.is_ok() && !matches!(id, "drawing.status" | "drawing.dimension.inspect") {
+            drawing_workspace::invalidate_status(self);
+        }
         if self.session.revision != revision {
             timeline::stop_playback(self);
         }
