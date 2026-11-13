@@ -15,6 +15,27 @@ pub struct State {
     strip: Option<Rect>,
     strip_sizes: [Option<egui::Vec2>; 2],
     settings: Option<Rect>,
+    /// Last engine revision sampled for the read-only status card.
+    status_revision: Option<u64>,
+    pub(crate) status_controller: crate::drawing_status_controller::DrawingStatusController,
+    status_dirty: bool,
+}
+
+/// Mark status stale after a successful command; the next Drawing frame refreshes it.
+pub(crate) fn invalidate_status(app: &mut SolveApp) {
+    app.drawing_workspace.status_controller.invalidate();
+    app.drawing_workspace.status_dirty = true;
+}
+
+/// Query at most once per revision/explicit invalidation, never once per frame.
+fn refresh_status_if_needed(app: &mut SolveApp) {
+    let revision = app.session.revision;
+    if !app.drawing_workspace.status_dirty && app.drawing_workspace.status_revision == Some(revision) {
+        return;
+    }
+    app.drawing_workspace.status_revision = Some(revision);
+    app.drawing_workspace.status_dirty = false;
+    let _ = crate::drawing_status_engine::refresh(&mut app.session, &mut app.drawing_workspace.status_controller);
 }
 
 pub fn active(app: &SolveApp) -> bool {
@@ -117,6 +138,7 @@ pub(crate) fn browser_contents(app: &mut SolveApp, ui: &mut egui::Ui) {
 
 /// There is intentionally no paper, sample geometry or camera until a scene provider exists.
 pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
+    refresh_status_if_needed(app);
     let rect = ui.max_rect();
     app.viewport.rect = Some(rect);
     let t = Tokens::get();
