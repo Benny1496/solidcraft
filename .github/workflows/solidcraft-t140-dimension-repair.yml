@@ -1,0 +1,30 @@
+name: SolidCraft Test 140 - Explicit Dimension Repair
+on:
+  push:
+    branches:
+      - feature/issue-15776-drawings-20261113
+    paths:
+      - '.github/workflows/solidcraft-t140-dimension-repair.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  repair-gate-and-engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify revision
+        run: git rev-parse HEAD
+      - name: Compile Drawing UI
+        run: cargo check -p solidcraft-ui-egui
+      - name: Test explicit repair confirmation and validation
+        run: cargo test -p solidcraft-ui-egui --lib drawing_dimension_repair -- --nocapture
+      - name: Test real engine repair undo and redo
+        run: cargo test -p solidcraft-engine --lib a_repair_is_one_undo_step_and_undone_is_lost_again -- --nocapture
+      - name: Test real engine invalid repairs do not mutate drawing
+        run: cargo test -p solidcraft-engine --lib a_bad_repair_pick_changes_nothing -- --nocapture
+      - name: Test status lifecycle remains intact
+        run: cargo test -p solidcraft-ui-egui --lib drawing_status_controller -- --nocapture
