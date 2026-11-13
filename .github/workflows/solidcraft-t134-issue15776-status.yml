@@ -5,6 +5,9 @@ on:
       - tests/issue-15776-t134-source
     paths:
       - '.github/workflows/solidcraft-t134-issue15776-status.yml'
+      - 'crates/ui-egui/src/drawing_dimension_status.rs'
+      - 'crates/ui-egui/src/drawing_status_controller.rs'
+      - 'crates/ui-egui/src/lib.rs'
 permissions:
   contents: read
 jobs:
