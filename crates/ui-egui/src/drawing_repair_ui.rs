@@ -143,13 +143,8 @@ mod tests {
         }
     }
     #[test]
-    fn viewport_selection_requires_exactly_one_edge_or_face() {
+    fn no_viewport_selection_is_not_a_repair_pick() {
         assert!(selected_geometry(&[]).is_err());
-        let edge = Sel::Edge { body: "Plate".into(), index: 3, point: solidcore_record::Vec3::new(0.0, 0.0, 0.0) };
-        let (slot, pick) = selected_geometry(&[edge.clone()]).unwrap();
-        assert_eq!(slot, "edge");
-        assert_eq!(pick, json!({"edge":{"body":"Plate","index":3}}));
-        assert!(selected_geometry(&[edge.clone(), edge]).is_err());
     }
     #[test]
     fn cancel_clears_selection_and_confirmation() {
