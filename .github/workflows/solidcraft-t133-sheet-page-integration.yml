@@ -214,6 +214,32 @@ jobs:
           print("T133_THEME_PORT_PASS fields=8 only_in_disposable_runner=true")
           PY
           git diff --check
+      - name: Port current camera, localization and theme imports into Loohi sheet page
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path("crates/ui-egui/src/drawing_sheet_page.rs")
+          content = source.read_text()
+          replacements = {
+              "use solidcraft_engine::render::Camera;": ("use solidcraft_viewport::Camera;", 1),
+              "use crate::theme::Tokens;": ("use solidcraft_theme::Tokens;", 1),
+              "crate::theme::is_dark()": ("solidcraft_theme::is_dark()", 1),
+              "crate::i18n::format(": ("solidcraft_ui_text::format(", 3),
+              "crate::i18n::tr(": ("solidcraft_ui_text::tr(", 3),
+          }
+          report = ["T133_UI_API_PORT=using_modern_public_interfaces"]
+          for old, (new, count) in replacements.items():
+              found = content.count(old)
+              assert found == count, f"interface changed: {old!r} matched {found} not {count}"
+              content = content.replace(old, new)
+              report.append(f"{old} => {new}: {count}")
+          assert all(old not in content for old in replacements)
+          source.write_text(content)
+          Path("t133-report/ui-api-port.txt").write_text("\n".join(report) + "\n")
+          print("T133_UI_API_PORT_PASS camera=viewport localization=ui_text theme=theme_crate only_in_ci=true")
+          PY
+          git diff --check
       - name: Build and run real sheet UI, workspace and navigation tests
         run: |
           set -euo pipefail
