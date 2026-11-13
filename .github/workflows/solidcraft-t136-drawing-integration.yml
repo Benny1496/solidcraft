@@ -1,0 +1,24 @@
+name: SolidCraft Test 136 - Drawing UI Integration
+on:
+  push:
+    branches:
+      - tests/issue-15776-t136-current
+    paths:
+      - '.github/workflows/solidcraft-t136-drawing-integration.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  drawing-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Drawing status and attention component tests
+        run: cargo test -p solidcraft-ui-egui --lib drawing_status -- --nocapture
+      - name: Drawing attention card tests
+        run: cargo test -p solidcraft-ui-egui --lib drawing_attention_card::tests -- --nocapture
+      - name: UI library compilation and tests
+        run: cargo test -p solidcraft-ui-egui --lib --no-fail-fast
