@@ -1,0 +1,34 @@
+name: SolidCraft Test 139 - Drawing Status Lifecycle
+on:
+  push:
+    branches:
+      - feature/issue-15776-drawings-20261113
+    paths:
+      - '.github/workflows/solidcraft-t139-status-lifecycle.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  drawing-status-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Record tested revision
+        run: git rev-parse HEAD
+      - name: Compile current drawing UI
+        run: cargo check -p solidcraft-ui-egui
+      - name: Lifecycle status transitions and drawing switching
+        run: cargo test -p solidcraft-ui-egui --lib drawing_status_controller -- --nocapture
+      - name: Real engine deleted-bore status integration
+        run: cargo test -p solidcraft-ui-egui --lib w23a_deleted_bore_is_reported_by_real_engine_and_ui_adapter -- --nocapture
+      - name: Drawing status adapter
+        run: cargo test -p solidcraft-ui-egui --lib drawing_dimension_status -- --nocapture
+      - name: Drawing engine status refresh
+        run: cargo test -p solidcraft-ui-egui --lib drawing_status_engine -- --nocapture
+      - name: Drawing attention card
+        run: cargo test -p solidcraft-ui-egui --lib drawing_attention_card -- --nocapture
+      - name: Drawing workspace tests
+        run: cargo test -p solidcraft-ui-egui --lib drawing_workspace -- --nocapture
