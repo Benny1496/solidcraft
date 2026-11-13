@@ -1,0 +1,22 @@
+name: SolidCraft Test 135b - Drawing Status Refresh
+on:
+  push:
+    branches:
+      - tests/issue-15776-t135b-source
+    paths:
+      - '.github/workflows/solidcraft-t135b-status-refresh.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  status-refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Status controller and engine bridge tests
+        run: cargo test -p solidcraft-ui-egui --lib drawing_status -- --nocapture
+      - name: Drawing attention card tests
+        run: cargo test -p solidcraft-ui-egui --lib drawing_attention_card::tests -- --nocapture
