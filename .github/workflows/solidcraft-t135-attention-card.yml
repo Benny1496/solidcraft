@@ -1,0 +1,20 @@
+name: SolidCraft Test 135 - Drawing Attention Card
+on:
+  push:
+    branches:
+      - tests/issue-15776-t135-source
+    paths:
+      - '.github/workflows/solidcraft-t135-attention-card.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  attention-card:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Focused UI attention card tests
+        run: cargo test -p solidcraft-ui-egui --lib drawing_attention_card::tests -- --nocapture
