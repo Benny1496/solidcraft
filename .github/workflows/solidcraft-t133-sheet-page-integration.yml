@@ -183,6 +183,37 @@ jobs:
           assert added in target.read_text()
           PY
           git diff --check
+      - name: Port the eight paper palette fields into shared Tokens only in CI checkout
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          target = Path("crates/theme/src/lib.rs")
+          palette = Path("crates/theme/src/palettes.rs")
+          source = target.read_text()
+          palette_source = palette.read_text()
+          fields = (
+              "paper_white", "paper_ink",
+              "paper_blueprint", "paper_blueprint_ink",
+              "paper_prussian_blue", "paper_prussian_blue_ink",
+              "paper_dark", "paper_dark_ink",
+          )
+          for field in fields:
+              assert palette_source.count(f"            {field}:") == 1, f"unexpected Loohi palette field: {field}"
+              assert f"pub {field}: Color32" not in source, f"new upstream field requires manual review: {field}"
+          anchor = "    pub bend_down: Color32,\n"
+          assert source.count(anchor) == 1, "current Tokens struct has moved: avoid guessing"
+          addition = "    /// On-screen Drawing sheet and ink palettes; original print/export stays unchanged.\n"
+          addition += "".join(f"    pub {name}: Color32,\n" for name in fields)
+          target.write_text(source.replace(anchor, anchor + addition, 1))
+          assert all(target.read_text().count(f"    pub {field}: Color32,") == 1 for field in fields)
+          Path("t133-report/theme-token-port.txt").write_text(
+              "T133_THEME_PORT=8_current_shared_Tokens_fields\n"
+              + "\n".join(fields) + "\nsource_original=unchanged\n"
+          )
+          print("T133_THEME_PORT_PASS fields=8 only_in_disposable_runner=true")
+          PY
+          git diff --check
       - name: Build and run real sheet UI, workspace and navigation tests
         run: |
           set -euo pipefail
