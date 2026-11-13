@@ -1,0 +1,34 @@
+name: SolidCraft Test 134 - Issue 15776 Status Foundation
+on:
+  push:
+    branches:
+      - tests/issue-15776-t134-source
+    paths:
+      - '.github/workflows/solidcraft-t134-issue15776-status.yml'
+permissions:
+  contents: read
+jobs:
+  foundation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: issue15776-t134
+      - name: Verify source and formatting
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          grep -n 'pub mod drawing_.*status' crates/ui-egui/src/lib.rs
+          rustfmt --edition 2024 --check crates/ui-egui/src/drawing_dimension_status.rs crates/ui-egui/src/drawing_status_controller.rs
+      - name: Compile real product UI crate
+        run: cargo check -p solidcraft-ui-egui --profile ci
+      - name: Run real adapter and engine integration tests
+        run: |
+          set -euo pipefail
+          cargo test -p solidcraft-ui-egui --profile ci --lib drawing_dimension_status -- --nocapture
+          cargo test -p solidcraft-ui-egui --profile ci --lib drawing_status_controller -- --nocapture
