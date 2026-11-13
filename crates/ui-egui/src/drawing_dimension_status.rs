@@ -159,7 +159,7 @@ mod w23a_engine_integration_tests {
     use serde_json::json;
     use solidcore_record::Vec3;
     use solidcraft_engine::Session;
-    use solidcraft_geom::Vec3Geom;
+    use solidcraft_engine::solidcraft_geom::Vec3Geom;
 
     fn command(session: &mut Session, name: &str, params: Value) -> Value {
         session.execute(name, &params).unwrap_or_else(|error| panic!("{name}: {error}"))
