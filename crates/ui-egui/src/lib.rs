@@ -204,6 +204,7 @@ pub mod drawing_dimension_status;
 pub mod drawing_attention_card;
 pub mod drawing_jobs;
 pub mod drawing_status_controller;
+pub mod drawing_status_engine;
 pub mod drawing_workspace;
 #[cfg(test)]
 mod file_load_ui_tests;
