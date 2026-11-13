@@ -1429,6 +1429,9 @@ impl SolveApp {
             self.status = None;
         }
         let done = self.command_completed(id, r);
+        if done.is_ok() && !matches!(id, "drawing.status" | "drawing.dimension.inspect") {
+            drawing_workspace::invalidate_status(self);
+        }
         if self.session.revision != revision {
             timeline::stop_playback(self);
         }
