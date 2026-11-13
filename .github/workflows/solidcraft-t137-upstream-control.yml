@@ -1,0 +1,27 @@
+name: SolidCraft Test 137 - Upstream Drawing Control
+on:
+  push:
+    branches:
+      - tests/issue-15776-t137-upstream-control
+    paths:
+      - '.github/workflows/solidcraft-t137-upstream-control.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  upstream-drawing-control:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Record source revision
+        run: git rev-parse HEAD
+      - name: Compile official Drawing UI
+        run: cargo check -p solidcraft-ui-egui
+      - name: Reproduce sheet colour failure
+        run: cargo test -p solidcraft-ui-egui --lib drawing_sheet_page_tests::every_sheet_colour_stands_off_the_backdrop -- --nocapture
+      - name: Official sheet page regression tests
+        if: success()
+        run: cargo test -p solidcraft-ui-egui --lib drawing_sheet_page -- --nocapture
