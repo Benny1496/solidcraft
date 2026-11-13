@@ -25,12 +25,14 @@ pub struct State {
     pub(crate) status_controller: crate::drawing_status_controller::DrawingStatusController,
     status_dirty: bool,
     status_error: Option<String>,
+    repair_ui: crate::drawing_repair_ui::RepairUiState,
 }
 
 pub(crate) fn invalidate_status(app: &mut SolveApp) {
     app.drawing_workspace.status_controller.invalidate();
     app.drawing_workspace.status_dirty = true;
     app.drawing_workspace.status_error = None;
+    app.drawing_workspace.repair_ui.clear();
 }
 
 fn refresh_status_if_needed(app: &mut SolveApp) {
@@ -141,6 +143,15 @@ pub(crate) fn browser_contents(app: &mut SolveApp, ui: &mut egui::Ui) {
             });
         } else if let Some(snapshot) = app.drawing_workspace.status_controller.snapshot() {
             crate::drawing_attention_card::show(ui, &snapshot);
+            let repaired = crate::drawing_repair_ui::show(
+                ui,
+                &mut app.session,
+                &mut app.drawing_workspace.repair_ui,
+                &snapshot,
+            );
+            if repaired {
+                invalidate_status(app);
+            }
         } else {
             ui.label("Drawing status not yet available");
         }
