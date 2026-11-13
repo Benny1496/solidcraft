@@ -19,12 +19,14 @@ pub struct State {
     status_revision: Option<u64>,
     pub(crate) status_controller: crate::drawing_status_controller::DrawingStatusController,
     status_dirty: bool,
+    status_error: Option<String>,
 }
 
 /// Mark status stale after a successful command; the next Drawing frame refreshes it.
 pub(crate) fn invalidate_status(app: &mut SolveApp) {
     app.drawing_workspace.status_controller.invalidate();
     app.drawing_workspace.status_dirty = true;
+    app.drawing_workspace.status_error = None;
 }
 
 /// Query at most once per revision/explicit invalidation, never once per frame.
@@ -35,7 +37,7 @@ fn refresh_status_if_needed(app: &mut SolveApp) {
     }
     app.drawing_workspace.status_revision = Some(revision);
     app.drawing_workspace.status_dirty = false;
-    let _ = crate::drawing_status_engine::refresh(&mut app.session, &mut app.drawing_workspace.status_controller);
+    app.drawing_workspace.status_error = crate::drawing_status_engine::refresh(&mut app.session, &mut app.drawing_workspace.status_controller).err();
 }
 
 pub fn active(app: &SolveApp) -> bool {
@@ -127,6 +129,20 @@ pub(crate) fn left_inset(app: &SolveApp) -> f32 {
 
 /// Reuse Browser's existing content-hugging host and resize seam, with Drawing contents.
 pub(crate) fn browser_contents(app: &mut SolveApp, ui: &mut egui::Ui) {
+    refresh_status_if_needed(app);
+    ui.push_id("drawing_attention_status", |ui| {
+        if let Some(error) = &app.drawing_workspace.status_error {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.heading("Drawing status");
+                ui.label(format!("Status unavailable: {error}"));
+            });
+        } else if let Some(snapshot) = app.drawing_workspace.status_controller.snapshot() {
+            crate::drawing_attention_card::show(ui, &snapshot);
+        } else {
+            ui.label("Drawing status not yet available");
+        }
+    });
+    ui.add_space(Tokens::get().space_8);
     ui_kit::text(ui, solidcraft_ui_text::tr_label("No drawing objects"), ui_kit::Text::Note("drawing_objects"));
     ui.add_space(Tokens::get().space_8);
     ui_kit::text(ui, solidcraft_ui_text::tr_label("Source design"), ui_kit::Text::Heading("drawing_source"));
