@@ -33,20 +33,16 @@ jobs:
           from pathlib import Path
           p=Path("crates/ui-egui/src/drawing_workspace.rs")
           s=p.read_text()
-          import re
-          pattern = r'(?m)^([ \\t]*)h\\.step\\(&serde_json::json!\\(\\{"widget":action\\}\\)\\)\\.unwrap\\(\\);\\s*h\\.frames\\(4\\);\\s*assert!\\(h\\.widget\\("Review repair"\\)\\.is_some\\(\\), "repair panel opens"\\);'
-          replacement = '''        eprintln!("DIAG before click: repair_button={} review={} active_tab={}", h.widget(&action).is_some(), h.widget("Review repair").is_some(), h.app.ui.tab);
-                  h.step(&serde_json::json!({"widget":action})).unwrap();
-                  for frame in 0..12 {
-                      h.frames(1);
-                      eprintln!("DIAG after frame {}: repair_button={} review={} confirm={} active_tab={} undo={}", frame+1, h.widget(&format!("Repair {id}")).is_some(), h.widget("Review repair").is_some(), h.widget("Confirm repair").is_some(), h.app.ui.tab, h.app.session.undo.len());
-                  }
-                  assert!(h.widget("Review repair").is_some(), "repair panel opens");'''
-          m=re.search(pattern,s)
-          assert m, "Repair test anchor not found"
-          indentation=m.group(1)
-          new="\\n".join(indentation + line.lstrip() if idx == 0 else indentation + line for idx,line in enumerate(replacement.splitlines()))
-          p.write_text(s[:m.start()]+new+s[m.end():])
+          anchor = '        assert!(h.widget("Review repair").is_some(), "repair panel opens");'
+          assert s.count(anchor) == 1, f"Expected exactly one assertion, found {s.count(anchor)}"
+          diagnostics = '''        eprintln!("DIAG before assertion: tab={} undo={} repair_button={} review={} confirm={}", h.app.ui.tab, h.app.session.undo.len(), h.widget(&format!("Repair {id}")).is_some(), h.widget("Review repair").is_some(), h.widget("Confirm repair").is_some());
+          for frame in 0..12 {
+              h.frames(1);
+              eprintln!("DIAG frame {}: tab={} undo={} repair_button={} review={} confirm={}", frame + 1, h.app.ui.tab, h.app.session.undo.len(), h.widget(&format!("Repair {id}")).is_some(), h.widget("Review repair").is_some(), h.widget("Confirm repair").is_some());
+          }
+          '''
+          s=s.replace(anchor,diagnostics+anchor,1)
+          p.write_text(s)
           PY
       - uses: dtolnay/rust-toolchain@1.99.1
       - name: Install dependencies
