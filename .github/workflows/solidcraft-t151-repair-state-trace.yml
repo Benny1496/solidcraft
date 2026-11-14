@@ -1,0 +1,88 @@
+name: SolidCraft Test 151 repair state trace
+on:
+  push:
+    branches: [tests/solidcraft-t151-repair-state-trace]
+    paths: ['.github/workflows/solidcraft-t151-repair-state-trace.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  repair-state:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Integrate upstream in runner only
+        run: |
+          git config user.name "SolidCraft CI"
+          git config user.email "ci@users.noreply.github.com"
+          git remote add upstream https://github.com/tangency-labs/solidcraft.git
+          git fetch --no-tags upstream drawings
+          echo "UPSTREAM_SHA=$(git rev-parse FETCH_HEAD)"
+          git merge --no-commit --no-ff FETCH_HEAD > /tmp/merge.log 2>&1 || { tail -n 60 /tmp/merge.log; exit 1; }
+      - name: Inject transient state tracing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("crates/ui-egui/src/drawing_repair_ui.rs")
+          s=p.read_text()
+          anchor='    pub fn clear(&mut self) {'
+          assert s.count(anchor)==1
+          s=s.replace(anchor,'''    pub fn diagnostic(&self) -> String {
+              format!("dimension={:?} candidates={} awaiting={} message={:?}", self.dimension, self.candidates.len(), self.awaiting_confirmation, self.message)
+          }
+          '''+anchor,1)
+          anchor='        if ui.button(format!("Repair {}", dim.id)).clicked() {'
+          assert s.count(anchor)==1
+          s=s.replace(anchor,'''        let response = ui.button(format!("Repair {}", dim.id));
+          if response.clicked() {
+              eprintln!("T151 EVENT repair_clicked id={} before={}", dim.id, state.diagnostic());''',1)
+          anchor='            state.slot = "edge".into();'
+          assert s.count(anchor)==1
+          s=s.replace(anchor,anchor+'''
+              eprintln!("T151 EVENT selected id={} state={}", dim.id, state.diagnostic());''',1)
+          anchor='    if let Some(id) = state.dimension.clone() {'
+          assert s.count(anchor)==1
+          s=s.replace(anchor,'''    eprintln!("T151 UI after_buttons {}", state.diagnostic());
+          '''+anchor,1)
+          p.write_text(s)
+          p=Path("crates/ui-egui/src/drawing_workspace.rs")
+          s=p.read_text()
+          anchor='    app.drawing_workspace.repair_ui.clear();'
+          assert s.count(anchor)==1
+          s=s.replace(anchor,'''    eprintln!("T151 INVALIDATE before={} revision={}", app.drawing_workspace.repair_ui.diagnostic(), app.session.revision);
+          '''+anchor,1)
+          anchor='        assert!(h.widget("Review repair").is_some(), "repair panel opens");'
+          assert s.count(anchor)==1
+          s=s.replace(anchor,'''        eprintln!("T151 HARNESS after_click {} revision={} dirty={} status_error={:?}", h.app.drawing_workspace.repair_ui.diagnostic(), h.app.session.revision, h.app.drawing_workspace.status_dirty, h.app.drawing_workspace.status_error);
+          for frame in 0..6 {
+              h.frames(1);
+              eprintln!("T151 HARNESS frame={} {} repair_button={} review={} undo={}", frame+1, h.app.drawing_workspace.repair_ui.diagnostic(), h.widget(&format!("Repair {id}")).is_some(), h.widget("Review repair").is_some(), h.app.session.undo.len());
+          }
+          '''+anchor,1)
+          p.write_text(s)
+          print("T151 tracing injection OK")
+          PY
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install UI build dependencies
+        run: |
+          sudo apt-get update -qq > /tmp/apt.log 2>&1
+          sudo apt-get install -y -qq libgl1-mesa-dri libegl1 libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-0 libasound2-dev libudev-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxinerama-dev libxcb-shape0-dev libxcb-xfixes0-dev >> /tmp/apt.log 2>&1 || { tail -n 70 /tmp/apt.log; exit 1; }
+      - name: Run focused repair test and preserve trace
+        run: |
+          set +e
+          cargo test --locked -q -p solidcraft-ui-egui repair_lost_bore_through_visible_buttons_review_confirm_and_undo -- --nocapture > /tmp/test.log 2>&1
+          rc=$?
+          echo "TEST_EXIT_CODE=$rc"
+          grep -E 'T151 |panicked at|repair panel opens|test result:|^error' /tmp/test.log | tail -n 130 || true
+          tail -n 35 /tmp/test.log
+          exit "$rc"
+      - name: Disk
+        if: always()
+        run: df -h .
