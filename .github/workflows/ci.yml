@@ -65,8 +65,8 @@ on:
   push:
     # develop: the SMLib kernel's trunk until it merges into main (its PRs land there).
     branches: [main, develop]
-  schedule:
-    - cron: "17 6 * * *"
+  # Fork maintenance (2026-11-14): inherited daily scheduled CI disabled.
+  # Keep pull_request, push and workflow_dispatch for targeted validation.
   workflow_dispatch:
     inputs:
       cross_compile:
