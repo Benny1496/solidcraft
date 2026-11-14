@@ -1,0 +1,65 @@
+name: SolidCraft Test 149c repair click diagnostics
+on:
+  push:
+    branches: [tests/solidcraft-t149c-repair-click-diagnostics]
+    paths: ['.github/workflows/solidcraft-t149c-repair-click-diagnostics.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: "never"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Integrate upstream without modifying branch
+        run: |
+          git config user.name "SolidCraft CI"
+          git config user.email "ci@users.noreply.github.com"
+          git remote add upstream https://github.com/tangency-labs/solidcraft.git
+          git fetch --no-tags upstream drawings
+          echo "UPSTREAM_SHA=$(git rev-parse FETCH_HEAD)"
+          git merge --no-commit --no-ff FETCH_HEAD > /tmp/merge.log 2>&1 || { tail -n 80 /tmp/merge.log; exit 1; }
+          echo "Merge succeeded"
+      - name: Add temporary test-only click diagnostics
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("crates/ui-egui/src/drawing_workspace.rs")
+          s=p.read_text()
+          old='''        h.step(&serde_json::json!({"widget":action})).unwrap();
+          h.frames(4);
+          assert!(h.widget("Review repair").is_some(), "repair panel opens");'''
+          new='''        eprintln!("DIAG before click: repair_button={} review={} active_tab={}", h.widget(&action).is_some(), h.widget("Review repair").is_some(), h.app.ui.tab);
+          h.step(&serde_json::json!({"widget":action})).unwrap();
+          for frame in 0..12 {
+              h.frames(1);
+              eprintln!("DIAG after frame {}: repair_button={} review={} confirm={} active_tab={} undo={}", frame+1, h.widget(&format!("Repair {id}")).is_some(), h.widget("Review repair").is_some(), h.widget("Confirm repair").is_some(), h.app.ui.tab, h.app.session.undo.len());
+          }
+          assert!(h.widget("Review repair").is_some(), "repair panel opens");'''
+          assert old in s, "Expected test block not found"
+          p.write_text(s.replace(old,new,1))
+          PY
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq > /tmp/apt.log 2>&1
+          sudo apt-get install -y -qq libgl1-mesa-dri libegl1 libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-0 libasound2-dev libudev-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxinerama-dev libxcb-shape0-dev libxcb-xfixes0-dev >> /tmp/apt.log 2>&1 || { tail -n 80 /tmp/apt.log; exit 1; }
+      - name: Run instrumented repair regression
+        run: |
+          set +e
+          cargo test --locked -q -p solidcraft-ui-egui repair_lost_bore_through_visible_buttons_review_confirm_and_undo -- --nocapture > /tmp/test.log 2>&1
+          rc=$?
+          echo "TEST_EXIT_CODE=$rc"
+          grep -E 'DIAG |panicked at|repair panel opens|test result:|^error' /tmp/test.log | tail -n 70 || true
+          tail -n 45 /tmp/test.log
+          exit "$rc"
+      - name: Disk status
+        if: always()
+        run: df -h .
