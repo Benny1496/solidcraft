@@ -754,6 +754,7 @@ mod tests {
     #[test]
     fn repair_lost_bore_through_visible_buttons_review_confirm_and_undo() {
         use solidcore_record::Vec3;
+        use solidcraft_engine::solidcraft_geom::Vec3Geom;
         let mut h = Harness::new();
         h.app.home.open = false;
         h.app.ui.show_browser = true;
