@@ -1,8 +1,8 @@
 name: SolidCraft Test 154 pointer hit trace
 on:
   push:
-    branches: [tests/solidcraft-t154-pointer-hit-trace]
-    paths: ['.github/workflows/solidcraft-t154-pointer-hit-trace.yml']
+    branches: [tests/solidcraft-t154-scroll-visibility]
+    paths: ['.github/workflows/solidcraft-t154-scroll-visibility.yml']
   workflow_dispatch:
 permissions:
   contents: read
