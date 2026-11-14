@@ -33,18 +33,20 @@ jobs:
           from pathlib import Path
           p=Path("crates/ui-egui/src/drawing_workspace.rs")
           s=p.read_text()
-          old='''        h.step(&serde_json::json!({"widget":action})).unwrap();
-          h.frames(4);
-          assert!(h.widget("Review repair").is_some(), "repair panel opens");'''
-          new='''        eprintln!("DIAG before click: repair_button={} review={} active_tab={}", h.widget(&action).is_some(), h.widget("Review repair").is_some(), h.app.ui.tab);
-          h.step(&serde_json::json!({"widget":action})).unwrap();
-          for frame in 0..12 {
-              h.frames(1);
-              eprintln!("DIAG after frame {}: repair_button={} review={} confirm={} active_tab={} undo={}", frame+1, h.widget(&format!("Repair {id}")).is_some(), h.widget("Review repair").is_some(), h.widget("Confirm repair").is_some(), h.app.ui.tab, h.app.session.undo.len());
-          }
-          assert!(h.widget("Review repair").is_some(), "repair panel opens");'''
-          assert old in s, "Expected test block not found"
-          p.write_text(s.replace(old,new,1))
+          import re
+          pattern = r'(?m)^([ \\t]*)h\\.step\\(&serde_json::json!\\(\\{"widget":action\\}\\)\\)\\.unwrap\\(\\);\\s*h\\.frames\\(4\\);\\s*assert!\\(h\\.widget\\("Review repair"\\)\\.is_some\\(\\), "repair panel opens"\\);'
+          replacement = '''        eprintln!("DIAG before click: repair_button={} review={} active_tab={}", h.widget(&action).is_some(), h.widget("Review repair").is_some(), h.app.ui.tab);
+                  h.step(&serde_json::json!({"widget":action})).unwrap();
+                  for frame in 0..12 {
+                      h.frames(1);
+                      eprintln!("DIAG after frame {}: repair_button={} review={} confirm={} active_tab={} undo={}", frame+1, h.widget(&format!("Repair {id}")).is_some(), h.widget("Review repair").is_some(), h.widget("Confirm repair").is_some(), h.app.ui.tab, h.app.session.undo.len());
+                  }
+                  assert!(h.widget("Review repair").is_some(), "repair panel opens");'''
+          m=re.search(pattern,s)
+          assert m, "Repair test anchor not found"
+          indentation=m.group(1)
+          new="\\n".join(indentation + line.lstrip() if idx == 0 else indentation + line for idx,line in enumerate(replacement.splitlines()))
+          p.write_text(s[:m.start()]+new+s[m.end():])
           PY
       - uses: dtolnay/rust-toolchain@1.99.1
       - name: Install dependencies
