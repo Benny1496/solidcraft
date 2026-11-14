@@ -42,7 +42,7 @@ jobs:
           s=p.read_text()
           a='        h.step(&serde_json::json!({"widget":action})).unwrap();'
           assert s.count(a)==1
-          s=s.replace(a,'''        eprintln!("T152 HARNESS widget_center={:?} screen_size={:?}", h.widget(&action), h.size);
+          s=s.replace(a,'''        eprintln!("T152 HARNESS widget_center={:?} screen_size={:?}", h.widget(&action), h.ctx.screen_rect().size());
           h.step(&serde_json::json!({"widget":action})).unwrap();
           eprintln!("T152 HARNESS after_click review={} repair_button={}", h.widget("Review repair").is_some(), h.widget(&format!("Repair {id}")).is_some());''',1)
           p.write_text(s)
