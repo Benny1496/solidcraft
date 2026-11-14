@@ -1,0 +1,56 @@
+name: SolidCraft Test 149b drawings diagnostics
+on:
+  push:
+    branches: [tests/solidcraft-t149b-drawings-diagnostics]
+    paths: ['.github/workflows/solidcraft-t149b-drawings-diagnostics.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: "never"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Merge latest upstream drawings without writing back
+        run: |
+          git config user.name "SolidCraft CI"
+          git config user.email "ci@users.noreply.github.com"
+          git remote add upstream https://github.com/tangency-labs/solidcraft.git
+          git fetch --no-tags upstream drawings
+          echo "Upstream SHA $(git rev-parse FETCH_HEAD)"
+          git merge --no-commit --no-ff FETCH_HEAD > /tmp/merge-output.log 2>&1 || { tail -n 100 /tmp/merge-output.log; exit 1; }
+          echo "Merge completed without conflicts"
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq > /tmp/apt-update.log 2>&1
+          sudo apt-get install -y -qq libgl1-mesa-dri libegl1 libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-0 libasound2-dev libudev-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxinerama-dev libxcb-shape0-dev libxcb-xfixes0-dev > /tmp/apt-install.log 2>&1 || { tail -n 80 /tmp/apt-install.log; exit 1; }
+      - name: Cargo check with bounded diagnostics
+        run: |
+          set +e
+          cargo check --locked -q -p solidcraft-ui-egui > /tmp/cargo-check.log 2>&1
+          rc=$?
+          echo "Cargo check exit code: $rc"
+          grep -n -E '^error|^warning:|^ *--> |^ *\| |^help:|^note:' /tmp/cargo-check.log | head -n 160 || true
+          tail -n 100 /tmp/cargo-check.log
+          exit "$rc"
+      - name: Repair regression with bounded diagnostics
+        run: |
+          set +e
+          cargo test --locked -q -p solidcraft-ui-egui repair_lost_bore_through_visible_buttons_review_confirm_and_undo -- --nocapture > /tmp/repair-test.log 2>&1
+          rc=$?
+          echo "Repair test exit code: $rc"
+          grep -n -E '^error|^warning:|^ *--> |^ *\| |^help:|^note:|test result:' /tmp/repair-test.log | head -n 160 || true
+          tail -n 100 /tmp/repair-test.log
+          exit "$rc"
+      - name: Disk status
+        if: always()
+        run: df -h .
