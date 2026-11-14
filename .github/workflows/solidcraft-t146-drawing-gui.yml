@@ -1,0 +1,150 @@
+name: SolidCraft Test 146 native Drawing status and lost reference
+on:
+  push:
+    branches: [tests/solidcraft-t146-drawing-gui]
+    paths: ['.github/workflows/solidcraft-t146-drawing-gui.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Install desktop GUI libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgl1-mesa-dri libegl1 libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-0 libasound2-dev libudev-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxinerama-dev libxcb-shape0-dev libxcb-xfixes0-dev
+          ldconfig -p | grep -F 'libxkbcommon-x11.so.0'
+      - name: Build real desktop
+        run: cargo build --locked -p solidcraft
+      - name: Run M2 drawing in actual native GUI
+        run: |
+          mkdir -p gui-evidence
+          export SOLIDCRAFT_CONTROL_TOKEN="$(openssl rand -hex 32)"
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export RUST_BACKTRACE=1
+          Xvfb :99 -screen 0 1440x900x24 -nolisten tcp >gui-evidence/xvfb.log 2>&1 &
+          export DISPLAY=:99
+          sleep 3
+          ./target/debug/solidcraft --control 27878 >gui-evidence/app.log 2>&1 &
+          python3 - <<'PY'
+          import json,os,socket,time,traceback,sys
+          from pathlib import Path
+          out=Path("gui-evidence");out.mkdir(exist_ok=True)
+          token=os.environ["SOLIDCRAFT_CONTROL_TOKEN"]
+          trace=[];number=0
+          def save(name,data):
+              (out/name).write_text(json.dumps(data,indent=2,ensure_ascii=False,default=str)+"\n")
+          def call(method,params=None,label=None):
+              global number
+              number+=1
+              payload={"id":number,"method":method,"params":params or {}}
+              if number==1:payload["token"]=token
+              f.write((json.dumps(payload)+"\n").encode());f.flush()
+              line=f.readline()
+              if not line:raise RuntimeError("GUI control connection closed during "+method)
+              reply=json.loads(line)
+              trace.append({"id":number,"method":method,"label":label,"ok":reply.get("ok"),"error":reply.get("error")})
+              if label:save(label+".json",reply)
+              if reply.get("ok") is not True:raise RuntimeError(method+": "+str(reply.get("error",reply)))
+              return reply.get("result")
+          def cmd(name,params=None,label=None):
+              return call("engine.execute",{"command":name,"params":params or {}},label)
+          def screenshot(label,w,h):
+              call("ui.resize",{"width":w,"height":h})
+              time.sleep(3)
+              p=out/(label+".png")
+              response=call("ui.screenshot",{"path":str(p.resolve())},label+"-reply")
+              assert p.exists() and p.stat().st_size>10000,(label,"Missing real GUI screenshot")
+              assert response.get("width")==w and response.get("height")==h,response
+          def rows(value):
+              return [v for v in value.get("dimensions",[]) if isinstance(v,dict)] if isinstance(value,dict) else []
+          def main():
+              recipe=json.loads(Path("examples/acceptance/drawing_m2.json").read_text())
+              steps=recipe["commands"]
+              assert len(steps)>=20,"M2 plate acceptance recipe truncated"
+              for _ in range(90):
+                  try:
+                      sock=socket.create_connection(("127.0.0.1",27878),timeout=3)
+                      break
+                  except OSError:time.sleep(2)
+              else:raise RuntimeError("Desktop control port unavailable")
+              sock.settimeout(120)
+              global f
+              f=sock.makefile("rwb")
+              try:
+                  initial=call("ui.inspect",{}, "initial-ui")
+                  assert isinstance(initial,dict)
+                  view_result=None
+                  for i,step in enumerate(steps,1):
+                      try:
+                          result=cmd(step["command"],step.get("params",{}))
+                      except Exception:
+                          save("failed-recipe-step.json",{"index":i,"command":step["command"],"params":step.get("params")})
+                          raise
+                      if step["command"]=="drawing.view.base":view_result=result
+                  inspect=cmd("drawing.inspect",{}, "drawing-inspect")
+                  views=inspect.get("views",[]) if isinstance(inspect,dict) else []
+                  if isinstance(inspect,dict) and isinstance(inspect.get("drawing"),dict):
+                      views=inspect["drawing"].get("views",views)
+                  view=None
+                  if views and isinstance(views[0],dict):view=views[0].get("view") or views[0].get("id")
+                  if not view and isinstance(view_result,dict):view=view_result.get("view") or view_result.get("id")
+                  assert view,"No real top drawing view ID returned"
+                  added=cmd("drawing.dimension.add",{"view":view,"kind":{"radial":{"edge":[25,20,20]}}},"bore1-dimension")
+                  before=cmd("drawing.status",{}, "drawing-status-before")
+                  assert rows(before),"Drawing engine returned no dimensions after adding Bore1"
+                  call("ui.workspace",{"workspace":"drawing"},"enter-drawing")
+                  time.sleep(3)
+                  normal=call("ui.inspect",{},"ui-normal")
+                  assert isinstance(normal,dict) and normal.get("sheet_page") is not None,"No real native Drawing sheet page"
+                  screenshot("drawing-normal-1280x720",1280,720)
+                  cmd("drawing.close",{},"drawing-close")
+                  cmd("timeline.delete",{"feature":"Bore1"},"delete-bore1")
+                  cmd("drawing.open",{},"drawing-open")
+                  after=cmd("drawing.status",{},"drawing-status-after")
+                  lost=[row for row in rows(after) if row.get("status")=="lost"]
+                  assert lost,"Bore1 model edit did not yield a lost drawing dimension"
+                  time.sleep(3)
+                  ui_lost=call("ui.inspect",{},"ui-lost")
+                  assert isinstance(ui_lost,dict) and ui_lost.get("sheet_page") is not None,"Drawing sheet page missing after loss"
+                  screenshot("drawing-lost-1280x720",1280,720)
+                  screenshot("drawing-lost-960x640",960,640)
+                  save("test-result.json",{"result":"T146_DRAWING_LOST_NATIVE_GUI_SUCCESS",
+                       "scope":"real drawing page and lost-reference status, not repair confirmation",
+                       "recipe_commands":len(steps),"view":view,"dimension_add":added,
+                       "normal_dimensions":rows(before),"lost_dimensions":lost,
+                       "pngs":["drawing-normal-1280x720.png","drawing-lost-1280x720.png","drawing-lost-960x640.png"]})
+                  print("T146_DRAWING_LOST_NATIVE_GUI_SUCCESS",flush=True)
+              finally:
+                  f.close();sock.close()
+          try:main()
+          except Exception as e:
+              save("test-failure.json",{"error":str(e),"traceback":traceback.format_exc()})
+              print("T146_NATIVE_GUI_FAILED:",e,file=sys.stderr,flush=True)
+              raise
+          finally:
+              save("control-trace.json",trace)
+          PY
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          echo "=== APP LOG ==="
+          tail -n 160 gui-evidence/app.log || true
+          echo "=== XVFB LOG ==="
+          tail -n 70 gui-evidence/xvfb.log || true
+          echo "=== PROCESS ==="
+          ps aux | grep -E "solidcraft|Xvfb" | grep -v grep || true
+          echo "=== CONTROL PORT ==="
+          ss -lntp | grep 27878 || true
+      - name: Archive native Drawing evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidcraft-t146-drawing-gui
+          path: gui-evidence/
+          retention-days: 14
