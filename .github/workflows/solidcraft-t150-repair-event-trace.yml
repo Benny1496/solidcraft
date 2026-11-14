@@ -1,0 +1,43 @@
+name: SolidCraft Test 150 repair event source trace
+on:
+  push:
+    branches: [tests/solidcraft-t150-repair-event-trace]
+    paths: ['.github/workflows/solidcraft-t150-repair-event-trace.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  trace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Merge latest upstream drawings in temporary checkout
+        run: |
+          git config user.name "SolidCraft CI"
+          git config user.email "ci@users.noreply.github.com"
+          git remote add upstream https://github.com/tangency-labs/solidcraft.git
+          git fetch --no-tags upstream drawings
+          echo "UPSTREAM_SHA=$(git rev-parse FETCH_HEAD)"
+          git merge --no-commit --no-ff FETCH_HEAD > /tmp/merge.log 2>&1 || { tail -n 80 /tmp/merge.log; exit 1; }
+          echo "Merge successful"
+      - name: Locate real repair button and panel state handlers
+        run: |
+          echo '=== REPAIR LABEL / HANDLER REFERENCES ==='
+          rg -n -i -m 12 'Review repair|Confirm repair|Repair \{|repair.*clicked\(|repair.*panel|repair.*candidate' crates/ui-egui/src | head -n 160 || true
+          echo '=== SOURCE CONTEXT (EXCLUDING TESTS) ==='
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          for p in Path('crates/ui-egui/src').rglob('*.rs'):
+              lines=p.read_text(errors='replace').splitlines()
+              matches=[i for i,line in enumerate(lines) if re.search(r'Review repair|Confirm repair|Repair \{|repair.*clicked\(|repair.*panel',line,re.I)]
+              if not matches: continue
+              for i in matches[:12]:
+                  if '#[cfg(test)]' in '\n'.join(lines[max(0,i-350):i]): continue
+                  print(f'=== {p}:{i+1} ===')
+                  for j in range(max(0,i-10),min(len(lines),i+17)):
+                      print(f'{j+1}: {lines[j]}')
+          PY
