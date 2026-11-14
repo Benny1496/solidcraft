@@ -1,4 +1,4 @@
-name: SolidCraft Test 146 native Drawing status and lost reference
+name: SolidCraft Test 146b native Drawing status and lost reference
 on:
   push:
     branches: [tests/solidcraft-t146-drawing-gui]
@@ -88,6 +88,8 @@ jobs:
                           raise
                       if step["command"]=="drawing.view.base":view_result=result
                   inspect=cmd("drawing.inspect",{}, "drawing-inspect")
+                  drawing_id=inspect.get("id") if isinstance(inspect,dict) else None
+                  assert isinstance(drawing_id,str) and drawing_id, "drawing.inspect did not return a drawing id"
                   views=inspect.get("views",[]) if isinstance(inspect,dict) else []
                   if isinstance(inspect,dict) and isinstance(inspect.get("drawing"),dict):
                       views=inspect["drawing"].get("views",views)
@@ -105,7 +107,7 @@ jobs:
                   screenshot("drawing-normal-1280x720",1280,720)
                   cmd("drawing.close",{},"drawing-close")
                   cmd("timeline.delete",{"feature":"Bore1"},"delete-bore1")
-                  cmd("drawing.open",{},"drawing-open")
+                  cmd("drawing.open",{"drawing":drawing_id},"drawing-open")
                   after=cmd("drawing.status",{},"drawing-status-after")
                   lost=[row for row in rows(after) if row.get("status")=="lost"]
                   assert lost,"Bore1 model edit did not yield a lost drawing dimension"
@@ -114,12 +116,12 @@ jobs:
                   assert isinstance(ui_lost,dict) and ui_lost.get("sheet_page") is not None,"Drawing sheet page missing after loss"
                   screenshot("drawing-lost-1280x720",1280,720)
                   screenshot("drawing-lost-960x640",960,640)
-                  save("test-result.json",{"result":"T146_DRAWING_LOST_NATIVE_GUI_SUCCESS",
+                  save("test-result.json",{"result":"T146B_DRAWING_LOST_NATIVE_GUI_SUCCESS",
                        "scope":"real drawing page and lost-reference status, not repair confirmation",
                        "recipe_commands":len(steps),"view":view,"dimension_add":added,
                        "normal_dimensions":rows(before),"lost_dimensions":lost,
                        "pngs":["drawing-normal-1280x720.png","drawing-lost-1280x720.png","drawing-lost-960x640.png"]})
-                  print("T146_DRAWING_LOST_NATIVE_GUI_SUCCESS",flush=True)
+                  print("T146B_DRAWING_LOST_NATIVE_GUI_SUCCESS",flush=True)
               finally:
                   f.close();sock.close()
           try:main()
@@ -145,6 +147,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: solidcraft-t146-drawing-gui
+          name: solidcraft-t146b-drawing-gui
           path: gui-evidence/
           retention-days: 14
