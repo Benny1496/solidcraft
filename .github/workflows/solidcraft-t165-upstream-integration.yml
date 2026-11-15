@@ -1,4 +1,4 @@
-name: SolidCraft T165 merge diagnosis
+name: SolidCraft T166 guarded integration probe
 on:
   push:
     branches: [tests/solidcraft-t165-upstream-integration]
@@ -34,6 +34,14 @@ jobs:
           if [ "$result" -ne 0 ]; then
             test "$(git diff --name-only --diff-filter=U)" = "crates/ui-egui/src/drawing_workspace.rs"
             echo "EXPECTED_WORKSPACE_CONFLICT=true"
+            git checkout --theirs -- crates/ui-egui/src/drawing_workspace.rs
+            git add crates/ui-egui/src/drawing_workspace.rs
+            git show "HEAD:crates/ui-egui/src/drawing_workspace.rs" > /tmp/t166-ours.rs
+            git show "FETCH_HEAD:crates/ui-egui/src/drawing_workspace.rs" > /tmp/t166-upstream.rs
+            echo "OURS_LINES=$(wc -l < /tmp/t166-ours.rs)"
+            echo "UPSTREAM_LINES=$(wc -l < /tmp/t166-upstream.rs)"
+            echo "::notice::Upstream workspace selected as safe base; own status UI must be ported before compile validation"
+            test -z "$(git diff --name-only --diff-filter=U)"
           else
             echo "CLEAN_MERGE=true"
           fi
