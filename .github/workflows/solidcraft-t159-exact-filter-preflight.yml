@@ -1,0 +1,36 @@
+name: SolidCraft Test 159 exact GUI test filter preflight
+on:
+  push:
+    branches: [tests/solidcraft-t159-exact-filter-preflight]
+    paths: ['.github/workflows/solidcraft-t159-exact-filter-preflight.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate actual test module and exact cargo filter
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          src=Path('crates/ui-egui/src/drawing_workspace.rs').read_text()
+          wf=Path('.github/workflows/solidcraft-t158-real-gui-acceptance.yml').read_text()
+          name='repair_lost_bore_through_visible_buttons_review_confirm_and_undo'
+          full='drawing_workspace::repair_gui_acceptance_t158::'+name
+          assert re.search(r'(?m)^\s*#\[cfg\(test\)\]\s*\n\s*mod tests\s*\{',src)
+          assert re.search(r'(?m)^\s*#\[test\]\s*\n\s*fn '+name+r'\s*\(',src), 'original test must exist and be marked #[test]'
+          assert "mod repair_gui_acceptance_t158 {" in wf, 'T158 must inject dedicated test module'
+          assert "f.write(test)" in wf and "f.write('\\n}\n')" in wf, 'T158 must write the test into module'
+          assert full+': test' in wf, 'T158 discovery assertion must use full path'
+          command='cargo test --locked -p solidcraft-ui-egui --lib '+full+' -- --exact --nocapture'
+          assert command in wf, 'exact test filter must use full module path'
+          assert "grep -E 'test result: ok\\. 1 passed; 0 failed'" in wf, 'T158 must reject zero-test runs'
+          print('T159 PASS: original #[test] found, injected test module defined, full exact filter matches Rust discovery path')
+          print('T159 EXPECTED:',full)
+          print('T159 NOTE: static preflight only; does not execute the GUI acceptance test')
+          PY
