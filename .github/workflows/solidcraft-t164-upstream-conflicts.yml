@@ -1,0 +1,37 @@
+name: SolidCraft T164 upstream merge conflict inventory
+on:
+  push:
+    branches: [tests/solidcraft-t164-upstream-conflicts]
+    paths: ['.github/workflows/solidcraft-t164-upstream-conflicts.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Inspect actual upstream merge conflicts without automatic ours resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/tangency-labs/solidcraft.git
+          git fetch --no-tags upstream drawings
+          echo "UPSTREAM_DRAWINGS_SHA=$(git rev-parse FETCH_HEAD)"
+          echo "REVIEW_HEAD=$(git rev-parse HEAD)"
+          set +e
+          git merge --no-commit --no-ff FETCH_HEAD > /tmp/t164-merge.log 2>&1
+          rc=$?
+          set -e
+          cat /tmp/t164-merge.log | tail -n 120
+          echo "MERGE_EXIT=$rc"
+          echo "UNMERGED_FILES_BEGIN"
+          git diff --name-only --diff-filter=U
+          echo "UNMERGED_FILES_END"
+          echo "MERGE_STATUS_BEGIN"
+          git status --short | head -n 120
+          echo "MERGE_STATUS_END"
+          if [ "$rc" -eq 0 ]; then echo "UPSTREAM_MERGE_CLEAN=true"; else echo "UPSTREAM_MERGE_CLEAN=false"; fi
