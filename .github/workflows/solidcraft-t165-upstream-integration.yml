@@ -1,4 +1,4 @@
-name: SolidCraft T166 guarded integration probe
+name: SolidCraft T167 upstream patch applicability
 on:
   push:
     branches: [tests/solidcraft-t165-upstream-integration]
@@ -30,6 +30,8 @@ jobs:
           result=$?
           set -e
           echo "MERGE_EXIT=$result"
+          git diff "$(git merge-base HEAD FETCH_HEAD)" HEAD -- crates/ui-egui/src/drawing_workspace.rs > /tmp/t167-ours.patch
+          test -s /tmp/t167-ours.patch
           git diff --name-only --diff-filter=U
           if [ "$result" -ne 0 ]; then
             test "$(git diff --name-only --diff-filter=U)" = "crates/ui-egui/src/drawing_workspace.rs"
@@ -40,7 +42,16 @@ jobs:
             git show "FETCH_HEAD:crates/ui-egui/src/drawing_workspace.rs" > /tmp/t166-upstream.rs
             echo "OURS_LINES=$(wc -l < /tmp/t166-ours.rs)"
             echo "UPSTREAM_LINES=$(wc -l < /tmp/t166-upstream.rs)"
-            echo "::notice::Upstream workspace selected as safe base; own status UI must be ported before compile validation"
+            echo "Trying strict patch replay on upstream workspace"
+            if git apply --3way --index /tmp/t167-ours.patch; then
+              echo "PATCH_APPLIED=true"
+              test -z "$(git diff --name-only --diff-filter=U)"
+              grep -q "status_controller" crates/ui-egui/src/drawing_workspace.rs
+              grep -q "mod panels;" crates/ui-egui/src/drawing_workspace.rs
+            else
+              echo "::error::Patch requires manual reconciliation; no false-positive integration result"
+              exit 1
+            fi
             test -z "$(git diff --name-only --diff-filter=U)"
           else
             echo "CLEAN_MERGE=true"
