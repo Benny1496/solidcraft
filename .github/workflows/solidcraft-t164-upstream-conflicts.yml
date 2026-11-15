@@ -34,7 +34,7 @@ jobs:
           git diff --name-only --diff-filter=U
           echo "UNMERGED_FILES_END"
           echo "MERGE_STATUS_BEGIN"
-          git status --short | head -n 120
+          git status --short | sed -n '1,120p'
           echo "MERGE_STATUS_END"
           if [ "$rc" -eq 0 ]; then
             echo "UPSTREAM_MERGE_CLEAN=true"
