@@ -18,6 +18,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name 'SolidCraft CI'
+          git config user.email 'ci@users.noreply.github.com'
           git remote add upstream https://github.com/tangency-labs/solidcraft.git
           git fetch --no-tags upstream drawings
           echo "UPSTREAM_DRAWINGS_SHA=$(git rev-parse FETCH_HEAD)"
@@ -34,4 +36,11 @@ jobs:
           echo "MERGE_STATUS_BEGIN"
           git status --short | head -n 120
           echo "MERGE_STATUS_END"
-          if [ "$rc" -eq 0 ]; then echo "UPSTREAM_MERGE_CLEAN=true"; else echo "UPSTREAM_MERGE_CLEAN=false"; fi
+          if [ "$rc" -eq 0 ]; then
+            echo "UPSTREAM_MERGE_CLEAN=true"
+          elif [ "$rc" -eq 1 ] && git diff --name-only --diff-filter=U | grep -q .; then
+            echo "UPSTREAM_MERGE_CONFLICTS_DETECTED=true"
+          else
+            echo "MERGE_DIAGNOSTIC_FAILED=true"
+            exit "$rc"
+          fi
