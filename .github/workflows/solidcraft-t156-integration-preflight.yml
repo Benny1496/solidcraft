@@ -1,0 +1,40 @@
+name: SolidCraft Test 156 Drawing UI integration preflight
+on:
+  push:
+    branches: [tests/solidcraft-t156-integration-preflight]
+    paths: ['.github/workflows/solidcraft-t156-integration-preflight.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Inspect current upstream UI contract without modifying PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/tangency-labs/solidcraft.git
+          git fetch --no-tags upstream drawings
+          echo "UPSTREAM_DRAWINGS_SHA=$(git rev-parse FETCH_HEAD)"
+          git show FETCH_HEAD:crates/ui-egui/src/drawing_workspace.rs > /tmp/upstream_workspace.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          old=Path("crates/ui-egui/src/drawing_workspace.rs").read_text()
+          new=Path("/tmp/upstream_workspace.rs").read_text()
+          names=["edit_object","show_add_sheet","sheets_visible","inspector_visible","set_sheets_visible","inspector_title","sheet_settings_entry","inspector_contents","browser_contents"]
+          for name in names:
+              pattern=r"\b(?:pub(?:\([^)]*\))?\s+)?fn\s+"+name+r"\s*\("
+              print(f"T156 API {name}: old={bool(re.search(pattern,old))} upstream={bool(re.search(pattern,new))}")
+          print("T156 STATUS old=", "refresh_status_if_needed" in old, "upstream=", "refresh_status_if_needed" in new)
+          print("T156 REPAIR old=", "drawing_repair_ui" in old, "upstream=", "drawing_repair_ui" in new)
+          print("T156 PANELS upstream=", "mod panels;" in new)
+          print("T156 SCROLL upstream=", "ScrollArea::vertical" in new)
+          assert "drawing_repair_ui" in old and "mod panels;" in new
+          print("T156 RESULT: integration contract measured; no GUI acceptance claim")
+          PY
