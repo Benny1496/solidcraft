@@ -2,7 +2,7 @@ name: SolidCraft Test 158 real GUI repair acceptance
 on:
   push:
     branches: [tests/solidcraft-t158-real-gui-acceptance]
-    paths: ['.github/workflows/solidcraft-t157-panel-integration.yml']
+    paths: ['.github/workflows/solidcraft-t158-real-gui-acceptance.yml']
   workflow_dispatch:
 permissions:
   contents: read
