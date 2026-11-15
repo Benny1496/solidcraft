@@ -2,7 +2,7 @@ name: SolidCraft T163 CamWight review integration regression
 on:
   push:
     branches: [tests/solidcraft-t163-camwight-review]
-    paths: ['.github/workflows/solidcraft-t163-camwight-review.yml', 'crates/ui-egui/src/drawing_workspace.rs']
+    paths: ['.github/workflows/solidcraft-t163-camwight-review.yml', 'crates/ui-egui/src/drawing_workspace.rs', 'crates/ui-egui/src/drawing_repair_ui.rs', 'crates/ui-egui/src/drawing_status_controller.rs', 'crates/ui-egui/src/lib.rs']
   workflow_dispatch:
 permissions:
   contents: read
