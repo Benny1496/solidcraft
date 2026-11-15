@@ -1,8 +1,8 @@
 name: SolidCraft T162 PR16310 final GitHub check
 on:
   push:
-    branches: [tests/solidcraft-t162-drawing-regression]
-    paths: ['.github/workflows/solidcraft-t162-drawing-regression.yml', 'crates/ui-egui/src/drawing_workspace.rs']
+    branches: [tests/solidcraft-t162-pr16310-final-check]
+    paths: ['.github/workflows/solidcraft-t162-pr16310-final-check.yml', 'crates/ui-egui/src/drawing_workspace.rs']
   workflow_dispatch:
 permissions:
   contents: read
