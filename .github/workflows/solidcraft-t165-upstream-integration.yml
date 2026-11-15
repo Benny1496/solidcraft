@@ -1,0 +1,61 @@
+name: SolidCraft T165 fresh upstream integration validation
+on:
+  push:
+    branches: [tests/solidcraft-t165-upstream-integration]
+    paths: ['.github/workflows/solidcraft-t165-upstream-integration.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fresh upstream and non-destructive integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "SolidCraft CI"
+          git config user.email "ci@users.noreply.github.com"
+          git remote add upstream https://github.com/tangency-labs/solidcraft.git
+          git fetch --no-tags upstream drawings
+          UPSTREAM_SHA=$(git rev-parse FETCH_HEAD)
+          REVIEW_SHA=$(git rev-parse HEAD)
+          BASE=$(git merge-base HEAD FETCH_HEAD)
+          echo "UPSTREAM_SHA=$UPSTREAM_SHA"
+          echo "REVIEW_SHA=$REVIEW_SHA"
+          echo "MERGE_BASE=$BASE"
+          test -n "$UPSTREAM_SHA" && test -n "$BASE"
+          git diff "$BASE" HEAD -- crates/ui-egui/src/drawing_workspace.rs > /tmp/t165-ours.patch
+          test -s /tmp/t165-ours.patch
+          set +e
+          git merge --no-commit --no-ff FETCH_HEAD
+          MERGE_EXIT=$?
+          set -e
+          if [ "$MERGE_EXIT" -ne 0 ]; then
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            echo "CONFLICTS=$CONFLICTS"
+            test "$CONFLICTS" = "crates/ui-egui/src/drawing_workspace.rs" || { echo "::error::Unexpected upstream merge conflicts"; exit 1; }
+            # Begin with upstream's actual workspace, then apply only our delta.
+            git checkout --theirs -- crates/ui-egui/src/drawing_workspace.rs
+            git add crates/ui-egui/src/drawing_workspace.rs
+            git apply --3way --index /tmp/t165-ours.patch || { echo "::error::Our drawing workspace patch needs manual adaptation to current upstream"; exit 1; }
+          fi
+          test -z "$(git diff --name-only --diff-filter=U)" || { echo "::error::Unresolved conflicts"; exit 1; }
+          git show FETCH_HEAD:crates/ui-egui/src/drawing_workspace.rs > /tmp/t165-upstream-workspace.rs
+          git show :crates/ui-egui/src/drawing_workspace.rs > /tmp/t165-integrated-workspace.rs
+          cmp -s /tmp/t165-upstream-workspace.rs /tmp/t165-integrated-workspace.rs && { echo "::error::Our repair integration is missing"; exit 1; }
+          grep -q 'status_controller' /tmp/t165-integrated-workspace.rs
+          grep -q 'mod panels;' /tmp/t165-integrated-workspace.rs
+          test -f crates/ui-egui/src/drawing_workspace/panels.rs
+          echo "INTEGRATION_TREE_READY=true"
+          echo "UPSTREAM_SHA=$UPSTREAM_SHA" >> "$GITHUB_ENV"
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Rust formatting verification
+        run: cargo fmt --all -- --check
+      - name: Compile and run drawing workspace regression
+        run: cargo test -p solidcraft-ui-egui drawing_workspace:: --lib -- --nocapture
