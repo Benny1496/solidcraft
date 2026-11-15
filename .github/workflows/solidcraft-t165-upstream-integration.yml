@@ -45,8 +45,8 @@ jobs:
             git apply --3way --index /tmp/t165-ours.patch || { echo "::error::Our drawing workspace patch needs manual adaptation to current upstream"; exit 1; }
           fi
           test -z "$(git diff --name-only --diff-filter=U)" || { echo "::error::Unresolved conflicts"; exit 1; }
-          git show FETCH_HEAD:crates/ui-egui/src/drawing_workspace.rs > /tmp/t165-upstream-workspace.rs
-          git show :crates/ui-egui/src/drawing_workspace.rs > /tmp/t165-integrated-workspace.rs
+          git show "FETCH_HEAD:crates/ui-egui/src/drawing_workspace.rs" > /tmp/t165-upstream-workspace.rs
+          git show ":crates/ui-egui/src/drawing_workspace.rs" > /tmp/t165-integrated-workspace.rs
           cmp -s /tmp/t165-upstream-workspace.rs /tmp/t165-integrated-workspace.rs && { echo "::error::Our repair integration is missing"; exit 1; }
           grep -q 'status_controller' /tmp/t165-integrated-workspace.rs
           grep -q 'mod panels;' /tmp/t165-integrated-workspace.rs
