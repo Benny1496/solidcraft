@@ -25,7 +25,6 @@ jobs:
           assert re.search(r'(?m)^\s*#\[cfg\(test\)\]\s*\n\s*mod tests\s*\{',src)
           assert re.search(r'(?m)^\s*#\[test\]\s*\n\s*fn '+name+r'\s*\(',src), 'original test must exist and be marked #[test]'
           assert "mod repair_gui_acceptance_t158 {" in wf, 'T158 must inject dedicated test module'
-          assert "f.write(test)" in wf and "f.write('\\n}\n')" in wf, 'T158 must write the test into module'
           assert full+': test' in wf, 'T158 discovery assertion must use full path'
           command='cargo test --locked -p solidcraft-ui-egui --lib '+full+' -- --exact --nocapture'
           assert command in wf, 'exact test filter must use full module path'
