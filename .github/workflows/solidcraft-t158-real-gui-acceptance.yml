@@ -104,9 +104,9 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked -q -p solidcraft-ui-egui --lib -- --list > /tmp/t158-list.log
-          grep -F 'repair_gui_acceptance_t158::repair_lost_bore_through_visible_buttons_review_confirm_and_undo: test' /tmp/t158-list.log
+          grep -F 'drawing_workspace::repair_gui_acceptance_t158::repair_lost_bore_through_visible_buttons_review_confirm_and_undo: test' /tmp/t158-list.log
           echo "T158 GUI test discovered; running it now"
-          cargo test --locked -p solidcraft-ui-egui --lib repair_gui_acceptance_t158::repair_lost_bore_through_visible_buttons_review_confirm_and_undo -- --exact --nocapture 2>&1 | tee /tmp/t158-test.log
+          cargo test --locked -p solidcraft-ui-egui --lib drawing_workspace::repair_gui_acceptance_t158::repair_lost_bore_through_visible_buttons_review_confirm_and_undo -- --exact --nocapture 2>&1 | tee /tmp/t158-test.log
           grep -E 'test result: ok\. 1 passed; 0 failed' /tmp/t158-test.log
       - name: Print focused diagnostic on failure
         if: failure()
