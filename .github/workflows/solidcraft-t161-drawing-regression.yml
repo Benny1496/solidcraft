@@ -46,7 +46,7 @@ jobs:
           echo "T161 drawing_workspace test inventory:"
           grep -c '^drawing_workspace::.*: test$' /tmp/t161-list.log
           cargo test --locked -p solidcraft-ui-egui --lib drawing_workspace:: -- --nocapture 2>&1 | tee /tmp/t161-test.log
-          grep -E 'test result: ok\\. [1-9][0-9]* passed; 0 failed' /tmp/t161-test.log
+          grep -E 'test result: ok\. [1-9][0-9]* passed; 0 failed' /tmp/t161-test.log
       - name: Print focused diagnostic on failure
         if: failure()
         run: |
