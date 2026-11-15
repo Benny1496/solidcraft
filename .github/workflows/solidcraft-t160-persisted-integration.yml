@@ -1,0 +1,51 @@
+name: SolidCraft T160 persisted repair integration regression
+on:
+  push:
+    branches: [integration/issue-15776-t158-20261115]
+    paths: ['.github/workflows/solidcraft-t160-persisted-integration.yml', 'crates/ui-egui/src/drawing_workspace.rs']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Merge current upstream drawings, preserve persisted integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "SolidCraft CI"
+          git config user.email "ci@users.noreply.github.com"
+          git show HEAD:crates/ui-egui/src/drawing_workspace.rs > /tmp/persisted_workspace.rs
+          git remote add upstream https://github.com/tangency-labs/solidcraft.git
+          git fetch --no-tags upstream drawings
+          echo "UPSTREAM_DRAWINGS_SHA=$(git rev-parse FETCH_HEAD)"
+          git merge --no-commit --no-ff -X ours FETCH_HEAD > /tmp/t160-merge.log 2>&1 || { tail -n 80 /tmp/t160-merge.log; exit 1; }
+          cp /tmp/persisted_workspace.rs crates/ui-egui/src/drawing_workspace.rs
+          grep -F 'mod repair_gui_acceptance_t158' crates/ui-egui/src/drawing_workspace.rs
+          grep -F 'mod panels;' crates/ui-egui/src/drawing_workspace.rs
+          git diff --check
+      - name: Compile updated panel and repair integration
+        run: |
+          set -o pipefail
+          cargo check --locked -q -p solidcraft-ui-egui 2>&1 | tee /tmp/t160-check.log
+      - name: Verify test discovery and run exact GUI test
+        run: |
+          set -euo pipefail
+          cargo test --locked -q -p solidcraft-ui-egui --lib -- --list > /tmp/t160-list.log
+          grep -F 'drawing_workspace::repair_gui_acceptance_t158::repair_lost_bore_through_visible_buttons_review_confirm_and_undo: test' /tmp/t160-list.log
+          echo "T160 GUI test discovered; running it now"
+          cargo test --locked -p solidcraft-ui-egui --lib drawing_workspace::repair_gui_acceptance_t158::repair_lost_bore_through_visible_buttons_review_confirm_and_undo -- --exact --nocapture 2>&1 | tee /tmp/t160-test.log
+          grep -E 'test result: ok\. 1 passed; 0 failed' /tmp/t160-test.log
+      - name: Print focused diagnostic on failure
+        if: failure()
+        run: |
+          grep -E 'error\[|error:|panicked at|test result:|T160|assertion failed' /tmp/t160-check.log /tmp/t160-test.log 2>/dev/null | tail -n 90 || true
