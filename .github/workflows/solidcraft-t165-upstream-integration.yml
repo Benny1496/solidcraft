@@ -25,7 +25,8 @@ jobs:
           echo "UPSTREAM_SHA=$(git rev-parse FETCH_HEAD)"
           echo "REVIEW_SHA=$(git rev-parse HEAD)"
           echo "MERGE_BASE=$(git merge-base HEAD FETCH_HEAD)"
-          test -f crates/ui-egui/src/drawing_workspace/panels.rs
+          # panels.rs was introduced upstream; it is intentionally absent in this old review branch.
+          git cat-file -e FETCH_HEAD:crates/ui-egui/src/drawing_workspace/panels.rs
           git diff "$(git merge-base HEAD FETCH_HEAD)" HEAD -- crates/ui-egui/src/drawing_workspace.rs > /tmp/ours.patch
           test -s /tmp/ours.patch
           echo "T165_PREFLIGHT_OK=true"
