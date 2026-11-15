@@ -1,0 +1,53 @@
+name: SolidCraft T161 drawing workspace regression
+on:
+  push:
+    branches: [tests/solidcraft-t161-drawing-regression]
+    paths: ['.github/workflows/solidcraft-t161-drawing-regression.yml', 'crates/ui-egui/src/drawing_workspace.rs']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Merge current upstream drawings, preserve persisted integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "SolidCraft CI"
+          git config user.email "ci@users.noreply.github.com"
+          git show HEAD:crates/ui-egui/src/drawing_workspace.rs > /tmp/persisted_workspace.rs
+          git remote add upstream https://github.com/tangency-labs/solidcraft.git
+          git fetch --no-tags upstream drawings
+          echo "UPSTREAM_DRAWINGS_SHA=$(git rev-parse FETCH_HEAD)"
+          git merge --no-commit --no-ff -X ours FETCH_HEAD > /tmp/t161-merge.log 2>&1 || { tail -n 80 /tmp/t161-merge.log; exit 1; }
+          cp /tmp/persisted_workspace.rs crates/ui-egui/src/drawing_workspace.rs
+          grep -F 'mod repair_gui_acceptance_t158' crates/ui-egui/src/drawing_workspace.rs
+          grep -F 'mod panels;' crates/ui-egui/src/drawing_workspace.rs
+          git diff --check
+      - name: Compile updated panel and repair integration
+        run: |
+          set -o pipefail
+          cargo check --locked -q -p solidcraft-ui-egui 2>&1 | tee /tmp/t161-check.log
+      - name: Run drawing workspace regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -q -p solidcraft-ui-egui --lib -- --list > /tmp/t161-list.log
+          grep -F 'drawing_workspace::repair_gui_acceptance_t158::repair_lost_bore_through_visible_buttons_review_confirm_and_undo: test' /tmp/t161-list.log
+          echo "T161 drawing_workspace test inventory:"
+          grep -c '^drawing_workspace::.*: test$' /tmp/t161-list.log
+          cargo test --locked -p solidcraft-ui-egui --lib drawing_workspace:: -- --nocapture 2>&1 | tee /tmp/t161-test.log
+          grep -E 'test result: ok\\. [1-9][0-9]* passed; 0 failed' /tmp/t161-test.log
+      - name: Print focused diagnostic on failure
+        if: failure()
+        run: |
+          grep -E 'error\[|error:|panicked at|test result:|T161|assertion failed' /tmp/t161-check.log /tmp/t161-test.log 2>/dev/null | tail -n 90 || true
