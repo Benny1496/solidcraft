@@ -1,0 +1,64 @@
+name: SolidCraft T186 isolated integration conflict diagnosis
+on:
+  push:
+    branches: [tests/solidcraft-t186]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Benny1496/solidcraft
+          ref: 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Inspect exact PR patch on pinned main
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPORT="$RUNNER_TEMP/t186"
+          mkdir -p "$REPORT"
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git 84418862b0c0f5432f83216fd26f6dda96d87dd5
+          test "$(git rev-parse FETCH_HEAD)" = 84418862b0c0f5432f83216fd26f6dda96d87dd5
+          test "$(git rev-parse HEAD)" = 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22
+          test "$(git merge-base 84418862b0c0f5432f83216fd26f6dda96d87dd5 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22)" = f1cc6e70f9337bc940ecc27d2f1d31438df36ce2
+          git diff --name-only f1cc6e70f9337bc940ecc27d2f1d31438df36ce2 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 | sort > "$REPORT/paths.txt"
+          cat > "$REPORT/expected.txt" <<'EOF'
+          assets/locales/pending/drawing-attention-status.json
+          assets/locales/pending/drawing-dimension-attention.json
+          attribution/pending/drawing-attention-status.md
+          crates/ui-egui/src/drawing_attention_card.rs
+          crates/ui-egui/src/drawing_dimension_repair.rs
+          crates/ui-egui/src/drawing_dimension_status.rs
+          crates/ui-egui/src/drawing_repair_ui.rs
+          crates/ui-egui/src/drawing_status_controller.rs
+          crates/ui-egui/src/drawing_status_engine.rs
+          crates/ui-egui/src/drawing_workspace.rs
+          crates/ui-egui/src/lib.rs
+          EOF
+          diff -u "$REPORT/expected.txt" "$REPORT/paths.txt"
+          git diff --binary --full-index f1cc6e70f9337bc940ecc27d2f1d31438df36ce2 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 > "$REPORT/pr.patch"
+          git switch --detach 84418862b0c0f5432f83216fd26f6dda96d87dd5
+          set +e
+          git apply --3way --index "$REPORT/pr.patch" 2>&1 | tee "$REPORT/apply.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          git status --short | tee "$REPORT/status.txt"
+          git ls-files -u | tee "$REPORT/unmerged.txt"
+          git diff --cc > "$REPORT/conflicts.diff"
+          git diff --cached --binary > "$REPORT/staged.diff"
+          printf 'apply_exit=%s\n' "$rc" | tee "$REPORT/result.txt"
+          printf '%s\n' '84418862b0c0f5432f83216fd26f6dda96d87dd5' '9c5e805347a4ffdfc29d5cd65722a6d0e7035a22' 'f1cc6e70f9337bc940ecc27d2f1d31438df36ce2' > "$REPORT/revisions.txt"
+          while IFS= read -r file; do
+            mkdir -p "$REPORT/conflicted/$(dirname "$file")"
+            if [[ -f "$file" ]]; then cp "$file" "$REPORT/conflicted/$file"; fi
+          done < <(git diff --name-only --diff-filter=U)
+          exit "$rc"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T186-integration-diagnosis
+          path: ${{ runner.temp }}/t186/
