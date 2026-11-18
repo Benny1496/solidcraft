@@ -1,0 +1,60 @@
+name: SolidCraft Test 187 - isolated repair integration
+on:
+  push:
+    branches:
+      - tests/solidcraft-t187
+    paths:
+      - '.github/workflows/solidcraft-t187.yml'
+permissions:
+  contents: read
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare isolated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/t187"
+          cp -r tests/fixtures/t187 "$RUNNER_TEMP/t187-fixtures"
+          git fetch --no-tags https://github.com/Benny1496/solidcraft.git 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git 5c5e939cb7cb20b25db5ca5b8ddeac800fb06f25
+          base=$(git merge-base 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 5c5e939cb7cb20b25db5ca5b8ddeac800fb06f25)
+          test "$base" = f1cc6e70f9337bc940ecc27d2f1d31438df36ce2
+          git diff --binary "$base" 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 -- . ':!crates/ui-egui/src/drawing_workspace.rs' > "$RUNNER_TEMP/t187/original.patch"
+          git switch --detach 5c5e939cb7cb20b25db5ca5b8ddeac800fb06f25
+          test "$(git rev-parse HEAD)" = 5c5e939cb7cb20b25db5ca5b8ddeac800fb06f25
+          git apply --3way --index "$RUNNER_TEMP/t187/original.patch"
+          cp -r "$RUNNER_TEMP/t187-fixtures/." .
+          git add assets/locales/pending attribution/pending crates/ui-egui/src
+          git diff --cached --check
+          git diff --cached --binary > "$RUNNER_TEMP/t187/integration.patch"
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libudev-dev libxkbcommon-dev libwayland-dev libasound2-dev pkg-config
+      - name: Format and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t187"
+          cargo fmt --all
+          git diff HEAD --binary > "$report/formatted.patch"
+          cargo test --locked --profile ci -p solidcraft-ui-egui --lib drawing -- --list 2>&1 | tee "$report/list.txt"
+          grep -q 'repair_lost_bore_through_visible_buttons_review_confirm_and_undo: test' "$report/list.txt"
+          cargo test --locked --profile ci -p solidcraft-ui-egui --lib drawing -- --test-threads=2 2>&1 | tee "$report/results.txt"
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$report/results.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T187-integration
+          path: ${{ runner.temp }}/t187/
