@@ -1,0 +1,60 @@
+name: SolidCraft T185 upstream baseline follow-up
+on:
+  push:
+    branches: [tests/solidcraft-t185]
+permissions:
+  contents: read
+jobs:
+  baseline:
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [engine, ui]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: 8f57d42807fb63bd1fc3e45f905f635e90d2d99a
+          persist-credentials: false
+      - name: Verify upstream revision
+        run: |
+          test "$(git rev-parse HEAD)" = 8f57d42807fb63bd1fc3e45f905f635e90d2d99a
+          git log -1 --oneline
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libudev-dev libxkbcommon-dev libwayland-dev libasound2-dev pkg-config
+      - name: Run baseline tests
+        env:
+          SUITE: ${{ matrix.suite }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p t185-reports
+          git rev-parse HEAD > t185-reports/sha.txt
+          if [[ "$SUITE" == engine ]]; then
+            package=solidcraft-engine
+            filters=(a_new_hole_never_takes_the_dimension_of_an_undone_one renaming_the_plate_keeps_its_five_dimensions a_cylinders_sides_meet_its_rims_from_every_corner)
+          else
+            package=solidcraft-ui-egui
+            filters=(drawing)
+          fi
+          failed=0
+          for filter in "${filters[@]}"; do
+            if ! cargo test --locked --profile ci -p "$package" --lib "$filter" -- --list 2>&1 | tee "t185-reports/$filter-list.txt"; then failed=1; continue; fi
+            if ! grep -q ': test$' "t185-reports/$filter-list.txt"; then failed=1; continue; fi
+            if ! cargo test --locked --profile ci -p "$package" --lib "$filter" -- --test-threads=2 2>&1 | tee "t185-reports/$filter-result.txt"; then failed=1; continue; fi
+            if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed' "t185-reports/$filter-result.txt"; then failed=1; fi
+          done
+          exit "$failed"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T185-${{ matrix.suite }}
+          path: t185-reports/
