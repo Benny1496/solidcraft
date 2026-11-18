@@ -1,0 +1,44 @@
+name: SolidCraft T184 upstream main drawing regression
+on:
+  push:
+    branches: [tests/solidcraft-t184]
+permissions:
+  contents: read
+jobs:
+  drawing-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: tangency-labs/solidcraft
+          ref: c4c9aa1005135f4084c7d8776a4e3ff25c104e80
+          persist-credentials: false
+      - name: Verify upstream revision
+        run: |
+          test "$(git rev-parse HEAD)" = c4c9aa1005135f4084c7d8776a4e3ff25c104e80
+          git log -1 --oneline
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libudev-dev libxkbcommon-dev libwayland-dev libasound2-dev pkg-config
+      - name: Drawing engine and UI library regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p t184-reports
+          for package in solidcraft-engine solidcraft-ui-egui; do
+            cargo test --locked --profile ci -p "$package" --lib drawing -- --list | tee "t184-reports/$package-list.txt"
+            grep -q ': test$' "t184-reports/$package-list.txt"
+            cargo test --locked --profile ci -p "$package" --lib drawing -- --test-threads=2 2>&1 | tee "t184-reports/$package-result.txt"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed' "t184-reports/$package-result.txt"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T184-drawing-regression
+          path: t184-reports/
