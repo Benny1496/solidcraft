@@ -1,0 +1,101 @@
+name: SolidCraft Test 198 - final uninstrumented verification
+on:
+  push:
+    branches:
+      - tests/solidcraft-t194
+    paths:
+      - '.github/workflows/solidcraft-t198.yml'
+permissions:
+  contents: read
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare isolated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/t198"
+          cp -r tests/fixtures/t198 "$RUNNER_TEMP/t198-fixtures"
+          git fetch --no-tags https://github.com/Benny1496/solidcraft.git 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git cc5acc82b9cb8fcbc624537b14d18c58efd6321f
+          base=$(git merge-base 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 cc5acc82b9cb8fcbc624537b14d18c58efd6321f)
+          test "$base" = f1cc6e70f9337bc940ecc27d2f1d31438df36ce2
+          git diff --binary "$base" 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 -- . ':!crates/ui-egui/src/drawing_workspace.rs' > "$RUNNER_TEMP/t198/original.patch"
+          git switch --detach cc5acc82b9cb8fcbc624537b14d18c58efd6321f
+          test "$(git rev-parse HEAD)" = cc5acc82b9cb8fcbc624537b14d18c58efd6321f
+          git apply --3way --index "$RUNNER_TEMP/t198/original.patch"
+          cp -r "$RUNNER_TEMP/t198-fixtures/." .
+          git add assets/locales/pending attribution/pending crates/ui-egui/src
+          git diff --cached --check
+          git diff --cached --binary > "$RUNNER_TEMP/t198/integration.patch"
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libudev-dev libxkbcommon-dev libxkbcommon-x11-0 libxkbcommon-x11-dev libwayland-dev libasound2-dev pkg-config xvfb xauth dbus-x11 at-spi2-core python3-pyatspi libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dri openbox
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Format clean product source
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff HEAD --binary > "$RUNNER_TEMP/t198/formatted.patch"
+          if grep -nE 'T19[4-7] (CLICK|CLEAR|REFRESH|CONFIRM)|t194_handle' crates/ui-egui/src/drawing_repair_ui.rs crates/ui-egui/src/drawing_workspace.rs; then exit 1; fi
+      - name: Targeted drawing regression and official grading
+        id: regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t198"
+          set +e
+          cargo nextest run -p solidcraft-ui-egui -p solidcraft-engine --lib --cargo-profile ci --locked --profile ci --ignore-default-filter --no-fail-fast -E 'test(drawing)' 2>&1 | tee "$report/nextest.txt"
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" = 0 || test "$status" = 100
+          cp target/nextest/ci/junit.xml "$report/targeted-junit.xml"
+          cargo xtask known-failing --junit "$report/targeted-junit.xml" 2>&1 | tee "$report/grading.txt"
+          grep -q 'repair_lost_bore_through_visible_buttons_review_confirm_and_undo' "$report/targeted-junit.xml"
+          grep -q 'candidate_types_match_unambiguous_slots' "$report/targeted-junit.xml"
+      - name: Official full CI on clean product source
+        if: ${{ !cancelled() && steps.regression.outcome == 'success' }}
+        shell: bash
+        env:
+          SOLIDCRAFT_TEST_RUNNER: nextest
+          NEXTEST_TEST_THREADS: 2
+          SOLIDCRAFT_TEST_JOBS: 2
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t198"
+          cargo xtask --help > "$report/xtask-help.txt" 2>&1 || true
+          if grep -Eq '^  fast[[:space:]]' "$report/xtask-help.txt"; then
+            cargo xtask fast 2>&1 | tee "$report/fast.txt"
+          else
+            echo 'fast not advertised by pinned xtask; full ci follows' | tee "$report/fast.txt"
+          fi
+          set +e
+          cargo xtask ci 2>&1 | tee "$report/ci.txt"
+          status=${PIPESTATUS[0]}
+          set -e
+          if test -f target/nextest/local-ci/junit.xml; then
+            cp target/nextest/local-ci/junit.xml "$report/full-junit.xml"
+            cargo xtask known-failing --junit "$report/full-junit.xml" 2>&1 | tee "$report/full-grading.txt"
+          fi
+          exit "$status"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T198-integration
+          path: ${{ runner.temp }}/t198/
