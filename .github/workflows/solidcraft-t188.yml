@@ -1,0 +1,70 @@
+name: SolidCraft Test 188 - isolated repair integration
+on:
+  push:
+    branches:
+      - tests/solidcraft-t188
+    paths:
+      - '.github/workflows/solidcraft-t188.yml'
+permissions:
+  contents: read
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare isolated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/t188"
+          cp -r tests/fixtures/t188 "$RUNNER_TEMP/t188-fixtures"
+          git fetch --no-tags https://github.com/Benny1496/solidcraft.git 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git 9b393372e0e7d49170b0cfe9ea48b76fe7a7963d
+          base=$(git merge-base 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 9b393372e0e7d49170b0cfe9ea48b76fe7a7963d)
+          test "$base" = f1cc6e70f9337bc940ecc27d2f1d31438df36ce2
+          git diff --binary "$base" 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 -- . ':!crates/ui-egui/src/drawing_workspace.rs' > "$RUNNER_TEMP/t188/original.patch"
+          git switch --detach 9b393372e0e7d49170b0cfe9ea48b76fe7a7963d
+          test "$(git rev-parse HEAD)" = 9b393372e0e7d49170b0cfe9ea48b76fe7a7963d
+          git apply --3way --index "$RUNNER_TEMP/t188/original.patch"
+          cp -r "$RUNNER_TEMP/t188-fixtures/." .
+          git add assets/locales/pending attribution/pending crates/ui-egui/src
+          git diff --cached --check
+          git diff --cached --binary > "$RUNNER_TEMP/t188/integration.patch"
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libudev-dev libxkbcommon-dev libwayland-dev libasound2-dev pkg-config
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8
+        with:
+          tool: cargo-nextest
+      - name: Format and test with official CI grading
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t188"
+          cargo fmt --all
+          git diff HEAD --binary > "$report/formatted.patch"
+          filter='test(drawing)'
+          cargo nextest list -p solidcraft-ui-egui -p solidcraft-engine --lib --cargo-profile ci --locked --profile ci --ignore-default-filter -E "$filter" | tee "$report/list.txt"
+          grep -q 'repair_lost_bore_through_visible_buttons_review_confirm_and_undo' "$report/list.txt"
+          junit=${CARGO_TARGET_DIR:-target}/nextest/ci/junit.xml
+          rm -f "$junit"
+          status=0
+          cargo nextest run -p solidcraft-ui-egui -p solidcraft-engine --lib --cargo-profile ci --locked --profile ci --ignore-default-filter -E "$filter" --no-fail-fast 2>&1 | tee "$report/results.txt" || status=$?
+          if [ "$status" -ne 0 ] && [ "$status" -ne 100 ]; then exit "$status"; fi
+          test -s "$junit"
+          cp "$junit" "$report/junit.xml"
+          cargo xtask known-failing --junit "$junit" 2>&1 | tee "$report/grading.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T188-integration
+          path: ${{ runner.temp }}/t188/
