@@ -1,0 +1,233 @@
+name: SolidCraft Test 203 - full CI and native GUI
+on:
+  push:
+    branches:
+      - integration/pr16310-t201-current-main-20261119
+    paths:
+      - '.github/workflows/solidcraft-t203.yml'
+permissions:
+  contents: read
+jobs:
+  remaining:
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        scope: [static, engine-1, engine-2, engine-3, engine-4, ui-1, ui-2, ui-3, ui-4, other-1, other-2, other-3, other-4, other-5, other-6, wasm, docs, offline]
+    timeout-minutes: 120
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare isolated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/t203"
+          cp -r tests/fixtures/t203 "$RUNNER_TEMP/t203-fixtures"
+          git fetch --no-tags https://github.com/Benny1496/solidcraft.git 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git cc5acc82b9cb8fcbc624537b14d18c58efd6321f
+          base=$(git merge-base 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 cc5acc82b9cb8fcbc624537b14d18c58efd6321f)
+          test "$base" = f1cc6e70f9337bc940ecc27d2f1d31438df36ce2
+          git diff --binary "$base" 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 -- . ':!crates/ui-egui/src/drawing_workspace.rs' > "$RUNNER_TEMP/t203/original.patch"
+          git switch --detach cc5acc82b9cb8fcbc624537b14d18c58efd6321f
+          test "$(git rev-parse HEAD)" = cc5acc82b9cb8fcbc624537b14d18c58efd6321f
+          git apply --3way --index "$RUNNER_TEMP/t203/original.patch"
+          cp -r "$RUNNER_TEMP/t203-fixtures/." .
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git c4c9aa1005135f4084c7d8776a4e3ff25c104e80
+          git merge-tree --write-tree 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 c4c9aa1005135f4084c7d8776a4e3ff25c104e80 > "$RUNNER_TEMP/t203/merge-tree.txt" || true
+          git add assets/locales/pending attribution/pending crates/ui-egui/src
+          git diff --cached --binary HEAD -- . ':!crates/ui-egui/src/drawing_workspace.rs' ':!crates/ui-egui/src/drawing_workspace/browser.rs' > "$RUNNER_TEMP/t203/port.patch"
+          git reset --hard HEAD
+          git clean -fd
+          git switch --detach c4c9aa1005135f4084c7d8776a4e3ff25c104e80
+          test "$(git rev-parse HEAD)" = c4c9aa1005135f4084c7d8776a4e3ff25c104e80
+          git apply --3way --index "$RUNNER_TEMP/t203/port.patch"
+          cp "$RUNNER_TEMP/t203-fixtures/crates/ui-egui/src/drawing_workspace.rs" crates/ui-egui/src/drawing_workspace.rs
+          cp "$RUNNER_TEMP/t203-fixtures/crates/ui-egui/src/drawing_workspace/browser.rs" crates/ui-egui/src/drawing_workspace/browser.rs
+          git add assets/locales/pending attribution/pending crates/ui-egui/src
+          git diff --cached --check
+          git diff --cached --binary > "$RUNNER_TEMP/t203/integration.patch"
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libudev-dev libxkbcommon-dev libxkbcommon-x11-0 libxkbcommon-x11-dev libwayland-dev libasound2-dev pkg-config xvfb xauth dbus-x11 at-spi2-core python3-pyatspi libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dri openbox
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Format clean product source
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff HEAD --binary > "$RUNNER_TEMP/t203/formatted.patch"
+          if grep -nE 'T19[4-7] (CLICK|CLEAR|REFRESH|CONFIRM)|t194_handle' crates/ui-egui/src/drawing_repair_ui.rs crates/ui-egui/src/drawing_workspace.rs; then exit 1; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: T203-${{ matrix.scope }}-preflight
+          path: ${{ runner.temp }}/t203/
+      - name: Run only outstanding gate
+        shell: bash
+        env:
+          SCOPE: ${{ matrix.scope }}
+          ACTION_MATRIX_JOBS: 2
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t203"
+          df -h
+          free -h
+          case "$SCOPE" in
+            static)
+              for cmd in 'fmt --check' assets icons 'licences --check' lists skills layers shared ui-containers mesh-decisions; do
+                cargo xtask $cmd 2>&1 | tee -a "$report/static.txt"
+              done
+              cargo clippy --workspace --all-targets --profile ci -- -D warnings 2>&1 | tee "$report/clippy.txt"
+              exit 0 ;;
+            wasm) cargo xtask wasm 2>&1 | tee "$report/wasm.txt"; exit ${PIPESTATUS[0]} ;;
+            docs) cargo test --workspace --profile ci --doc --locked 2>&1 | tee "$report/docs.txt"; exit ${PIPESTATUS[0]} ;;
+            offline) command -v google-chrome || command -v chromium || command -v chromium-browser
+              cargo xtask web-offline-test 2>&1 | tee "$report/offline.txt"; exit ${PIPESTATUS[0]} ;;
+          esac
+          # Full native coverage, partitioned by package and test hash. No drawing filter.
+          args=()
+          filter='all()'
+          partition=()
+          case "$SCOPE" in
+            engine-*) args=(-p solidcraft-engine --features raytrace-cpu); filter='all()'; partition=(--partition "hash:${SCOPE##*-}/4") ;;
+            ui-*) args=(-p solidcraft-ui-egui --features solidcraft-engine/raytrace-cpu); filter='all()'; partition=(--partition "hash:${SCOPE##*-}/4") ;;
+            other-*)
+              cargo metadata --format-version 1 --no-deps --locked > "$report/workspace.json"
+              python3 - "$report/workspace.json" "${SCOPE##*-}" > "$report/packages.txt" <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1]))
+          members=set(d["workspace_members"])
+          names=sorted(p["name"] for p in d["packages"] if p["id"] in members and p["name"] not in ("solidcraft-engine","solidcraft-ui-egui"))
+          for name in names[int(sys.argv[2])-1::6]: print(name)
+          PY
+              while IFS= read -r package; do args+=(-p "$package"); done < "$report/packages.txt"
+              test "${#args[@]}" -gt 0 ;;
+            *) exit 2 ;;
+          esac
+          printf '\n[profile.local-ci.junit]\npath = "junit.xml"\n' >> .config/nextest.toml
+          set +e
+          cargo nextest run "${args[@]}" --cargo-profile ci --locked --profile local-ci --ignore-default-filter --no-fail-fast --retries 0 --no-tests fail --test-threads 2 -E "$filter" "${partition[@]}" 2>&1 | tee "$report/nextest.txt"
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" = 0 || test "$status" = 100
+          cp target/nextest/local-ci/junit.xml "$report/junit.xml"
+          cargo xtask known-failing --junit "$report/junit.xml" 2>&1 | tee "$report/grading.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T203-${{ matrix.scope }}-results
+          path: ${{ runner.temp }}/t203/
+
+  native-gui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare isolated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/t203"
+          cp -r tests/fixtures/t203 "$RUNNER_TEMP/t203-fixtures"
+          cp tests/fixtures/t203-gui.py "$RUNNER_TEMP/t203-gui.py"
+          cp tests/fixtures/t203-instrumented-repair.rs "$RUNNER_TEMP/t203-instrumented-repair.rs"
+          git fetch --no-tags https://github.com/Benny1496/solidcraft.git 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git cc5acc82b9cb8fcbc624537b14d18c58efd6321f
+          base=$(git merge-base 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 cc5acc82b9cb8fcbc624537b14d18c58efd6321f)
+          test "$base" = f1cc6e70f9337bc940ecc27d2f1d31438df36ce2
+          git diff --binary "$base" 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 -- . ':!crates/ui-egui/src/drawing_workspace.rs' > "$RUNNER_TEMP/t203/original.patch"
+          git switch --detach cc5acc82b9cb8fcbc624537b14d18c58efd6321f
+          test "$(git rev-parse HEAD)" = cc5acc82b9cb8fcbc624537b14d18c58efd6321f
+          git apply --3way --index "$RUNNER_TEMP/t203/original.patch"
+          cp -r "$RUNNER_TEMP/t203-fixtures/." .
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git c4c9aa1005135f4084c7d8776a4e3ff25c104e80
+          git merge-tree --write-tree 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 c4c9aa1005135f4084c7d8776a4e3ff25c104e80 > "$RUNNER_TEMP/t203/merge-tree.txt" || true
+          git add assets/locales/pending attribution/pending crates/ui-egui/src
+          git diff --cached --binary HEAD -- . ':!crates/ui-egui/src/drawing_workspace.rs' ':!crates/ui-egui/src/drawing_workspace/browser.rs' > "$RUNNER_TEMP/t203/port.patch"
+          git reset --hard HEAD
+          git clean -fd
+          git switch --detach c4c9aa1005135f4084c7d8776a4e3ff25c104e80
+          test "$(git rev-parse HEAD)" = c4c9aa1005135f4084c7d8776a4e3ff25c104e80
+          git apply --3way --index "$RUNNER_TEMP/t203/port.patch"
+          cp "$RUNNER_TEMP/t203-fixtures/crates/ui-egui/src/drawing_workspace.rs" crates/ui-egui/src/drawing_workspace.rs
+          cp "$RUNNER_TEMP/t203-fixtures/crates/ui-egui/src/drawing_workspace/browser.rs" crates/ui-egui/src/drawing_workspace/browser.rs
+          git add assets/locales/pending attribution/pending crates/ui-egui/src
+          git diff --cached --check
+          git diff --cached --binary > "$RUNNER_TEMP/t203/integration.patch"
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libudev-dev libxkbcommon-dev libxkbcommon-x11-0 libxkbcommon-x11-dev libwayland-dev libasound2-dev pkg-config xvfb xauth dbus-x11 at-spi2-core python3-pyatspi libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dri openbox
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Format clean product source
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff HEAD --binary > "$RUNNER_TEMP/t203/formatted.patch"
+          if grep -nE 'T19[4-7] (CLICK|CLEAR|REFRESH|CONFIRM)|t194_handle' crates/ui-egui/src/drawing_repair_ui.rs crates/ui-egui/src/drawing_workspace.rs; then exit 1; fi
+      - name: Build native GUI with test-only handle instrumentation
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/t203-instrumented-repair.rs" crates/ui-egui/src/drawing_repair_ui.rs
+          cargo fmt --all
+          cargo build --release --locked -p solidcraft 2>&1 | tee "$RUNNER_TEMP/t203/build.txt"
+      - name: Native GUI through official control channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          export REPORT="$RUNNER_TEMP/t203"
+          export CONTROL_PORT=7878
+          export SOLIDCRAFT_CONTROL_TOKEN="$(openssl rand -hex 32)"
+          echo "::add-mask::$SOLIDCRAFT_CONTROL_TOKEN"
+          export DISPLAY=:99
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/t203-config"
+          export XDG_DATA_HOME="$RUNNER_TEMP/t203-data"
+          export LANG=C.UTF-8
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export RUST_BACKTRACE=1
+          export GTK_MODULES=gail:atk-bridge
+          export NO_AT_BRIDGE=0
+          export CARGO_TARGET_DIR="$PWD/target"
+          Xvfb :99 -screen 0 1600x1000x24 -nolisten tcp > "$REPORT/xvfb.txt" 2>&1 &
+          trap 'jobs -pr | xargs -r kill' EXIT
+          sleep 2
+          dbus-run-session -- bash -c '
+            set -eo pipefail
+            openbox > "$REPORT/wm.txt" 2>&1 &
+            /usr/libexec/at-spi-bus-launcher --launch-immediately > "$REPORT/atspi.txt" 2>&1 &
+            "$CARGO_TARGET_DIR/release/solidcraft" --control "$CONTROL_PORT" > "$REPORT/app.txt" 2>&1 &
+            app=$!
+            export APP_PID="$app"
+            trap "kill $app 2>/dev/null || true" EXIT
+            /usr/bin/python3 "$RUNNER_TEMP/t203-gui.py" 2>&1 | tee "$REPORT/gui.txt"
+            exit ${PIPESTATUS[0]}
+          '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T203-integration
+          path: ${{ runner.temp }}/t203/
