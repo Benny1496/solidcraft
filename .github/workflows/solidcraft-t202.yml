@@ -1,0 +1,135 @@
+name: SolidCraft Test 202 - current main integration
+on:
+  push:
+    branches:
+      - integration/pr16310-t201-current-main-20261119
+    paths:
+      - '.github/workflows/solidcraft-t202.yml'
+permissions:
+  contents: read
+jobs:
+  remaining:
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        scope: [engine-drawing, ui-drawing]
+    timeout-minutes: 75
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare isolated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/t202"
+          cp -r tests/fixtures/t202 "$RUNNER_TEMP/t202-fixtures"
+          git fetch --no-tags https://github.com/Benny1496/solidcraft.git 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git cc5acc82b9cb8fcbc624537b14d18c58efd6321f
+          base=$(git merge-base 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 cc5acc82b9cb8fcbc624537b14d18c58efd6321f)
+          test "$base" = f1cc6e70f9337bc940ecc27d2f1d31438df36ce2
+          git diff --binary "$base" 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 -- . ':!crates/ui-egui/src/drawing_workspace.rs' > "$RUNNER_TEMP/t202/original.patch"
+          git switch --detach cc5acc82b9cb8fcbc624537b14d18c58efd6321f
+          test "$(git rev-parse HEAD)" = cc5acc82b9cb8fcbc624537b14d18c58efd6321f
+          git apply --3way --index "$RUNNER_TEMP/t202/original.patch"
+          cp -r "$RUNNER_TEMP/t202-fixtures/." .
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git c4c9aa1005135f4084c7d8776a4e3ff25c104e80
+          git merge-tree --write-tree 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22 c4c9aa1005135f4084c7d8776a4e3ff25c104e80 > "$RUNNER_TEMP/t202/merge-tree.txt" || true
+          git add assets/locales/pending attribution/pending crates/ui-egui/src
+          git diff --cached --binary HEAD -- . ':!crates/ui-egui/src/drawing_workspace.rs' ':!crates/ui-egui/src/drawing_workspace/browser.rs' > "$RUNNER_TEMP/t202/port.patch"
+          git reset --hard HEAD
+          git clean -fd
+          git switch --detach c4c9aa1005135f4084c7d8776a4e3ff25c104e80
+          test "$(git rev-parse HEAD)" = c4c9aa1005135f4084c7d8776a4e3ff25c104e80
+          git apply --3way --index "$RUNNER_TEMP/t202/port.patch"
+          cp "$RUNNER_TEMP/t202-fixtures/crates/ui-egui/src/drawing_workspace.rs" crates/ui-egui/src/drawing_workspace.rs
+          cp "$RUNNER_TEMP/t202-fixtures/crates/ui-egui/src/drawing_workspace/browser.rs" crates/ui-egui/src/drawing_workspace/browser.rs
+          git add assets/locales/pending attribution/pending crates/ui-egui/src
+          git diff --cached --check
+          git diff --cached --binary > "$RUNNER_TEMP/t202/integration.patch"
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libudev-dev libxkbcommon-dev libxkbcommon-x11-0 libxkbcommon-x11-dev libwayland-dev libasound2-dev pkg-config xvfb xauth dbus-x11 at-spi2-core python3-pyatspi libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dri openbox
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Format clean product source
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff HEAD --binary > "$RUNNER_TEMP/t202/formatted.patch"
+          if grep -nE 'T19[4-7] (CLICK|CLEAR|REFRESH|CONFIRM)|t194_handle' crates/ui-egui/src/drawing_repair_ui.rs crates/ui-egui/src/drawing_workspace.rs; then exit 1; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: T202-${{ matrix.scope }}-preflight
+          path: ${{ runner.temp }}/t202/
+      - name: Run only outstanding gate
+        shell: bash
+        env:
+          SCOPE: ${{ matrix.scope }}
+          ACTION_MATRIX_JOBS: 2
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t202"
+          df -h
+          free -h
+          case "$SCOPE" in
+            wasm) cargo xtask wasm 2>&1 | tee "$report/wasm.txt"; exit ${PIPESTATUS[0]} ;;
+            docs) cargo test --workspace --profile ci --doc --locked 2>&1 | tee "$report/docs.txt"; exit ${PIPESTATUS[0]} ;;
+            offline) command -v google-chrome || command -v chromium || command -v chromium-browser
+              cargo xtask web-offline-test 2>&1 | tee "$report/offline.txt"; exit ${PIPESTATUS[0]} ;;
+          esac
+          # Partition package membership deterministically; engine and UI lib drawing tests
+          # already passed T199. All integration binaries remain included.
+          args=()
+          filter='all()'
+          partition=()
+          case "$SCOPE" in
+            engine-drawing) args=(-p solidcraft-engine --lib); filter='test(drawing)' ;;
+            ui-drawing) args=(-p solidcraft-ui-egui --lib --features solidcraft-engine/raytrace-cpu); filter='test(drawing)' ;;
+            other-*)
+              cargo metadata --format-version 1 --no-deps --locked > "$report/workspace.json"
+              python3 - "$report/workspace.json" "${SCOPE##*-}" > "$report/packages.txt" <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1]))
+          members=set(d["workspace_members"])
+          names=sorted(p["name"] for p in d["packages"] if p["id"] in members and p["name"] not in ("solidcraft-engine","solidcraft-ui-egui"))
+          for name in names[int(sys.argv[2])-1::6]: print(name)
+          PY
+              while IFS= read -r package; do args+=(-p "$package"); done < "$report/packages.txt"
+              test "${#args[@]}" -gt 0 ;;
+            *) exit 2 ;;
+          esac
+          printf '\n[profile.local-ci.junit]\npath = "junit.xml"\n' >> .config/nextest.toml
+          set +e
+          cargo nextest run "${args[@]}" --cargo-profile ci --locked --profile local-ci --ignore-default-filter --no-fail-fast --retries 0 --no-tests fail --test-threads 2 -E "$filter" "${partition[@]}" 2>&1 | tee "$report/nextest.txt"
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" = 0 || test "$status" = 100
+          cp target/nextest/local-ci/junit.xml "$report/junit.xml"
+          cargo xtask known-failing --junit "$report/junit.xml" 2>&1 | tee "$report/grading.txt"
+          if [ "$SCOPE" = ui-drawing ]; then
+            set +e
+            cargo nextest run "${args[@]}" --cargo-profile ci --locked --profile local-ci --ignore-default-filter --no-fail-fast --retries 0 --no-tests fail --test-threads 2 -E 'test(ui_kit_guard_tests) | test(every_complete_catalog_carries_every_english_message)' 2>&1 | tee "$report/drawing-nextest.txt"
+            status=${PIPESTATUS[0]}
+            set -e
+            test "$status" = 0 || test "$status" = 100
+            cp target/nextest/local-ci/junit.xml "$report/drawing-junit.xml"
+            cargo xtask known-failing --junit "$report/drawing-junit.xml" 2>&1 | tee "$report/drawing-grading.txt"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T202-${{ matrix.scope }}-results
+          path: ${{ runner.temp }}/t202/
