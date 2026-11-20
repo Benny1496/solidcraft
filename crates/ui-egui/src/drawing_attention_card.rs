@@ -91,12 +91,12 @@ pub fn show(
     if items.is_empty() {
         ui_kit::text(ui, solidcraft_ui_text::tr("ui.drawing_attention.clear"), ui_kit::Text::Note("drawing_attention_clear"));
     } else {
-        ui_kit::text(ui, fmt("ui.drawing_attention.count", &[("count", &items.len().to_string())]), ui_kit::Text::Note("drawing_attention_count"));
+        ui_kit::text(ui, &fmt("ui.drawing_attention.count", &[("count", &items.len().to_string())]), ui_kit::Text::Note("drawing_attention_count"));
         for item in items {
             ui.separator();
             ui_kit::text(
                 ui,
-                format!("{} {} · {}", solidcraft_ui_text::tr("ui.drawing_attention.dimension"), item.id, item.state),
+                &format!("{} {} · {}", solidcraft_ui_text::tr("ui.drawing_attention.dimension"), item.id, item.state),
                 ui_kit::Text::Note("drawing_attention_dimension"),
             );
             ui_kit::text(ui, item.reason.as_str(), ui_kit::Text::Note("drawing_attention_reason"));
@@ -109,7 +109,7 @@ pub fn show(
     if snapshot.waiting_views > 0 {
         ui_kit::text(
             ui,
-            fmt("ui.drawing_attention.waiting", &[("count", &snapshot.waiting_views.to_string())]),
+            &fmt("ui.drawing_attention.waiting", &[("count", &snapshot.waiting_views.to_string())]),
             ui_kit::Text::Note("drawing_attention_waiting"),
         );
     }
