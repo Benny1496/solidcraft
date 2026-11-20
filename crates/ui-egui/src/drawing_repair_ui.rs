@@ -106,9 +106,9 @@ pub fn show(
         state.clear();
     }
     let mut changed = false;
-    let display_name = |id: &str| dimension_names.get(id).map(String::as_str).unwrap_or(id);
+    let display_name = |id: &str| dimension_names.get(id).cloned().unwrap_or_else(|| id.to_owned());
     for dim in snapshot.dimensions.iter().filter(|d| eligible(&d.status)) {
-        if ui_kit::button(ui, solidcraft_ui_text::format("ui.drawing_repair.button", &[("id", display_name(&dim.id))]), ui_kit::Button::Normal)
+        if ui_kit::button(ui, solidcraft_ui_text::format("ui.drawing_repair.button", &[("id", &display_name(&dim.id))]), ui_kit::Button::Normal)
             .clicked()
         {
             state.clear();
@@ -141,7 +141,7 @@ pub fn show(
     }
     if let Some(id) = state.dimension.clone() {
         ui.separator();
-        ui.strong(solidcraft_ui_text::format("ui.drawing_repair.title", &[("id", display_name(&id))]));
+        ui.strong(solidcraft_ui_text::format("ui.drawing_repair.title", &[("id", &display_name(&id))]));
         ui.label(solidcraft_ui_text::tr("ui.drawing_repair.instructions"));
         ui.label(solidcraft_ui_text::tr("ui.drawing_repair.alternative"));
         if ui_kit::button(ui, solidcraft_ui_text::tr("ui.drawing_repair.use_selected"), ui_kit::Button::Normal).clicked() {
