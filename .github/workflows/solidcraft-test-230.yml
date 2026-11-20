@@ -1,0 +1,31 @@
+name: SolidCraft Test 230 - Issue 15776 A preflight
+on:
+  push:
+    branches:
+      - tests/issue15776-a-preflight-230-source
+    paths:
+      - .github/workflows/solidcraft-test-230.yml
+  workflow_dispatch:
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Catalog and list consistency
+        run: cargo xtask lists
+      - name: Locale validation
+        run: cargo xtask i18n
+      - name: Known failing baseline
+        run: cargo xtask known-failing
+      - name: Compile drawing UI
+        run: cargo check -p solidcraft-ui-egui
+      - name: Targeted drawing UI tests
+        run: cargo test -p solidcraft-ui-egui drawing_repair_ui --lib && cargo test -p solidcraft-ui-egui drawing_attention_card --lib
