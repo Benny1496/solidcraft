@@ -1,0 +1,97 @@
+name: SolidCraft T210 - update PR source files only
+on:
+  push:
+    branches:
+      - tests/t210-pr16310-safe-update-20261120
+    paths:
+      - '.github/workflows/solidcraft-t210.yml'
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish-source-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Apply verified T208 source without updating workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_PR: 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22
+          TESTED_MAIN: 2f2d6d581a291b33c77c7d4c0be38f3824c82da8
+          PR_BRANCH: feature/issue-15776-drawings-20261113
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t210"
+          mkdir -p "$report"
+          test "$(gh run view 44682739128 --repo Benny1496/solidcraft --json conclusion --jq .conclusion)" = success
+          gh run download 44682739128 --repo Benny1496/solidcraft --name T208-pinned-main-UI-evidence --dir "$report"
+          test -s "$report/formatted.patch"
+          git fetch --no-tags origin "$PR_BRANCH"
+          pr_head="$(git rev-parse FETCH_HEAD)"
+          if [ "$pr_head" != "$EXPECTED_PR" ]; then echo "PR changed: $pr_head"; exit 2; fi
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git main
+          current_main="$(git rev-parse FETCH_HEAD)"
+          git merge-base --is-ancestor "$TESTED_MAIN" "$current_main"
+          printf 'Original PR head: %s\nLatest main: %s\nT208 pinned: %s\n' "$pr_head" "$current_main" "$TESTED_MAIN" | tee "$report/refs.txt"
+          git config user.name 'Benny1496'
+          git config user.email '163034806+Benny1496@users.noreply.github.com'
+          git checkout --detach "$TESTED_MAIN"
+          git apply --check "$report/formatted.patch"
+          git apply --index "$report/formatted.patch"
+          git diff --cached --check
+          git diff --cached --name-only | sort > "$report/intended-files.txt"
+          test "$(wc -l < "$report/intended-files.txt")" -eq 13
+          if grep -vE '^(crates/ui-egui/src/|assets/locales/pending/|attribution/pending/)' "$report/intended-files.txt"; then exit 3; fi
+          git commit -qm 'Drawings: bring verified T208 status and repair source (#15776)'
+          source_commit="$(git rev-parse HEAD)"
+          set +e
+          git merge-tree --write-tree --messages "$source_commit" "$current_main" > "$report/merge-source.txt" 2>&1
+          merge_exit=$?
+          set -e
+          if [ "$merge_exit" -ne 0 ]; then echo 'Current main conflicts with tested source. No update.'; exit 4; fi
+          git checkout --detach "$current_main"
+          git merge --squash "$source_commit"
+          desired_tree="$(git write-tree)"
+          for path in $(cat "$report/intended-files.txt"); do
+            mkdir -p "$report/desired/$(dirname "$path")"
+            git show ":$path" > "$report/desired/$path"
+          done
+          git reset --hard "$current_main"
+          git checkout --detach "$EXPECTED_PR"
+          while IFS= read -r path; do
+            mkdir -p "$(dirname "$path")"
+            cp "$report/desired/$path" "$path"
+            git add "$path"
+          done < "$report/intended-files.txt"
+          git diff --cached --check
+          git diff --cached --name-only | sort > "$report/pr-updated-files.txt"
+          if grep -vE '^(crates/ui-egui/src/|assets/locales/pending/|attribution/pending/)' "$report/pr-updated-files.txt"; then exit 5; fi
+          git commit -m 'Drawings: bring status and repair UI up to date (#15776)'
+          updated_head="$(git rev-parse HEAD)"
+          set +e
+          git merge-tree --write-tree --messages "$updated_head" "$current_main" > "$report/pr-merge-result.txt" 2>&1
+          pr_merge_exit=$?
+          set -e
+          if [ "$pr_merge_exit" -ne 0 ]; then echo 'Updated PR still has merge conflicts. No push.'; exit 6; fi
+          actual_tree="$(head -n 1 "$report/pr-merge-result.txt")"
+          printf 'Wanted merged tree: %s\nActual merged tree: %s\n' "$desired_tree" "$actual_tree" | tee "$report/merged-trees.txt"
+          if [ "$actual_tree" != "$desired_tree" ]; then
+            echo 'Merged result differs from latest main plus the tested patch. No push.'
+            exit 7
+          fi
+          git diff --name-only "$EXPECTED_PR" "$updated_head" > "$report/actual-pr-commit-paths.txt"
+          if grep -vE '^(crates/ui-egui/src/|assets/locales/pending/|attribution/pending/)' "$report/actual-pr-commit-paths.txt"; then exit 8; fi
+          echo "PASS: PR update changes only approved 13 source paths, with exact tested merged tree"
+          git push --porcelain origin "HEAD:refs/heads/$PR_BRANCH"
+          echo "UPDATED_PR_SHA=$updated_head" | tee "$report/result.txt"
+          echo "MAIN_AT_UPDATE=$current_main" | tee -a "$report/result.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T210-PR-source-update-report
+          path: ${{ runner.temp }}/t210/
+          retention-days: 30
