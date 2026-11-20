@@ -13,8 +13,8 @@ pub fn selected_geometry(selection: &[Sel]) -> Result<(String, Value), String> {
     match selection {
         [Sel::Edge { body, index, .. }] => Ok(("edge".into(), json!({"edge":{"body":body,"index":index}}))),
         [Sel::Face { body, index, .. }] => Ok(("face".into(), json!({"face":{"body":body,"index":index}}))),
-        [] => Err(solidcraft_ui_text::tr("ui.issue15776_repair.no_selection").into()),
-        _ => Err(solidcraft_ui_text::tr("ui.issue15776_repair.multiple_selection").into()),
+        [] => Err(solidcraft_ui_text::tr("ui.drawing_repair.no_selection").into()),
+        _ => Err(solidcraft_ui_text::tr("ui.drawing_repair.multiple_selection").into()),
     }
 }
 
@@ -106,7 +106,7 @@ pub fn show(
     let mut changed = false;
     let display_name = |id: &str| dimension_names.get(id).map(String::as_str).unwrap_or(id);
     for dim in snapshot.dimensions.iter().filter(|d| eligible(&d.status)) {
-        if ui_kit::button(ui, solidcraft_ui_text::format("ui.issue15776_repair.button", &[("id", display_name(&dim.id))]), ui_kit::Button::Normal).clicked() {
+        if ui_kit::button(ui, solidcraft_ui_text::format("ui.drawing_repair.button", &[("id", display_name(&dim.id))]), ui_kit::Button::Normal).clicked() {
             state.clear();
             state.dimension = Some(dim.id.clone());
             state.slot.clear();
@@ -117,7 +117,7 @@ pub fn show(
                         state.slot = state.slots[0].clone();
                     }
                     if state.slots.is_empty() {
-                        state.message = Some(solidcraft_ui_text::tr("ui.issue15776_repair.no_slots").into());
+                        state.message = Some(solidcraft_ui_text::tr("ui.drawing_repair.no_slots").into());
                     }
                     state.candidates = inspection
                         .get("candidates")
@@ -128,19 +128,19 @@ pub fn show(
                         .filter(|candidate| candidate.is_object())
                         .collect();
                     if state.candidates.is_empty() {
-                        state.message = Some(solidcraft_ui_text::tr("ui.issue15776_repair.no_candidates").into());
+                        state.message = Some(solidcraft_ui_text::tr("ui.drawing_repair.no_candidates").into());
                     }
                 }
-                Err(error) => state.message = Some(solidcraft_ui_text::format("ui.issue15776_repair.inspect_failed", &[("error", &error)])),
+                Err(error) => state.message = Some(solidcraft_ui_text::format("ui.drawing_repair.inspect_failed", &[("error", &error)])),
             }
         }
     }
     if let Some(id) = state.dimension.clone() {
         ui.separator();
-        ui.strong(solidcraft_ui_text::format("ui.issue15776_repair.title", &[("id", display_name(&id))]));
-        ui.label(solidcraft_ui_text::tr("ui.issue15776_repair.instructions"));
-        ui.label(solidcraft_ui_text::tr("ui.issue15776_repair.alternative"));
-        if ui_kit::button(ui, solidcraft_ui_text::tr("ui.issue15776_repair.use_selected"), ui_kit::Button::Normal).clicked() {
+        ui.strong(solidcraft_ui_text::format("ui.drawing_repair.title", &[("id", display_name(&id))]));
+        ui.label(solidcraft_ui_text::tr("ui.drawing_repair.instructions"));
+        ui.label(solidcraft_ui_text::tr("ui.drawing_repair.alternative"));
+        if ui_kit::button(ui, solidcraft_ui_text::tr("ui.drawing_repair.use_selected"), ui_kit::Button::Normal).clicked() {
             match selected_geometry(selection) {
                 Ok((slot, pick)) => {
                     if state.slots.contains(&slot) {
@@ -160,7 +160,7 @@ pub fn show(
             }
         }
         if state.slots.len() > 1 {
-            let caption = if state.slot.is_empty() { solidcraft_ui_text::tr("ui.issue15776_repair.choose").to_owned() } else { state.slot.clone() };
+            let caption = if state.slot.is_empty() { solidcraft_ui_text::tr("ui.drawing_repair.choose").to_owned() } else { state.slot.clone() };
             ui_kit::dropdown_menu(ui, "drawing_repair_slot", &caption, |ui| {
                 for slot in &state.slots {
                     if ui_kit::list_picker(ui, slot, slot, state.slot == *slot).clicked() {
@@ -171,7 +171,7 @@ pub fn show(
                 }
             });
         } else if !state.slot.is_empty() {
-            ui.label(solidcraft_ui_text::format("ui.issue15776_repair.reference", &[("slot", &state.slot)]));
+            ui.label(solidcraft_ui_text::format("ui.drawing_repair.reference", &[("slot", &state.slot)]));
         }
         let compatible: Vec<_> = state
             .candidates
@@ -187,7 +187,7 @@ pub fn show(
             state.awaiting_confirmation = false;
         }
         if !compatible.is_empty() && !state.slot.is_empty() {
-            let caption = solidcraft_ui_text::format("ui.issue15776_repair.candidate", &[("number", &(state.candidate_index + 1).to_string())]);
+            let caption = solidcraft_ui_text::format("ui.drawing_repair.candidate", &[("number", &(state.candidate_index + 1).to_string())]);
             ui_kit::dropdown_menu(ui, "drawing_repair_candidate", &caption, |ui| {
                 for &index in &compatible {
                     let label = candidate_label(&state.candidates[index]);
@@ -199,15 +199,15 @@ pub fn show(
                 }
             });
             if !state.awaiting_confirmation {
-                if ui_kit::button(ui, solidcraft_ui_text::tr("ui.issue15776_repair.review"), ui_kit::Button::Normal).clicked() {
+                if ui_kit::button(ui, solidcraft_ui_text::tr("ui.drawing_repair.review"), ui_kit::Button::Normal).clicked() {
                     state.awaiting_confirmation = true;
                 }
             } else {
-                ui.label(solidcraft_ui_text::tr("ui.issue15776_repair.confirm_note"));
-                if ui_kit::button(ui, solidcraft_ui_text::tr("ui.issue15776_repair.confirm"), ui_kit::Button::Normal).clicked() {
+                ui.label(solidcraft_ui_text::tr("ui.drawing_repair.confirm_note"));
+                if ui_kit::button(ui, solidcraft_ui_text::tr("ui.drawing_repair.confirm"), ui_kit::Button::Normal).clicked() {
                     let status = snapshot.dimensions.iter().find(|d| d.id == id).map(|d| d.status.as_str()).unwrap_or("");
                     let Some(candidate) = state.candidates.get(state.candidate_index).cloned() else {
-                        state.message = Some(solidcraft_ui_text::tr("ui.issue15776_repair.unavailable").to_owned());
+                        state.message = Some(solidcraft_ui_text::tr("ui.drawing_repair.unavailable").to_owned());
                         state.awaiting_confirmation = false;
                         return false;
                     };
@@ -220,14 +220,14 @@ pub fn show(
                             state.clear();
                         }
                         Err(error) => {
-                            state.message = Some(solidcraft_ui_text::format("ui.issue15776_repair.repair_failed", &[("error", &error)]));
+                            state.message = Some(solidcraft_ui_text::format("ui.drawing_repair.repair_failed", &[("error", &error)]));
                             state.awaiting_confirmation = false;
                         }
                     }
                 }
             }
         }
-        if ui_kit::button(ui, solidcraft_ui_text::tr("ui.issue15776_repair.cancel"), ui_kit::Button::Normal).clicked() {
+        if ui_kit::button(ui, solidcraft_ui_text::tr("ui.drawing_repair.cancel"), ui_kit::Button::Normal).clicked() {
             state.clear();
         }
         if let Some(message) = &state.message {
