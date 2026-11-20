@@ -1,0 +1,101 @@
+name: SolidCraft T207 - read-only PR and T206 merge preflight
+on:
+  push:
+    branches:
+      - tests/t207-pr16310-merge-preflight-20261120
+    paths:
+      - '.github/workflows/solidcraft-t207.yml'
+permissions:
+  actions: read
+  contents: read
+jobs:
+  merge-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Recover exact T206 tested product patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t207"
+          mkdir -p "$report"
+          gh run download 44624193250 --repo Benny1496/solidcraft --name T206-ui-drawing-product --dir "$report"
+          test -s "$report/formatted.patch"
+          printf '%s  %s\n' 82eda04bd4ce01b602a1b454c9c27d2ea66aafa660abcce160fb0a2f0d081588 "$report/formatted.patch" | sha256sum --check -
+          cp "$report/patch-sha256.txt" "$report/original-patch-sha256.txt"
+      - name: Compare PR head and tested patch with current upstream main
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t207"
+          pinned="32efab6cfc2cdd0967410bbb1c078f8517eabc8d"
+          expected_pr="9c5e805347a4ffdfc29d5cd65722a6d0e7035a22"
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git main
+          current_main="$(git rev-parse FETCH_HEAD)"
+          git fetch --no-tags origin feature/issue-15776-drawings-20261113
+          actual_pr="$(git rev-parse FETCH_HEAD)"
+          printf 'Current main: %s\nExisting PR head: %s\nPinned T206 base: %s\n' "$current_main" "$actual_pr" "$pinned" | tee "$report/refs.txt"
+          if [ "$actual_pr" != "$expected_pr" ]; then
+            echo 'PR head changed since last check; stop before publishing any conclusions.' | tee "$report/blocker.txt"
+            exit 2
+          fi
+          git merge-base --is-ancestor "$pinned" "$current_main"
+          git checkout --detach "$pinned"
+          git apply --check "$report/formatted.patch"
+          git apply --index "$report/formatted.patch"
+          git diff --cached --check
+          git diff --cached --name-only | tee "$report/t206-scope.txt"
+          test "$(wc -l < "$report/t206-scope.txt")" -eq 13
+          if grep -vE '^(crates/ui-egui/src/|assets/locales/pending/|attribution/pending/)' "$report/t206-scope.txt"; then
+            echo 'Unexpected test-workflow or kernel changes in the tested patch'
+            exit 3
+          fi
+          git config user.name "SolidCraft T207 preflight"
+          git config user.email "preflight@localhost"
+          git commit -qm "test: local-only commit of verified T206 patch"
+          tested_commit="$(git rev-parse HEAD)"
+          printf 'Tested product commit (local only): %s\n' "$tested_commit" | tee -a "$report/refs.txt"
+          git diff --name-only "$pinned" "$current_main" -- $(cat "$report/t206-scope.txt") > "$report/overlapping-files.txt"
+          set +e
+          git merge-tree --write-tree --messages "$actual_pr" "$current_main" > "$report/pr-existing-vs-main.txt" 2>&1
+          pr_status=$?
+          git merge-tree --write-tree --messages "$tested_commit" "$current_main" > "$report/t206-product-vs-main.txt" 2>&1
+          tested_status=$?
+          set -e
+          if [ "$pr_status" -gt 1 ] || [ "$tested_status" -gt 1 ]; then
+            echo "Unexpected merge-tree error: PR=$pr_status T206=$tested_status" >&2
+            exit 4
+          fi
+          printf 'PR merge-tree exit status: %s\nTested patch merge-tree exit status: %s\n' "$pr_status" "$tested_status" > "$report/merge-results.txt"
+          {
+            echo '# SolidCraft T207 merge preflight (no remote changes)'
+            echo
+            echo "- Original PR head: \`$actual_pr\`"
+            echo "- Latest main fetched at test time: \`$current_main\`"
+            echo "- T206 pinned base: \`$pinned\`"
+            echo "- T206 patch verified: SHA256 \`82eda04bd4ce01b602a1b454c9c27d2ea66aafa660abcce160fb0a2f0d081588\`"
+            if [ "$pr_status" -eq 0 ]; then echo "- Existing PR head merges cleanly: YES"; else echo "- Existing PR head merges cleanly: NO"; fi
+            if [ "$tested_status" -eq 0 ]; then echo "- Tested product patch merges cleanly: YES"; else echo "- Tested product patch merges cleanly: NO"; fi
+            echo
+            echo '## Files modified by main within the T206 patch scope'
+            cat "$report/overlapping-files.txt"
+            echo
+            echo 'Conflicts (if any) are in the accompanying artifact text logs.'
+          } | tee "$report/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          echo '--- Preflight outcome ---'
+          cat "$report/merge-results.txt"
+          cat "$report/overlapping-files.txt"
+          echo '--- Conflicts in original PR ---'
+          grep -E '^CONFLICT|Auto-merging' "$report/pr-existing-vs-main.txt" | head -35 || true
+          echo '--- Conflicts in T206 product patch ---'
+          grep -E '^CONFLICT|Auto-merging' "$report/t206-product-vs-main.txt" | head -35 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T207-merge-preflight
+          path: ${{ runner.temp }}/t207/
+          retention-days: 30
