@@ -1,5 +1,5 @@
 name: SolidCraft Test 230 - Issue 15776 A preflight
-# Retry after fixing known-failing prerequisite (nextest JUnit report)
+# Retry after fixing four Rust compiler errors in drawing UI
 on:
   push:
     branches:
