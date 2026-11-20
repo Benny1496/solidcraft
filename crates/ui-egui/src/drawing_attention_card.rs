@@ -103,8 +103,8 @@ pub fn show(
                 format!("{} {} · {}", solidcraft_ui_text::tr("ui.drawing_attention.dimension"), item.id, item.state),
                 ui_kit::Text::Note("drawing_attention_dimension"),
             );
-            ui_kit::text(ui, &item.reason, ui_kit::Text::Note("drawing_attention_reason"));
-            ui_kit::text(ui, &item.location, ui_kit::Text::Note("drawing_attention_location"));
+            ui_kit::text(ui, item.reason.as_str(), ui_kit::Text::Note("drawing_attention_reason"));
+            ui_kit::text(ui, item.location.as_str(), ui_kit::Text::Note("drawing_attention_location"));
         }
     }
     if snapshot.held {
