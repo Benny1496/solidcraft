@@ -4,6 +4,7 @@ use crate::drawing_dimension_repair;
 use crate::drawing_dimension_status::DrawingAttention;
 use crate::ui_kit;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use serde_json::json;
 use solidcraft_engine::Sel;
 
@@ -77,6 +78,7 @@ pub fn show(
     selection: &[Sel],
     state: &mut RepairUiState,
     snapshot: &DrawingAttention,
+    dimension_names: &BTreeMap<String, String>,
     mut run: impl FnMut(&str, Value) -> Result<Value, String>,
 ) -> bool {
     if let Some(selected) = &state.dimension
@@ -85,8 +87,9 @@ pub fn show(
         state.clear();
     }
     let mut changed = false;
+    let display_name = |id: &str| dimension_names.get(id).map(String::as_str).unwrap_or(id);
     for dim in snapshot.dimensions.iter().filter(|d| eligible(&d.status)) {
-        if ui_kit::button(ui, solidcraft_ui_text::format("ui.issue15776_repair.button", &[("id", &dim.id)]), ui_kit::Button::Normal).clicked() {
+        if ui_kit::button(ui, solidcraft_ui_text::format("ui.issue15776_repair.button", &[("id", display_name(&dim.id))]), ui_kit::Button::Normal).clicked() {
             state.clear();
             state.dimension = Some(dim.id.clone());
             state.slot.clear();
@@ -117,7 +120,7 @@ pub fn show(
     }
     if let Some(id) = state.dimension.clone() {
         ui.separator();
-        ui.strong(solidcraft_ui_text::format("ui.issue15776_repair.title", &[("id", &id)]));
+        ui.strong(solidcraft_ui_text::format("ui.issue15776_repair.title", &[("id", display_name(&id))]));
         ui.label(solidcraft_ui_text::tr("ui.issue15776_repair.instructions"));
         ui.label(solidcraft_ui_text::tr("ui.issue15776_repair.alternative"));
         if ui_kit::button(ui, solidcraft_ui_text::tr("ui.issue15776_repair.use_selected"), ui_kit::Button::Normal).clicked() {
