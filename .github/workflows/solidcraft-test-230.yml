@@ -1,4 +1,5 @@
 name: SolidCraft Test 230 - Issue 15776 A preflight
+# Retry after rustfmt corrections
 on:
   push:
     branches:
