@@ -1,0 +1,96 @@
+name: SolidCraft T211 - stage exact product tree objects
+on:
+  push:
+    branches:
+      - tests/t211-pr16310-object-stage-20261120
+    paths:
+      - '.github/workflows/solidcraft-t211.yml'
+permissions:
+  actions: read
+  contents: write
+jobs:
+  stage-git-objects:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact merge and create unreferenced blobs/tree only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_PR: 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22
+          TESTED_MAIN: 2f2d6d581a291b33c77c7d4c0be38f3824c82da8
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t211"
+          mkdir -p "$report"
+          test "$(gh run view 44682739128 --repo Benny1496/solidcraft --json conclusion --jq .conclusion)" = success
+          gh run download 44682739128 --repo Benny1496/solidcraft --name T208-pinned-main-UI-evidence --dir "$report"
+          test -s "$report/formatted.patch"
+          git fetch --no-tags origin feature/issue-15776-drawings-20261113
+          actual_pr="$(git rev-parse FETCH_HEAD)"
+          test "$actual_pr" = "$EXPECTED_PR"
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git main
+          current_main="$(git rev-parse FETCH_HEAD)"
+          git merge-base --is-ancestor "$TESTED_MAIN" "$current_main"
+          printf 'PR_HEAD=%s\nMAIN_HEAD=%s\n' "$actual_pr" "$current_main" > "$report/refs.txt"
+          git config user.name 'Benny1496'
+          git config user.email '163034806+Benny1496@users.noreply.github.com'
+          git checkout --detach "$TESTED_MAIN"
+          git apply --check "$report/formatted.patch"
+          git apply --index "$report/formatted.patch"
+          git diff --cached --check
+          git diff --cached --name-only | sort > "$report/paths.txt"
+          test "$(wc -l < "$report/paths.txt")" -eq 13
+          if grep -vE '^(crates/ui-egui/src/|assets/locales/pending/|attribution/pending/)' "$report/paths.txt"; then echo 'invalid scope'; exit 2; fi
+          git commit -qm 'Drawings: verified T208 local source'
+          source_commit="$(git rev-parse HEAD)"
+          set +e
+          git merge-tree --write-tree --messages "$source_commit" "$current_main" > "$report/merge-tree.txt" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then echo 'Conflict with main. No objects created.'; exit 3; fi
+          git checkout --detach "$current_main"
+          git merge --squash "$source_commit"
+          git diff --cached --check
+          git diff --cached --name-only | sort > "$report/merged-paths.txt"
+          diff -u "$report/paths.txt" "$report/merged-paths.txt"
+          expected_tree="$(git write-tree)"
+          main_tree="$(git rev-parse "$current_main^{tree}")"
+          printf 'EXPECTED_TREE=%s\nMAIN_TREE=%s\n' "$expected_tree" "$main_tree" >> "$report/refs.txt"
+          mkdir -p "$report/source"
+          while IFS= read -r file; do
+            mkdir -p "$report/source/$(dirname "$file")"
+            git show ":$file" > "$report/source/$file"
+            python3 - "$report/source/$file" "$report/payload.json" <<'PY'
+          import base64,json,sys
+          with open(sys.argv[1],"rb") as f: encoded=base64.b64encode(f.read()).decode("ascii")
+          with open(sys.argv[2],"w") as f: json.dump({"content":encoded,"encoding":"base64"},f)
+          PY
+            sha="$(gh api --method POST repos/Benny1496/solidcraft/git/blobs --input "$report/payload.json" --jq .sha)"
+            expected_blob="$(git hash-object "$report/source/$file")"
+            test "$sha" = "$expected_blob"
+            printf '%s\t%s\n' "$file" "$sha" >> "$report/blobs.tsv"
+          done < "$report/paths.txt"
+          python3 - "$report" "$main_tree" <<'PY'
+          import json,sys
+          report,base=sys.argv[1:]
+          entries=[]
+          for line in open(report+"/blobs.tsv"):
+              name,sha=line.rstrip("\n").split("\t")
+              entries.append({"path":name,"mode":"100644","type":"blob","sha":sha})
+          with open(report+"/tree-request.json","w") as f: json.dump({"base_tree":base,"tree":entries},f)
+          PY
+          remote_tree="$(gh api --method POST repos/Benny1496/solidcraft/git/trees --input "$report/tree-request.json" --jq .sha)"
+          printf 'REMOTE_TREE=%s\n' "$remote_tree" >> "$report/refs.txt"
+          test "$remote_tree" = "$expected_tree"
+          echo 'PASS: exact T208 product tree on current main stored as Git objects, no refs/branches modified.'
+          cat "$report/refs.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T211-exact-git-tree
+          path: ${{ runner.temp }}/t211/
+          retention-days: 30
