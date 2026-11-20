@@ -4,9 +4,9 @@ use crate::drawing_dimension_repair;
 use crate::drawing_dimension_status::DrawingAttention;
 use crate::ui_kit;
 use serde_json::Value;
-use std::collections::BTreeMap;
 use serde_json::json;
 use solidcraft_engine::Sel;
+use std::collections::BTreeMap;
 
 /// Convert exactly one existing viewport selection to a repair pick. Never guess.
 pub fn selected_geometry(selection: &[Sel]) -> Result<(String, Value), String> {
@@ -65,7 +65,9 @@ fn candidate_label(candidate: &Value) -> String {
     for kind in ["edge", "face", "corner"] {
         let Some(value) = candidate.get(kind) else { continue };
         let body = value.get("body").and_then(Value::as_str).unwrap_or("");
-        if body.is_empty() { continue; }
+        if body.is_empty() {
+            continue;
+        }
         if let Some(index) = value.get("index").and_then(Value::as_u64) {
             return solidcraft_ui_text::format(
                 &format!("ui.drawing_repair.candidate_{kind}"),
@@ -106,7 +108,9 @@ pub fn show(
     let mut changed = false;
     let display_name = |id: &str| dimension_names.get(id).map(String::as_str).unwrap_or(id);
     for dim in snapshot.dimensions.iter().filter(|d| eligible(&d.status)) {
-        if ui_kit::button(ui, solidcraft_ui_text::format("ui.drawing_repair.button", &[("id", display_name(&dim.id))]), ui_kit::Button::Normal).clicked() {
+        if ui_kit::button(ui, solidcraft_ui_text::format("ui.drawing_repair.button", &[("id", display_name(&dim.id))]), ui_kit::Button::Normal)
+            .clicked()
+        {
             state.clear();
             state.dimension = Some(dim.id.clone());
             state.slot.clear();
