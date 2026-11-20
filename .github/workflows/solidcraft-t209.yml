@@ -1,0 +1,86 @@
+name: SolidCraft T209 - prepare verified PR16310 commit
+on:
+  push:
+    branches:
+      - tests/t209-pr16310-staging-20261120
+    paths:
+      - '.github/workflows/solidcraft-t209.yml'
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish-verified-staging:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Verify T208 artifact and prepare staging commit on current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_PR_HEAD: 9c5e805347a4ffdfc29d5cd65722a6d0e7035a22
+          TESTED_MAIN: 2f2d6d581a291b33c77c7d4c0be38f3824c82da8
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t209"
+          mkdir -p "$report"
+          test "$(gh run view 44682739128 --repo Benny1496/solidcraft --json conclusion --jq .conclusion)" = success
+          gh run download 44682739128 --repo Benny1496/solidcraft --name T208-pinned-main-UI-evidence --dir "$report"
+          test -s "$report/formatted.patch"
+          sha256sum "$report/formatted.patch" > "$report/t208-formatted-patch.sha256"
+          git fetch --no-tags origin feature/issue-15776-drawings-20261113
+          current_pr="$(git rev-parse FETCH_HEAD)"
+          printf '%s\n' "$current_pr" > "$report/existing-pr-sha.txt"
+          if [ "$current_pr" != "$EXPECTED_PR_HEAD" ]; then
+            echo "PR head changed: $current_pr (expected $EXPECTED_PR_HEAD)"
+            exit 2
+          fi
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git main
+          latest_main="$(git rev-parse FETCH_HEAD)"
+          git merge-base --is-ancestor "$TESTED_MAIN" "$latest_main"
+          printf 'Current main: %s\nOriginal PR head: %s\nT208-tested main: %s\n' "$latest_main" "$current_pr" "$TESTED_MAIN" | tee "$report/refs.txt"
+          git config user.name 'Benny1496'
+          git config user.email '163034806+Benny1496@users.noreply.github.com'
+          git checkout --detach "$TESTED_MAIN"
+          git apply --check "$report/formatted.patch"
+          git apply --index "$report/formatted.patch"
+          git diff --cached --check
+          git diff --cached --name-only | sort > "$report/t208-patch-files.txt"
+          test "$(wc -l < "$report/t208-patch-files.txt")" -eq 13
+          if grep -vE '^(crates/ui-egui/src/|assets/locales/pending/|attribution/pending/)' "$report/t208-patch-files.txt"; then
+            echo 'Unexpected source paths'
+            exit 3
+          fi
+          git commit -qm 'Drawings: show lost dimension status and confirm repair (#15776)'
+          tested_commit="$(git rev-parse HEAD)"
+          set +e
+          git merge-tree --write-tree --messages "$tested_commit" "$latest_main" > "$report/merge-tree.txt" 2>&1
+          conflict=$?
+          set -e
+          printf 'merge-tree result: %s\n' "$conflict" | tee "$report/conflict-result.txt"
+          if [ "$conflict" -ne 0 ]; then
+            echo 'T208 patch conflicts with latest main; no code published.'
+            exit 4
+          fi
+          git checkout --detach "$latest_main"
+          git merge --squash "$tested_commit"
+          git diff --cached --check
+          git diff --cached --name-only | sort > "$report/staging-files.txt"
+          diff -u "$report/t208-patch-files.txt" "$report/staging-files.txt"
+          git diff --cached --binary > "$report/staging.patch"
+          test "$(wc -l < "$report/staging-files.txt")" -eq 13
+          git diff --cached --stat | tee "$report/stat.txt"
+          git commit -m 'Drawings: show lost dimension status and confirm repair (#15776)'
+          stage_sha="$(git rev-parse HEAD)"
+          printf 'Staging SHA: %s\nStaging parent: %s\n' "$stage_sha" "$latest_main" | tee -a "$report/refs.txt"
+          git push --no-verify origin "HEAD:refs/heads/integration/pr16310-t209-20261120"
+          echo "Staging commit: $stage_sha"
+          echo "No updates were made to PR branch feature/issue-15776-drawings-20261113"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T209-PR-staging-evidence
+          path: ${{ runner.temp }}/t209/
+          retention-days: 30
