@@ -1,0 +1,111 @@
+name: SolidCraft Test 208 - pinned main UI integration gate
+on:
+  push:
+    branches:
+      - tests/t208-pr16310-ui-main-20261120
+    paths:
+      - '.github/workflows/solidcraft-t208.yml'
+permissions:
+  actions: read
+  contents: read
+jobs:
+  ui-main-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      PINNED_MAIN: 2f2d6d581a291b33c77c7d4c0be38f3824c82da8
+      T206_BASE: 32efab6cfc2cdd0967410bbb1c078f8517eabc8d
+      CARGO_BUILD_JOBS: 2
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: 0
+      SOLIDCRAFT_GPU: software
+      SOLIDCRAFT_REQUIRE_GPU: "1"
+      VIEWPORT_TEST_GPU: software
+      VIEWPORT_TEST_REQUIRE_GPU: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reconstruct tested T206 product patch on T207-checked main
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t208"
+          mkdir -p "$report"
+          gh run download 44624193250 --repo Benny1496/solidcraft --name T206-ui-drawing-product --dir "$report"
+          test -s "$report/formatted.patch"
+          printf '%s  %s\n' 82eda04bd4ce01b602a1b454c9c27d2ea66aafa660abcce160fb0a2f0d081588 "$report/formatted.patch" | sha256sum --check -
+          git fetch --no-tags https://github.com/tangency-labs/solidcraft.git main
+          latest_seen="$(git rev-parse FETCH_HEAD)"
+          printf 'Latest main observed: %s; T207-pinned merge target: %s\n' "$latest_seen" "$PINNED_MAIN" | tee "$report/refs.txt"
+          git merge-base --is-ancestor "$T206_BASE" "$PINNED_MAIN"
+          git checkout --detach "$T206_BASE"
+          git apply --check "$report/formatted.patch"
+          git apply --index "$report/formatted.patch"
+          git diff --cached --check
+          git config user.name "SolidCraft T208 isolated test"
+          git config user.email "test@localhost"
+          git commit -qm 'test: local T206 validated source'
+          tested="$(git rev-parse HEAD)"
+          git checkout --detach "$PINNED_MAIN"
+          git merge --squash "$tested"
+          git diff --cached --check
+          git diff --cached --name-only | tee "$report/scope.txt"
+          test -s "$report/scope.txt"
+          if grep -vE '^(crates/ui-egui/src/|assets/locales/pending/|attribution/pending/)' "$report/scope.txt"; then
+            echo 'Unexpected test-only, engine or kernel modifications'
+            exit 3
+          fi
+          git diff --cached --binary > "$report/ported.patch"
+          sha256sum "$report/ported.patch" > "$report/ported.sha256"
+          printf 'Main: %s\nTested local source: %s\n' "$PINNED_MAIN" "$tested" | tee -a "$report/refs.txt"
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Install native build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libudev-dev libxkbcommon-dev libxkbcommon-x11-0 libxkbcommon-x11-dev libwayland-dev libasound2-dev pkg-config xvfb xauth dbus-x11 at-spi2-core python3-pyatspi libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dri openbox
+      - name: Size parallel compiles to available memory
+        run: scripts/ci/build-jobs.sh
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8
+        with:
+          tool: cargo-nextest
+      - name: Verify formatting and isolated product scope
+        id: format
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff HEAD --name-only | sort > "$RUNNER_TEMP/t208/formatted-files.txt"
+          diff -u "$RUNNER_TEMP/t208/scope.txt" "$RUNNER_TEMP/t208/formatted-files.txt"
+          git diff HEAD --check
+          git diff HEAD --binary > "$RUNNER_TEMP/t208/formatted.patch"
+          git diff HEAD --stat
+      - name: Run official fast CI checks without repeating passed engine tests
+        id: fast
+        run: |
+          set -euo pipefail
+          cargo xtask fast --base "$PINNED_MAIN" --no-tests 2>&1 | tee "$RUNNER_TEMP/t208/fast.txt"
+      - name: Drawing UI targeted integration with official known-failing grading
+        if: ${{ !cancelled() && steps.fast.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/t208"
+          junit=target/nextest/ci/junit.xml
+          rm -f "$junit"
+          status=0
+          cargo nextest run -p solidcraft-ui-egui --features solidcraft-engine/raytrace-cpu --cargo-profile ci --locked --profile ci --no-tests=fail --ignore-default-filter --no-fail-fast --retries 0 --test-threads 2 -E 'default() & test(drawing)' 2>&1 | tee "$report/nextest.txt" || status=${PIPESTATUS[0]}
+          printf '%s\n' "$status" > "$report/nextest-exit.txt"
+          if [ "$status" -ne 0 ] && [ "$status" -ne 100 ]; then exit "$status"; fi
+          test -s "$junit"
+          cp "$junit" "$report/junit.xml"
+          cargo xtask known-failing --junit "$junit" 2>&1 | tee "$report/grading.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: T208-pinned-main-UI-evidence
+          path: ${{ runner.temp }}/t208/
+          retention-days: 30
