@@ -325,7 +325,7 @@ fn show_attention(app: &mut SolveApp, ui: &mut egui::Ui) {
             crate::drawing_attention_card::show(ui, &snapshot, &dimension_names, &view_names, &sheet_names);
             let selection = app.session.selection.clone();
             let mut repair_state = std::mem::take(&mut app.drawing_workspace.repair_ui);
-            let repaired = crate::drawing_repair_ui::show(ui, &selection, &mut repair_state, &snapshot, |command, args| {
+            let repaired = crate::drawing_repair_ui::show(ui, &selection, &mut repair_state, &snapshot, &dimension_names, |command, args| {
                 app.run(command, args).map_err(|error| error.to_string())
             });
             app.drawing_workspace.repair_ui = repair_state;
