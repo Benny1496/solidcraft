@@ -60,6 +60,23 @@ impl RepairUiState {
     }
 }
 
+/// Human-readable candidate label; the original JSON is kept for engine validation.
+fn candidate_label(candidate: &Value) -> String {
+    for kind in ["edge", "face", "corner"] {
+        let Some(value) = candidate.get(kind) else { continue };
+        let body = value.get("body").and_then(Value::as_str).unwrap_or("");
+        if body.is_empty() { continue; }
+        if let Some(index) = value.get("index").and_then(Value::as_u64) {
+            return solidcraft_ui_text::format(
+                &format!("ui.drawing_repair.candidate_{kind}"),
+                &[("number", &(index + 1).to_string()), ("body", body)],
+            );
+        }
+        return solidcraft_ui_text::format("ui.drawing_repair.candidate_body", &[("body", body)]);
+    }
+    solidcraft_ui_text::tr("ui.drawing_repair.candidate_unknown").to_owned()
+}
+
 pub fn eligible(status: &str) -> bool {
     matches!(status, "lost" | "ambiguous")
 }
@@ -173,7 +190,7 @@ pub fn show(
             let caption = solidcraft_ui_text::format("ui.issue15776_repair.candidate", &[("number", &(state.candidate_index + 1).to_string())]);
             ui_kit::dropdown_menu(ui, "drawing_repair_candidate", &caption, |ui| {
                 for &index in &compatible {
-                    let label = state.candidates[index].to_string();
+                    let label = candidate_label(&state.candidates[index]);
                     if ui_kit::list_picker(ui, &label, &label, state.candidate_index == index).clicked() {
                         state.candidate_index = index;
                         state.awaiting_confirmation = false;
@@ -266,6 +283,13 @@ mod tests {
         assert!(candidate_matches_slot("face", &face));
         assert!(!candidate_matches_slot("face", &edge));
         assert!(candidate_matches_slot("a", &edge));
+    }
+    #[test]
+    fn candidate_labels_are_readable_without_changing_payload() {
+        let edge = json!({"edge":{"body":"Plate","index":3}});
+        assert_eq!(candidate_label(&edge), solidcraft_ui_text::format("ui.drawing_repair.candidate_edge", &[("number", "4"), ("body", "Plate")]));
+        assert_eq!(edge["edge"]["index"], 3);
+        assert_eq!(candidate_label(&json!({"edge":{"index":1}})), solidcraft_ui_text::tr("ui.drawing_repair.candidate_unknown"));
     }
     #[test]
     fn cancel_clears_selection_and_confirmation() {
