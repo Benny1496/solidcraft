@@ -287,8 +287,8 @@ fn show_attention(app: &mut SolveApp, ui: &mut egui::Ui) {
     ui.push_id("drawing_attention_status", |ui| {
         if let Some(error) = &app.drawing_workspace.status_error {
             egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.heading(solidcraft_ui_text::tr("ui.issue15776_attention.title"));
-                ui.label(solidcraft_ui_text::format("ui.issue15776_attention.status_error", &[("error", error)]));
+                ui.heading(solidcraft_ui_text::tr("ui.drawing_attention.title"));
+                ui.label(solidcraft_ui_text::format("ui.drawing_attention.status_error", &[("error", error)]));
             });
         } else if let Some(snapshot) = app.drawing_workspace.status_controller.snapshot().cloned() {
             if snapshot.dimensions_needing_attention() == 0 && !snapshot.held && snapshot.waiting_views == 0 && snapshot.warnings.is_empty() {
