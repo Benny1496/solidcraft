@@ -87,32 +87,39 @@ pub fn show(
     sheets: &BTreeMap<String, String>,
 ) {
     let items = rows_with_names(snapshot, dimensions, views, sheets);
-    ui.group(|ui| {
-        ui_kit::section_heading(ui, solidcraft_ui_text::tr("ui.drawing_attention.title"));
-        if items.is_empty() {
-            ui.label(format!("✓ {}", solidcraft_ui_text::tr("ui.drawing_attention.clear")));
-        } else {
-            ui.label(format!("◇ {}", fmt("ui.drawing_attention.count", &[("count", &items.len().to_string())])));
-            for item in items {
-                ui.separator();
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("◇");
-                    ui.strong(format!("{} {} · {}", solidcraft_ui_text::tr("ui.drawing_attention.dimension"), item.id, item.state));
-                });
-                ui.label(&item.reason);
-                ui.small(&item.location);
-            }
+    ui_kit::section_heading(ui, solidcraft_ui_text::tr("ui.drawing_attention.title"));
+    if items.is_empty() {
+        ui_kit::text(ui, solidcraft_ui_text::tr("ui.drawing_attention.clear"), ui_kit::Text::Note("drawing_attention_clear"));
+    } else {
+        ui_kit::text(
+            ui,
+            fmt("ui.drawing_attention.count", &[("count", &items.len().to_string())]),
+            ui_kit::Text::Note("drawing_attention_count"),
+        );
+        for item in items {
+            ui.separator();
+            ui_kit::text(
+                ui,
+                format!("{} {} · {}", solidcraft_ui_text::tr("ui.drawing_attention.dimension"), item.id, item.state),
+                ui_kit::Text::Note("drawing_attention_dimension"),
+            );
+            ui_kit::text(ui, &item.reason, ui_kit::Text::Note("drawing_attention_reason"));
+            ui_kit::text(ui, &item.location, ui_kit::Text::Note("drawing_attention_location"));
         }
-        if snapshot.held {
-            ui.label(format!("◇ {}", solidcraft_ui_text::tr("ui.drawing_attention.held")));
-        }
-        if snapshot.waiting_views > 0 {
-            ui.label(format!("◇ {}", fmt("ui.drawing_attention.waiting", &[("count", &snapshot.waiting_views.to_string())])));
-        }
-        for warning in &snapshot.warnings {
-            ui.label(format!("◇ {warning}"));
-        }
-    });
+    }
+    if snapshot.held {
+        ui_kit::text(ui, solidcraft_ui_text::tr("ui.drawing_attention.held"), ui_kit::Text::Note("drawing_attention_held"));
+    }
+    if snapshot.waiting_views > 0 {
+        ui_kit::text(
+            ui,
+            fmt("ui.drawing_attention.waiting", &[("count", &snapshot.waiting_views.to_string())]),
+            ui_kit::Text::Note("drawing_attention_waiting"),
+        );
+    }
+    for warning in &snapshot.warnings {
+        ui_kit::text(ui, warning, ui_kit::Text::Note("drawing_attention_warning"));
+    }
 }
 
 #[cfg(test)]
