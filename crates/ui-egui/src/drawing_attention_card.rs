@@ -91,11 +91,7 @@ pub fn show(
     if items.is_empty() {
         ui_kit::text(ui, solidcraft_ui_text::tr("ui.drawing_attention.clear"), ui_kit::Text::Note("drawing_attention_clear"));
     } else {
-        ui_kit::text(
-            ui,
-            fmt("ui.drawing_attention.count", &[("count", &items.len().to_string())]),
-            ui_kit::Text::Note("drawing_attention_count"),
-        );
+        ui_kit::text(ui, fmt("ui.drawing_attention.count", &[("count", &items.len().to_string())]), ui_kit::Text::Note("drawing_attention_count"));
         for item in items {
             ui.separator();
             ui_kit::text(
