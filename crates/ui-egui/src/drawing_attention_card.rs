@@ -53,13 +53,16 @@ pub fn rows_with_names(
 }
 
 fn state(d: &DimensionItem) -> String {
-    match d.status.as_str() {
-        "lost" => tr("ui.drawing_attention.lost"),
-        "ambiguous" => tr("ui.drawing_attention.ambiguous"),
-        "ok" | "overridden" if d.out_of_date => tr("ui.drawing_attention.stale"),
-        "ok" | "overridden" => tr("ui.drawing_attention.inspect"),
-        _ => tr("ui.drawing_attention.other"),
-    }
+    // D26: shape plus localized words, never colour alone.
+    let (symbol, label) = match d.status.as_str() {
+        "lost" => ("✕", "ui.drawing_attention.lost"),
+        "ambiguous" => ("⚠", "ui.drawing_attention.ambiguous"),
+        "ok" | "overridden" if d.out_of_date => ("⟳", "ui.drawing_attention.stale"),
+        "overridden" => ("ⓘ", "ui.drawing_attention.inspect"),
+        "ok" => ("✓", "ui.drawing_attention.inspect"),
+        _ => ("ⓘ", "ui.drawing_attention.other"),
+    };
+    format!("{symbol} {}", tr(label))
 }
 
 fn reason(d: &DimensionItem) -> String {
@@ -133,10 +136,10 @@ mod tests {
         ]}));
         let list = rows(&snapshot);
         assert_eq!(list.len(), 2);
-        assert_eq!(list[0].state, tr("ui.drawing_attention.lost"));
+        assert_eq!(list[0].state, format!("✕ {}", tr("ui.drawing_attention.lost")));
         assert_eq!(list[0].reason, "Edge deleted");
         assert_eq!(list[0].location, tr("ui.drawing_attention.unknown"));
-        assert_eq!(list[1].state, tr("ui.drawing_attention.stale"));
+        assert_eq!(list[1].state, format!("⟳ {}", tr("ui.drawing_attention.stale")));
     }
 
     #[test]
@@ -145,6 +148,6 @@ mod tests {
         snapshot.dimensions[0].inspect_error = Some("not available".to_owned());
         let list = rows(&snapshot);
         assert_eq!(list[0].reason, fmt("ui.drawing_attention.inspection_failed", &[("error", "not available")]));
-        assert_eq!(list[0].state, tr("ui.drawing_attention.ambiguous"));
+        assert_eq!(list[0].state, format!("⚠ {}", tr("ui.drawing_attention.ambiguous")));
     }
 }
