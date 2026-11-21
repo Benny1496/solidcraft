@@ -32,3 +32,4 @@ jobs:
       - name: Known failing baseline against actual test report
         if: always()
         run: cargo xtask known-failing --junit target/nextest/ci/junit.xml
+# isolated Test 231 retry with bridge PAT 2026-11-21T17:52:49Z
