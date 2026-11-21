@@ -1,0 +1,31 @@
+name: SolidCraft Test 231 - D07 D26 isolated preflight
+on:
+  push:
+    branches:
+      - tests/issue15776-a-preflight-230-source
+  workflow_dispatch:
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Catalog and list consistency
+        run: cargo xtask lists
+      - name: Locale validation
+        run: cargo xtask i18n
+      - name: Compile drawing UI
+        run: cargo check -p solidcraft-ui-egui
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      - name: Targeted drawing UI tests with JUnit report
+        run: cargo nextest run --profile ci -p solidcraft-ui-egui --lib -E 'test(drawing_repair_ui) | test(drawing_attention_card)'
+      - name: Known failing baseline against actual test report
+        run: cargo xtask known-failing --junit target/nextest/ci/junit.xml
