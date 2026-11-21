@@ -1,5 +1,5 @@
 name: SolidCraft Test 230 - Issue 15776 A preflight
-# Retry after fixing four Rust compiler errors in drawing UI
+# D07/D26 isolated preflight: sheet status overlay and state symbols
 on:
   push:
     branches:
