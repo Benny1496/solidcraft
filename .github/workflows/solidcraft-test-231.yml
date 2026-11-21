@@ -2,7 +2,9 @@ name: SolidCraft Test 231 - D07 D26 isolated preflight
 on:
   push:
     branches:
-      - tests/issue15776-a-preflight-230-source
+      - main
+    paths:
+      - .github/workflows/solidcraft-test-231.yml
   workflow_dispatch:
 jobs:
   preflight:
@@ -11,6 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: tests/issue15776-a-preflight-230-source
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
