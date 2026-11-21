@@ -32,8 +32,6 @@ pub(crate) fn show(app: &mut SolveApp, rows: &mut Rows<'_>) {
         crate::ui_kit::text(rows.ui(), app.tr_label("No drawing objects"), Text::Note("drawing_objects"));
     }
 
-    show_attention(app, rows.ui());
-
     let label = app.tr_label("Source design").to_string();
     if branch(app, rows, "drawing:browser:source", Row { icon: "ws_design", label: &label, name: true, ..Row::default() }, false) {
         let name = app.session.doc.name.clone();
@@ -278,7 +276,7 @@ fn view_name(app: &SolveApp, drawing: &Drawing, view: &View, number: usize) -> S
     solidcraft_ui_text::format("ui.drawing_browser_view", &[("number", &number.to_string())])
 }
 
-fn show_attention(app: &mut SolveApp, ui: &mut egui::Ui) {
+pub(super) fn show_attention(app: &mut SolveApp, ui: &mut egui::Ui) {
     if app.session.drawing("drawing.inspect").is_err() {
         super::invalidate_status(app);
         return;
@@ -291,9 +289,6 @@ fn show_attention(app: &mut SolveApp, ui: &mut egui::Ui) {
                 ui.label(solidcraft_ui_text::format("ui.drawing_attention.status_error", &[("error", error)]));
             });
         } else if let Some(snapshot) = app.drawing_workspace.status_controller.snapshot().cloned() {
-            if snapshot.dimensions_needing_attention() == 0 && !snapshot.held && snapshot.waiting_views == 0 && snapshot.warnings.is_empty() {
-                return;
-            }
             // Use the same sheet and browser labels the drawing already displays.
             // Keep unknown IDs visible rather than inventing a location.
             let mut dimension_names = std::collections::BTreeMap::new();
