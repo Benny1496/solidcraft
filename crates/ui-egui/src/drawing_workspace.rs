@@ -446,15 +446,31 @@ fn panel_width(app: &SolveApp) -> f32 {
 /// geometry or camera, only a note.
 pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     follow_selection(app);
-    if crate::drawing_sheet_page::show(app, ui) {
-        return;
+    let sheet_visible = crate::drawing_sheet_page::show(app, ui);
+    if !sheet_visible {
+        let rect = ui.max_rect();
+        app.viewport.rect = Some(rect);
+        let t = Tokens::get();
+        ui.painter().rect_filled(rect, 0.0, t.viewport_top);
+        let bounds = crate::shell::workspace_content(app, rect);
+        first_sheet::show(app, ui, bounds);
     }
-    let rect = ui.max_rect();
-    app.viewport.rect = Some(rect);
-    let t = Tokens::get();
-    ui.painter().rect_filled(rect, 0.0, t.viewport_top);
-    let bounds = crate::shell::workspace_content(app, rect);
-    first_sheet::show(app, ui, bounds);
+    // D07: status belongs to the sheet workspace, not the Browser tree.
+    // Keep the repair UI and its engine command path in the same overlay.
+    if app.session.drawing("drawing.inspect").is_ok() {
+        let rect = ui.max_rect();
+        let ctx = ui.ctx().clone();
+        egui::Area::new(egui::Id::new("drawing_attention_overlay"))
+            .fixed_pos(egui::pos2(rect.center().x, rect.top() + 12.0))
+            .pivot(egui::Align2::CENTER_TOP)
+            .order(egui::Order::Foreground)
+            .show(&ctx, |ui| {
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.set_max_width(360.0);
+                    browser::show_attention(app, ui);
+                });
+            });
+    }
 }
 
 const SHEETS_VISIBILITY: [(&str, &str); 4] = [
