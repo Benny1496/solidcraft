@@ -1,11 +1,9 @@
-name: SolidCraft Test 230 - Issue 15776 A preflight
+name: SolidCraft Test 231 - D07 D26 isolated preflight
 # D07/D26 isolated preflight: sheet status overlay and state symbols
 on:
   push:
     branches:
       - tests/issue15776-a-preflight-230-source
-    paths:
-      - .github/workflows/solidcraft-test-230.yml
   workflow_dispatch:
 jobs:
   preflight:
