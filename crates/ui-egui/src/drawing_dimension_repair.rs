@@ -1,7 +1,6 @@
 //! Explicit, user-confirmed repair of a lost or ambiguous drawing dimension.
-//! No CAD mutation occurs until confirm() is called with a valid selection.
+//! Preparation is read-only; the UI issues the repair command after explicit confirmation.
 use serde_json::{Value, json};
-use solidcraft_engine::Session;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RepairSelection {
@@ -45,24 +44,6 @@ pub fn prepare(dimension: &str, status: &str, slot: &str, pick: Value) -> Result
     Ok(RepairSelection { dimension: dimension.to_owned(), slot: slot.to_owned(), pick })
 }
 
-/// Called only after an explicit user confirmation. The engine validates the
-/// actual current status, pick type, occurrence and undo transaction.
-pub fn confirm(session: &mut Session, selection: &RepairSelection, confirmed: bool) -> Result<Value, String> {
-    if !confirmed {
-        return Err("Repair was not confirmed".into());
-    }
-    session
-        .execute(
-            "drawing.dimension.repair",
-            &json!({
-                "dimension": selection.dimension,
-                "slot": slot_payload(&selection.slot),
-                "pick": selection.pick,
-            }),
-        )
-        .map_err(|e| e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,11 +70,5 @@ mod tests {
         assert!(prepare("d", "lost", "edge", json!({"edge":{"path":[1]}})).is_err());
         assert_eq!(slot_payload("0"), json!(0));
         assert_eq!(slot_payload("edge"), json!("edge"));
-    }
-    #[test]
-    fn confirmation_is_required_before_any_engine_call() {
-        let mut session = Session::default();
-        let request = prepare("d", "lost", "edge", json!({"edge":{"body":"b","index":0}})).unwrap();
-        assert_eq!(confirm(&mut session, &request, false).unwrap_err(), "Repair was not confirmed");
     }
 }

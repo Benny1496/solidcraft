@@ -459,18 +459,23 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     // Keep the repair UI and its engine command path in the same overlay.
     if app.session.drawing("drawing.inspect").is_ok() {
         let rect = ui.max_rect();
+        refresh_status_if_needed(app);
         let ctx = ui.ctx().clone();
-        egui::Area::new(egui::Id::new("drawing_attention_overlay"))
+        let container = Container::new(&ctx, Surface::ViewportStatus);
+        let frame = container.frame(&ctx, Tokens::get().panel, crate::frame::Side::Left).inner_margin(4);
+        container.area(egui::Id::unique("drawing_attention_overlay"))
             .fixed_pos(egui::pos2(rect.center().x, rect.top() + 12.0))
             .pivot(egui::Align2::CENTER_TOP)
             .order(egui::Order::Foreground)
             .show(&ctx, |ui| {
-                egui::Frame::group(ui.style()).show(ui, |ui| {
+                Container::show_backing(ui, frame, |ui| {
                     ui.set_max_width(360.0);
-                    let open_id = egui::Id::new("drawing_attention_expanded");
+                    let open_id = egui::Id::unique("drawing_attention_expanded");
                     let open = ui.ctx().data(|data| data.get_temp::<bool>(open_id)).unwrap_or(false);
                     let count = app.drawing_workspace.status_controller.snapshot().map_or(0, |snapshot| snapshot.dimensions_needing_attention());
-                    let label = if count == 0 {
+                    let label = if let Some(error) = &app.drawing_workspace.status_error {
+                        solidcraft_ui_text::format("ui.drawing_attention.status_error", &[("error", error)])
+                    } else if count == 0 {
                         solidcraft_ui_text::tr("ui.drawing_attention.clear").to_owned()
                     } else {
                         solidcraft_ui_text::format("ui.drawing_attention.count", &[("count", &count.to_string())])
