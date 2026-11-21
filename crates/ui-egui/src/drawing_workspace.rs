@@ -467,7 +467,20 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             .show(&ctx, |ui| {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.set_max_width(360.0);
-                    browser::show_attention(app, ui);
+                    let open_id = egui::Id::new("drawing_attention_expanded");
+                    let open = ui.ctx().data(|data| data.get_temp::<bool>(open_id)).unwrap_or(false);
+                    let count = app.drawing_workspace.status_controller.snapshot().map_or(0, |snapshot| snapshot.dimensions_needing_attention());
+                    let label = if count == 0 {
+                        solidcraft_ui_text::tr("ui.drawing_attention.clear").to_owned()
+                    } else {
+                        solidcraft_ui_text::format("ui.drawing_attention.count", &[("count", &count.to_string())])
+                    };
+                    if ui_kit::button(ui, &label, ui_kit::Button::Normal).clicked() {
+                        ui.ctx().data_mut(|data| data.insert_temp(open_id, !open));
+                    }
+                    if open {
+                        browser::show_attention(app, ui);
+                    }
                 });
             });
     }
