@@ -463,7 +463,8 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let container = Container::new(&ctx, Surface::ViewportStatus);
         let frame = container.frame(&ctx, Tokens::get().panel, crate::frame::Side::Left).inner_margin(4);
-        container.area(egui::Id::unique("drawing_attention_overlay"))
+        container
+            .area(egui::Id::unique("drawing_attention_overlay"))
             .fixed_pos(egui::pos2(rect.center().x, rect.top() + 12.0))
             .pivot(egui::Align2::CENTER_TOP)
             .order(egui::Order::Foreground)
