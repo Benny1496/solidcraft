@@ -1,0 +1,80 @@
+name: SolidCraft Test 237 - native drawing status and repair flow
+on:
+  push:
+    branches:
+      - tests/solidcraft-t237
+    paths:
+      - .github/workflows/solidcraft-t237.yml
+permissions:
+  contents: read
+jobs:
+  native-gui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          key: native-tests
+          save-if: false
+      - name: Install native dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libudev-dev libxkbcommon-dev libxkbcommon-x11-0 libxkbcommon-x11-dev libwayland-dev libasound2-dev pkg-config xvfb xauth dbus-x11 at-spi2-core python3-pyatspi libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dri openbox
+      - name: Validate GUI fixture on unchanged tested source
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tests/fixtures/t237/native_gui.py tests/fixtures/t237/publish_combo.py
+          cargo fmt --all -- --check
+          mkdir -p "$RUNNER_TEMP/t237"
+      - name: Build real native application with test-only combo handle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/fixtures/t237/publish_combo.py
+          git diff --check
+          git diff -- crates/ui-egui/src/drawing_repair_ui.rs > "$RUNNER_TEMP/t237/test-handle.patch"
+          cargo build --profile ci --locked -p solidcraft 2>&1 | tee "$RUNNER_TEMP/t237/build.txt"
+      - name: Run native pointer and screenshot checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          export REPORT="$RUNNER_TEMP/t237"
+          export CONTROL_PORT=7878
+          export SOLIDCRAFT_CONTROL_TOKEN="$(openssl rand -hex 32)"
+          echo "::add-mask::$SOLIDCRAFT_CONTROL_TOKEN"
+          export DISPLAY=:99
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/t237-config"
+          export XDG_DATA_HOME="$RUNNER_TEMP/t237-data"
+          export LANG=C.UTF-8
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export RUST_BACKTRACE=1
+          export GTK_MODULES=gail:atk-bridge
+          export NO_AT_BRIDGE=0
+          Xvfb :99 -screen 0 1600x1000x24 -nolisten tcp > "$REPORT/xvfb.txt" 2>&1 &
+          trap 'jobs -pr | xargs -r kill' EXIT
+          sleep 2
+          dbus-run-session -- bash -c '
+            set -eo pipefail
+            openbox > "$REPORT/wm.txt" 2>&1 &
+            /usr/libexec/at-spi-bus-launcher --launch-immediately > "$REPORT/atspi.txt" 2>&1 &
+            "$PWD/target/ci/solidcraft" --control "$CONTROL_PORT" > "$REPORT/app.txt" 2>&1 &
+            app=$!
+            export APP_PID="$app"
+            trap "kill $app 2>/dev/null || true" EXIT
+            /usr/bin/python3 tests/fixtures/t237/native_gui.py 2>&1 | tee "$REPORT/gui.txt"
+          '
+      - name: Upload GUI evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: T237-native-gui
+          path: ${{ runner.temp }}/t237/
+          if-no-files-found: warn
+          retention-days: 7
