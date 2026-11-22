@@ -23,6 +23,17 @@ pub(crate) mod print;
 
 use panels::Tool;
 
+/// In addition to the model revision, keep track of drawing edits and native sheet
+/// projection progress, which can complete without another model revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StatusFrameKey {
+    revision: u64,
+    undo_len: usize,
+    redo_len: usize,
+    scene_generation: Option<u64>,
+    scene_working: Option<bool>,
+}
+
 #[derive(Default)]
 pub struct State {
     previous_tab: Option<String>,
@@ -57,7 +68,7 @@ pub struct State {
     selection_is_drawings: bool,
     /// The sheet page's camera, zoom and drawn marks: screen only, never saved.
     pub(crate) page: crate::drawing_sheet_page::Page,
-    status_revision: Option<u64>,
+    status_frame_key: Option<StatusFrameKey>,
     status_drawing_id: Option<String>,
     pub(crate) status_controller: crate::drawing_status_controller::DrawingStatusController,
     status_dirty: bool,
@@ -73,19 +84,26 @@ pub(crate) fn invalidate_status(app: &mut SolveApp) {
 }
 
 fn refresh_status_if_needed(app: &mut SolveApp) {
-    let revision = app.session.revision;
+    let (scene_generation, scene_working) = crate::drawing_sheet_page::status_scene(app);
+    let key = StatusFrameKey {
+        revision: app.session.revision,
+        undo_len: app.session.undo.len(),
+        redo_len: app.session.redo.len(),
+        scene_generation,
+        scene_working,
+    };
     // A drawing may be closed and reopened without changing the source model revision.
     // Never keep the transient "no drawing open" status error for the reopened sheet.
     let drawing_id = app.session.drawing("drawing.inspect").ok().map(|drawing| solidcraft_engine::doc::ids::encode(drawing.id));
     if !app.drawing_workspace.status_dirty
-        && app.drawing_workspace.status_revision == Some(revision)
+        && app.drawing_workspace.status_frame_key == Some(key)
         && app.drawing_workspace.status_drawing_id == drawing_id
     {
         return;
     }
     app.drawing_workspace.repair_ui.clear();
     app.drawing_workspace.status_drawing_id = drawing_id;
-    app.drawing_workspace.status_revision = Some(revision);
+    app.drawing_workspace.status_frame_key = Some(key);
     app.drawing_workspace.status_dirty = false;
     app.drawing_workspace.status_error = crate::drawing_status_engine::refresh(&mut app.session, &mut app.drawing_workspace.status_controller).err();
 }
@@ -1154,6 +1172,21 @@ fn panel_fields(app: &mut SolveApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn drawing_status_refresh_key_tracks_scene_progress_and_drawing_edits() {
+        let base = super::StatusFrameKey {
+            revision: 1,
+            undo_len: 3,
+            redo_len: 0,
+            scene_generation: Some(1),
+            scene_working: Some(true),
+        };
+        assert_ne!(base, super::StatusFrameKey { scene_generation: Some(2), ..base });
+        assert_ne!(base, super::StatusFrameKey { scene_working: Some(false), ..base });
+        assert_ne!(base, super::StatusFrameKey { undo_len: 4, ..base });
+        assert_ne!(base, super::StatusFrameKey { redo_len: 1, ..base });
+    }
+
     use super::*;
     use crate::scenario::Harness;
 

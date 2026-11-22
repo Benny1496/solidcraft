@@ -288,6 +288,15 @@ pub(crate) fn zoom_percent(app: &SolveApp, ctx: &egui::Context) -> f32 {
     shown_percent(app.drawing_workspace.page.scale / true_size_now(app, ctx))
 }
 
+/// Cheap refresh signal: the native sheet can finish its projection after the model's
+/// revision has stopped changing. Keep the status card in sync with the shown scene.
+pub(crate) fn status_scene(app: &SolveApp) -> (Option<u64>, Option<bool>) {
+    let Some(page) = app.drawing_workspace.page.shown.as_ref() else {
+        return (None, None);
+    };
+    (page.get("generation").and_then(Value::as_u64), page.get("working").and_then(Value::as_bool))
+}
+
 /// What the page showed on its last frame (`ui.inspect`'s `sheet_page`): null while no sheet is shown.
 pub fn inspect(app: &SolveApp) -> Value {
     if crate::drawing_workspace::active(app) { app.drawing_workspace.page.shown.clone().unwrap_or(Value::Null) } else { Value::Null }
