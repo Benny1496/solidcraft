@@ -1174,13 +1174,7 @@ fn panel_fields(app: &mut SolveApp, ui: &mut egui::Ui) {
 mod tests {
     #[test]
     fn drawing_status_refresh_key_tracks_scene_progress_and_drawing_edits() {
-        let base = super::StatusFrameKey {
-            revision: 1,
-            undo_len: 3,
-            redo_len: 0,
-            scene_generation: Some(1),
-            scene_working: Some(true),
-        };
+        let base = super::StatusFrameKey { revision: 1, undo_len: 3, redo_len: 0, scene_generation: Some(1), scene_working: Some(true) };
         assert_ne!(base, super::StatusFrameKey { scene_generation: Some(2), ..base });
         assert_ne!(base, super::StatusFrameKey { scene_working: Some(false), ..base });
         assert_ne!(base, super::StatusFrameKey { undo_len: 4, ..base });
