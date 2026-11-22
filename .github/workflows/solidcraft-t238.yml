@@ -1,0 +1,93 @@
+name: SolidCraft Test 238 - native drawing status and repair flow
+on:
+  push:
+    branches:
+      - tests/solidcraft-t238
+    paths:
+      - .github/workflows/solidcraft-t238.yml
+permissions:
+  contents: read
+jobs:
+  native-gui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          key: native-tests
+          save-if: false
+      - name: Install native dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libudev-dev libxkbcommon-dev libxkbcommon-x11-0 libxkbcommon-x11-dev libwayland-dev libasound2-dev pkg-config xvfb xauth dbus-x11 at-spi2-core python3-pyatspi libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dri openbox
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8
+        with:
+          tool: cargo-nextest
+      - name: Preflight and known-failing on clean source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tests/fixtures/t238/native_gui.py tests/fixtures/t238/publish_combo.py
+          cargo fmt --all -- --check
+          cargo xtask ui-containers
+          mkdir -p "$RUNNER_TEMP/t238"
+          junit=target/nextest/ci/junit.xml
+          rm -f "$junit"
+          status=0
+          cargo nextest run -p solidcraft-ui-egui --lib --cargo-profile ci --locked --profile ci --no-tests=fail -E 'test(drawing_repair_ui) | test(drawing_attention_card) | test(drawing_status_refresh_key_tracks_scene_progress_and_drawing_edits) | test(drawing_status_controller) | test(drawing_status_engine)' || status=$?
+          if [ "$status" -ne 0 ] && [ "$status" -ne 100 ]; then exit "$status"; fi
+          test -s "$junit"
+          cp "$junit" "$RUNNER_TEMP/t238/junit.xml"
+          cargo xtask known-failing --junit "$junit"
+      - name: Build real native application with test-only combo handle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/fixtures/t238/publish_combo.py
+          git diff --check
+          git diff -- crates/ui-egui/src/drawing_repair_ui.rs > "$RUNNER_TEMP/t238/test-handle.patch"
+          cargo build --profile ci --locked -p solidcraft 2>&1 | tee "$RUNNER_TEMP/t238/build.txt"
+      - name: Run native pointer and screenshot checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          export REPORT="$RUNNER_TEMP/t238"
+          export CONTROL_PORT=7878
+          export SOLIDCRAFT_CONTROL_TOKEN="$(openssl rand -hex 32)"
+          echo "::add-mask::$SOLIDCRAFT_CONTROL_TOKEN"
+          export DISPLAY=:99
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/t238-config"
+          export XDG_DATA_HOME="$RUNNER_TEMP/t238-data"
+          export LANG=C.UTF-8
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export RUST_BACKTRACE=1
+          export GTK_MODULES=gail:atk-bridge
+          export NO_AT_BRIDGE=0
+          Xvfb :99 -screen 0 1600x1000x24 -nolisten tcp > "$REPORT/xvfb.txt" 2>&1 &
+          trap 'jobs -pr | xargs -r kill' EXIT
+          sleep 2
+          dbus-run-session -- bash -c '
+            set -eo pipefail
+            openbox > "$REPORT/wm.txt" 2>&1 &
+            /usr/libexec/at-spi-bus-launcher --launch-immediately > "$REPORT/atspi.txt" 2>&1 &
+            "$PWD/target/ci/solidcraft" --control "$CONTROL_PORT" > "$REPORT/app.txt" 2>&1 &
+            app=$!
+            export APP_PID="$app"
+            trap "kill $app 2>/dev/null || true" EXIT
+            /usr/bin/python3 tests/fixtures/t238/native_gui.py 2>&1 | tee "$REPORT/gui.txt"
+          '
+      - name: Upload GUI evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: T238-native-gui
+          path: ${{ runner.temp }}/t238/
+          if-no-files-found: warn
+          retention-days: 7
