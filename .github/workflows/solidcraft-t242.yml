@@ -1,0 +1,31 @@
+name: SolidCraft Test 242 - UI container comparison
+on:
+  push:
+    branches:
+      - tests/solidcraft-t242
+    paths:
+      - .github/workflows/solidcraft-t242.yml
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5331cbe3480f4c84713446f7ed79f6058ff1b7f7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Run identical UI container check
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "5331cbe3480f4c84713446f7ed79f6058ff1b7f7"
+          cargo xtask ui-containers 2>&1 | tee "$RUNNER_TEMP/ui-containers.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: comparison-242
+          path: ${{ runner.temp }}/ui-containers.log
