@@ -1,0 +1,47 @@
+name: SolidCraft Test 246 - drawing engine comparison
+on:
+  push:
+    branches:
+      - tests/solidcraft-t246
+    paths:
+      - .github/workflows/solidcraft-t246.yml
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5331cbe3480f4c84713446f7ed79f6058ff1b7f7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev libudev-dev libasound2-dev libx11-dev libxkbcommon-dev libwayland-dev libxcb1-dev libgl1-mesa-dev libvulkan-dev
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.114
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: drawing-engine-ci-1991
+          cache-on-failure: "true"
+      - name: Run drawing engine tests and grade
+        shell: bash
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "5331cbe3480f4c84713446f7ed79f6058ff1b7f7"
+          rm -f target/nextest/ci/junit.xml
+          status=0
+          cargo nextest run -p solidcraft-engine --cargo-profile ci --locked --profile ci --no-tests=fail --jobs 1 -E 'test(drawing)' || status=$?
+          echo "Nextest exit code: $status"
+          case "$status" in 0|100) ;; *) exit "$status";; esac
+          test -s target/nextest/ci/junit.xml
+          cargo xtask known-failing --junit target/nextest/ci/junit.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: comparison-246
+          path: target/nextest/ci/junit.xml
