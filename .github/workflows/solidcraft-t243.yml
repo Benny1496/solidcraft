@@ -1,0 +1,34 @@
+name: SolidCraft Test 243 - translation and command registry comparison
+on:
+  push:
+    branches:
+      - tests/solidcraft-t243
+    paths:
+      - .github/workflows/solidcraft-t243.yml
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5331cbe3480f4c84713446f7ed79f6058ff1b7f7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev libudev-dev libasound2-dev libx11-dev libxkbcommon-dev libwayland-dev libxcb1-dev libgl1-mesa-dev libvulkan-dev
+      - name: Run identical translation and command registry check
+        shell: bash
+        run: |
+          set -o pipefail
+          test "$(git rev-parse HEAD)" = "5331cbe3480f4c84713446f7ed79f6058ff1b7f7"
+          cargo xtask i18n 2>&1 | tee "$RUNNER_TEMP/i18n.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: comparison-243
+          path: ${{ runner.temp }}/i18n.log
