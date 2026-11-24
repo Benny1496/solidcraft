@@ -1,0 +1,29 @@
+name: SolidCraft Test 241 - local versus GitHub JUnit smoke
+on:
+  push:
+    branches:
+      - tests/solidcraft-t241
+    paths:
+      - .github/workflows/solidcraft-t241.yml
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5331cbe3480f4c84713446f7ed79f6058ff1b7f7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: taiki-e/install-action@nextest
+      - name: Run identical local smoke selection
+        run: |
+          test "$(git rev-parse HEAD)" = "5331cbe3480f4c84713446f7ed79f6058ff1b7f7"
+          cargo nextest run -p solidcraft-display-units --cargo-profile ci --locked --profile ci --no-tests=fail --jobs 1
+          test -s target/nextest/ci/junit.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-comparison-241
+          path: target/nextest/ci/junit.xml
